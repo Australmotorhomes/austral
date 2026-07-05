@@ -3186,7 +3186,24 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
   let list = collection.slice();
   if (search) {
     const s = search.toLowerCase();
-    list = list.filter((d) => d.party.toLowerCase().includes(s) || String(d.number).toLowerCase().includes(s));
+    list = list.filter((d) => {
+      const haystack = [
+        d.party,
+        d.number,
+        d.model,
+        d.contact,
+        d.notes,
+        d.status,
+        d.customer,
+        ...(d.lines || []).map((l) => l.desc),
+        ...(d.lines || []).map((l) => l.lineNote),
+      ]
+        .filter(Boolean)
+        .map(String)
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(s);
+    });
   }
   if (statusFilter) list = list.filter((d) => d.status === statusFilter);
   list.sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || "") || String(b.number).localeCompare(String(a.number)));
@@ -3735,7 +3752,7 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
             <input
               style={inputStyle}
               type="text"
-              placeholder={`Search ${isQuote ? "customer" : "supplier"} or number…`}
+              placeholder={`Search ${isQuote ? "customer" : "supplier"}, number, notes, line items…`}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
@@ -5581,7 +5598,31 @@ function ContactsTab({ kind, db, update, showToast, nextNumber, pendingOpen, cle
   }
   if (search) {
     const s = search.toLowerCase();
-    list = list.filter((c) => c.name.toLowerCase().includes(s) || (c.email || "").toLowerCase().includes(s));
+    list = list.filter((c) => {
+      const haystack = [
+        c.name,
+        c.email,
+        c.phone,
+        c.contactPerson,
+        c.notes,
+        c.product,
+        c.status,
+        c.source,
+        c.invoiceNumber,
+        c.lastQuoteNumber,
+        c.address?.street,
+        c.address?.suburb,
+        c.address?.state,
+        c.address?.postcode,
+        c.bankAccount?.name,
+        c.bankAccount?.bsb,
+        c.bankAccount?.account,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(s);
+    });
   }
 
   function saveContact(payload, editing) {
@@ -5717,7 +5758,7 @@ function ContactsTab({ kind, db, update, showToast, nextNumber, pendingOpen, cle
         <input
           style={{ ...inputStyle, marginBottom: !isSupplier ? 4 : 14 }}
           type="text"
-          placeholder="Search by name or email…"
+          placeholder="Search name, email, phone, notes, address…"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
@@ -6511,7 +6552,24 @@ function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOp
   }
   if (search) {
     const s = search.toLowerCase();
-    list = list.filter((p) => p.name.toLowerCase().includes(s) || (p.email || "").toLowerCase().includes(s));
+    list = list.filter((p) => {
+      const haystack = [
+        p.name,
+        p.email,
+        p.phone,
+        p.source,
+        p.enquiryProduct,
+        p.currentStatus,
+        p.notes,
+        p.expectedOrderEtaMonth,
+        ...(p.activities || []).map((a) => a.notes),
+        ...(p.activities || []).map((a) => a.type),
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      return haystack.includes(s);
+    });
   }
 
   function logActivity(prospect, activity) {
@@ -6769,7 +6827,7 @@ function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOp
           <input
             style={{ ...inputStyle, flex: 1, minWidth: 200, marginBottom: 0 }}
             type="text"
-            placeholder="Search by name or email…"
+            placeholder="Search name, email, phone, notes, activity…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
