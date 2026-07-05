@@ -222,6 +222,10 @@ function toSupabaseFormat(data, table) {
         copy.last_quote_value = copy.lastQuoteValue;
         delete copy.lastQuoteValue;
       }
+      if (copy.archived !== undefined) {
+        copy.is_archived = copy.archived;
+        delete copy.archived;
+      }
       break;
       
     case "crm_prospects":
@@ -360,6 +364,7 @@ function fromSupabaseFormat(data, table) {
       if (copy.invoice_amount !== undefined) copy.invoiceAmount = copy.invoice_amount;
       if (copy.last_quote_number !== undefined) copy.lastQuoteNumber = copy.last_quote_number;
       if (copy.last_quote_value !== undefined) copy.lastQuoteValue = copy.last_quote_value;
+      if (copy.is_archived !== undefined) copy.archived = copy.is_archived;
       copy.attachments = Array.isArray(copy.attachments) ? copy.attachments : [];
       break;
       
@@ -5568,6 +5573,12 @@ function ContactsTab({ kind, db, update, showToast, nextNumber, pendingOpen, cle
   }
 
   let list = collection.slice().sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+  // Archived customers are hidden from the plain list by default, but still
+  // findable — as soon as a search term is typed, archived customers are
+  // included in the results too. Suppliers don't have this field.
+  if (!isSupplier && !search) {
+    list = list.filter((c) => !c.archived);
+  }
   if (search) {
     const s = search.toLowerCase();
     list = list.filter((c) => c.name.toLowerCase().includes(s) || (c.email || "").toLowerCase().includes(s));
@@ -5617,6 +5628,25 @@ function ContactsTab({ kind, db, update, showToast, nextNumber, pendingOpen, cle
 
   function deleteContact(contact) {
     setPendingDelete(contact);
+  }
+
+  // Archive is a soft-hide, not a delete: the record stays in Supabase and
+  // still shows up when actively searching, but disappears from the default
+  // customer list. Only applies to customers (suppliers don't have this).
+  function archiveContact(contact, archived) {
+    (async () => {
+      try {
+        await supabaseREST("PATCH", `customers?id=eq.${contact.id}`, { is_archived: archived });
+        update((next) => {
+          const target = next.customers.find((c) => c.id === contact.id);
+          if (target) target.archived = archived;
+        });
+        showToast(archived ? "Customer archived" : "Customer restored");
+      } catch (err) {
+        showToast(`Error ${archived ? "archiving" : "restoring"} customer: ${err.message}`);
+        console.error("Archive contact error:", err);
+      }
+    })();
   }
 
   function createQuoteFromCustomer(customer) {
@@ -5685,12 +5715,17 @@ function ContactsTab({ kind, db, update, showToast, nextNumber, pendingOpen, cle
 
       <Panel>
         <input
-          style={{ ...inputStyle, marginBottom: 14 }}
+          style={{ ...inputStyle, marginBottom: !isSupplier ? 4 : 14 }}
           type="text"
           placeholder="Search by name or email…"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
         />
+        {!isSupplier && (
+          <p style={{ fontSize: 11, color: "#8a7a66", margin: "0 0 14px" }}>
+            Archived customers are hidden here by default, but will show up (marked "ARCHIVED") if your search matches them.
+          </p>
+        )}
 
         {list.length === 0 ? (
           <Empty
@@ -5711,7 +5746,14 @@ function ContactsTab({ kind, db, update, showToast, nextNumber, pendingOpen, cle
                 }}
               >
                 <div>
-                  <div style={{ fontSize: 14, fontWeight: 600, color: "#4a3527" }}>{c.name}</div>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: "#4a3527" }}>
+                    {c.name}
+                    {c.archived && (
+                      <span style={{ marginLeft: 8, fontSize: 10, fontWeight: 700, color: "#a3442e", background: "#fbeae5", padding: "2px 6px", borderRadius: 5 }}>
+                        ARCHIVED
+                      </span>
+                    )}
+                  </div>
                   {!isSupplier && c.product && <div style={{ fontSize: 12, color: "#8a7a66", marginTop: 2 }}>{c.product}</div>}
                   {isSupplier && c.contactPerson && <div style={{ fontSize: 12, color: "#8a7a66", marginTop: 2 }}>{c.contactPerson}</div>}
                 </div>
@@ -5737,6 +5779,11 @@ function ContactsTab({ kind, db, update, showToast, nextNumber, pendingOpen, cle
                 <tr key={c.id} onClick={() => setEditingContact(c)} style={{ cursor: "pointer" }}>
                   <td>
                     <strong>{c.name}</strong>
+                    {c.archived && (
+                      <span style={{ marginLeft: 8, fontSize: 10, fontWeight: 700, color: "#a3442e", background: "#fbeae5", padding: "2px 6px", borderRadius: 5 }}>
+                        ARCHIVED
+                      </span>
+                    )}
                     {c.notes && <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>{c.notes.substring(0, 60)}</div>}
                   </td>
                   {isSupplier && <td className="muted">{c.contactPerson || "—"}</td>}
@@ -5768,6 +5815,7 @@ function ContactsTab({ kind, db, update, showToast, nextNumber, pendingOpen, cle
           onCancel={() => setEditingContact(undefined)}
           onSave={saveContact}
           onCreateQuote={!isSupplier ? createQuoteFromCustomer : undefined}
+          onArchive={!isSupplier ? archiveContact : undefined}
           db={db}
           openRecord={openRecord}
         />
@@ -5919,7 +5967,7 @@ function AttachmentsPanel({ recordId, recordType, attachments, onAttachmentsChan
   );
 }
 
-function ContactModal({ kind, editing, onCancel, onSave, onCreateQuote, db, openRecord }) {
+function ContactModal({ kind, editing, onCancel, onSave, onCreateQuote, onArchive, db, openRecord }) {
   const isSupplier = kind === "supplier";
   const [name, setName] = useState(editing ? editing.name : "");
   const [contactPerson, setContactPerson] = useState(isSupplier ? (editing ? editing.contactPerson || "" : "") : "");
@@ -6003,9 +6051,26 @@ function ContactModal({ kind, editing, onCancel, onSave, onCreateQuote, db, open
 
   return (
     <Modal onClose={onCancel}>
-      <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: "0 0 16px", fontSize: 19 }}>
-        {editing ? `Edit ${isSupplier ? "supplier" : "customer"}` : `Add ${isSupplier ? "supplier" : "customer"}`}
-      </h3>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
+        <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: 0, fontSize: 19 }}>
+          {editing ? `Edit ${isSupplier ? "supplier" : "customer"}` : `Add ${isSupplier ? "supplier" : "customer"}`}
+          {editing?.archived && (
+            <span style={{ marginLeft: 10, fontSize: 11, fontWeight: 700, color: "#a3442e", background: "#fbeae5", padding: "3px 8px", borderRadius: 6, verticalAlign: "middle" }}>
+              ARCHIVED
+            </span>
+          )}
+        </h3>
+        {editing && onArchive && (
+          <Btn
+            variant="ghost"
+            size="sm"
+            onClick={() => onArchive(editing, !editing.archived)}
+            style={editing.archived ? { color: "#5c7a4f" } : { color: "#a3442e" }}
+          >
+            {editing.archived ? "Restore customer" : "Archive customer"}
+          </Btn>
+        )}
+      </div>
 
       <Field label="Name (required)">
         <input style={inputStyle} type="text" value={name} onChange={(e) => setName(e.target.value)} />
