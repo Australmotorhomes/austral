@@ -321,6 +321,10 @@ function toSupabaseFormat(data, table) {
         copy.customer_id = copy.customerId;
         delete copy.customerId;
       }
+      if (copy.supplierId !== undefined) {
+        copy.supplier_id = copy.supplierId;
+        delete copy.supplierId;
+      }
       if (copy.quoteId !== undefined) {
         copy.quote_id = copy.quoteId;
         delete copy.quoteId;
@@ -389,6 +393,7 @@ function fromSupabaseFormat(data, table) {
       if (copy.gross_profit_pct !== undefined) { copy.grossProfitPct = copy.gross_profit_pct; delete copy.gross_profit_pct; }
       if (copy.fx_rate_used !== undefined) { copy.fxRateUsed = copy.fx_rate_used; delete copy.fx_rate_used; }
       if (copy.customer_id !== undefined) { copy.customerId = copy.customer_id; delete copy.customer_id; }
+      if (copy.supplier_id !== undefined) { copy.supplierId = copy.supplier_id; delete copy.supplier_id; }
       if (copy.quote_id !== undefined) { copy.quoteId = copy.quote_id; delete copy.quote_id; }
       if (copy.quote_number !== undefined) { copy.quoteNumber = copy.quote_number; delete copy.quote_number; }
       copy.lines = Array.isArray(copy.lines) ? copy.lines : [];
@@ -1081,24 +1086,23 @@ export default function App() {
         // IMPORTANT: parseInt("Q-2026-001") returns NaN because parseInt stops at the first
         // non-digit character. A naive /(\d+)/ regex fix has its own trap: it matches the
         // FIRST digit run, which for "Q-2026-001" is "2026" (the year), not "001" (the real
-        // sequence number) — that would wrongly inflate the floor. Quotes now use a clean
-        // "QU-####" format, so only numbers already in that exact format count toward the
-        // floor; anything else (old-format or already-broken "…-NaN" entries) is ignored,
-        // guaranteeing a clean start at 1000. POs keep their PO-YEAR-### format, so we take
-        // the LAST digit run (the true sequence number, not the year in the middle).
+        // sequence number) — that would wrongly inflate the floor. Both quotes and POs now
+        // use clean "QU-####"/"PO-####" formats, so only numbers already in that exact
+        // format count toward the floor; anything else (old-format or already-broken
+        // "…-NaN" entries) is ignored, guaranteeing a clean start at the chosen floor.
         const extractQuoteSeq = (str) => {
           const m = String(str || "").match(/^QU-(\d+)$/);
           return m ? parseInt(m[1], 10) : 0;
         };
         const extractPoSeq = (str) => {
-          const m = String(str || "").match(/-(\d+)$/);
+          const m = String(str || "").match(/^PO-(\d+)$/);
           return m ? parseInt(m[1], 10) : 0;
         };
         const maxQuoteNum = (data.quotes || []).reduce((max, q) => Math.max(max, extractQuoteSeq(q.number)), 0);
         const maxPoNum = (data.pos || []).reduce((max, p) => Math.max(max, extractPoSeq(p.number)), 0);
-        // Quote numbers were reset to start at QU-1000 — floor the counter there even if
-        // no quotes exist yet, or if existing quote numbers are still on the old scheme.
-        data.seq = { quote: Math.max(1000, maxQuoteNum + 1), po: maxPoNum + 1 };
+        // Quote numbers start at QU-1000, PO numbers start at PO-5001 — floor the
+        // counters there even if none exist yet, or existing numbers are on the old scheme.
+        data.seq = { quote: Math.max(1000, maxQuoteNum + 1), po: Math.max(5001, maxPoNum + 1) };
 
         // Sync quote milestones → customer invoices on load.
         // Merge future milestone dates into matching customer invoices (preserving existing entries).
@@ -1250,14 +1254,14 @@ export default function App() {
   }
 
   function nextNumber(kind, draftDb) {
-    const year = new Date().getFullYear();
-    if (!draftDb.seq) draftDb.seq = { quote: 1000, po: 1 };
+    if (!draftDb.seq) draftDb.seq = { quote: 1000, po: 5001 };
     const n = draftDb.seq[kind]++;
     if (kind === "quote") {
-      // New format: QU-1000, QU-1001, ... (no year, no zero-padding)
+      // Format: QU-1000, QU-1001, ... (no year, no zero-padding)
       return `QU-${n}`;
     }
-    return `PO-${year}-${String(n).padStart(3, "0")}`;
+    // Format: PO-5001, PO-5002, ... (no year, no zero-padding)
+    return `PO-${n}`;
   }
 
   // ---- FX: try to fetch a live USD->AUD rate once data has loaded ----
@@ -3147,6 +3151,8 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
   const [renumbering, setRenumbering] = useState(false);
   const [linkQuotesConfirm, setLinkQuotesConfirm] = useState(false);
   const [linkingQuotes, setLinkingQuotes] = useState(false);
+  const [linkPOsConfirm, setLinkPOsConfirm] = useState(false);
+  const [linkingPOs, setLinkingPOs] = useState(false);
 
   // Cross-tab navigation: if another tab asked to open a specific quote/PO, do it.
   useEffect(() => {
@@ -3275,6 +3281,43 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
     })();
   }
 
+  // Same idea, for purchase orders — reassign every existing PO a new
+  // sequential PO-5001+ number, oldest PO (by createdAt) first.
+  function renumberPOs() {
+    setRenumbering(true);
+    (async () => {
+      try {
+        const sorted = [...db.pos].sort((a, b) => {
+          const da = a.createdAt || a.date || "";
+          const db_ = b.createdAt || b.date || "";
+          return da.localeCompare(db_);
+        });
+        const updates = sorted.map((p, i) => ({ id: p.id, oldNumber: p.number, newNumber: `PO-${5001 + i}` }));
+
+        for (const u of updates) {
+          await supabaseREST("PATCH", `purchase_orders?id=eq.${u.id}`, { number: u.newNumber });
+        }
+
+        update((next) => {
+          updates.forEach((u) => {
+            const target = next.pos.find((p) => p.id === u.id);
+            if (target) target.number = u.newNumber;
+          });
+          next.seq = next.seq || {};
+          next.seq.po = 5001 + updates.length;
+        });
+
+        showToast(`Renumbered ${updates.length} PO${updates.length === 1 ? "" : "s"} — starting at PO-5001`);
+      } catch (err) {
+        showToast(`Error renumbering POs: ${err.message}`);
+        console.error("Renumber POs error:", err);
+      } finally {
+        setRenumbering(false);
+        setRenumberConfirm(false);
+      }
+    })();
+  }
+
   function linkQuotesToCustomers() {
     setLinkingQuotes(true);
     (async () => {
@@ -3312,6 +3355,43 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
     })();
   }
 
+  function linkPOsToSuppliers() {
+    setLinkingPOs(true);
+    (async () => {
+      try {
+        const updates = [];
+        for (const p of db.pos) {
+          if (!p.party) continue;
+          const match = (db.suppliers || []).find(
+            (s) => s.name && s.name.trim().toLowerCase() === p.party.trim().toLowerCase()
+          );
+          if (match && p.supplierId !== match.id) {
+            updates.push({ poId: p.id, supplierId: match.id });
+          }
+        }
+
+        for (const u of updates) {
+          await supabaseREST("PATCH", `purchase_orders?id=eq.${u.poId}`, { supplier_id: u.supplierId });
+        }
+
+        update((next) => {
+          updates.forEach((u) => {
+            const target = next.pos.find((p) => p.id === u.poId);
+            if (target) target.supplierId = u.supplierId;
+          });
+        });
+
+        showToast(`Linked ${updates.length} PO${updates.length === 1 ? "" : "s"} to matching supplier records`);
+      } catch (err) {
+        showToast(`Error linking POs: ${err.message}`);
+        console.error("Link POs to suppliers error:", err);
+      } finally {
+        setLinkingPOs(false);
+        setLinkPOsConfirm(false);
+      }
+    })();
+  }
+
   function saveDoc(payload, editing) {
     // Resolve a proper ID-based link to a customer record by name match, so
     // linked-quotes lookups no longer depend solely on name-matching at
@@ -3324,6 +3404,15 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
       return match ? match.id : null;
     }
 
+    // Same idea for POs — resolve the linked supplier by name match.
+    function resolveSupplierId(partyName) {
+      if (isQuote || !partyName || !db.suppliers) return null;
+      const match = db.suppliers.find(
+        (s) => s.name && s.name.trim().toLowerCase() === partyName.trim().toLowerCase()
+      );
+      return match ? match.id : null;
+    }
+
     // Save to Supabase first, then update local state
     (async () => {
       try {
@@ -3332,8 +3421,13 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
         if (editing) {
           // Update existing doc in Supabase
           const customerId = resolveCustomerId(payload.party);
+          const supplierId = resolveSupplierId(payload.party);
           const updatePayload = toSupabaseFormat(
-            { ...payload, updatedAt: todayISO(), ...(isQuote ? { customerId } : {}) },
+            {
+              ...payload,
+              updatedAt: todayISO(),
+              ...(isQuote ? { customerId } : { supplierId }),
+            },
             table
           );
           await supabaseRESTWithSchemaFallback("PATCH", `${table}?id=eq.${editing.id}`, updatePayload);
@@ -3341,19 +3435,23 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
           update((next) => {
             const coll = isQuote ? next.quotes : next.pos;
             const target = coll.find((d) => d.id === editing.id);
-            Object.assign(target, payload, { updatedAt: todayISO(), ...(isQuote ? { customerId } : {}) });
+            Object.assign(target, payload, {
+              updatedAt: todayISO(),
+              ...(isQuote ? { customerId } : { supplierId }),
+            });
           });
         } else {
           // Create new doc in Supabase — let Postgres generate the real UUID
           // (id column is uuid type; a client-generated string like "q_xxxxx" is rejected).
           const number = nextNumber(isQuote ? "quote" : "po", db);
           const customerId = resolveCustomerId(payload.party);
+          const supplierId = resolveSupplierId(payload.party);
           const newDocLocal = {
             number,
             status: payload.status || "Draft",
             createdAt: todayISO(),
             ...payload,
-            ...(isQuote ? { customerId } : {}),
+            ...(isQuote ? { customerId } : { supplierId }),
           };
           const createPayload = toSupabaseFormat(newDocLocal, table);
           delete createPayload.id;
@@ -3546,11 +3644,42 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
               </Btn>
             </>
           )}
+          {!isQuote && (
+            <>
+              <Btn variant="ghost" onClick={() => setLinkPOsConfirm(true)}>
+                Link POs to suppliers
+              </Btn>
+              <Btn variant="ghost" onClick={() => setRenumberConfirm(true)}>
+                Renumber POs
+              </Btn>
+            </>
+          )}
           <Btn variant="primary" onClick={() => setDocModal(null)}>
             + New {isQuote ? "quote" : "purchase order"}
           </Btn>
         </div>
       </div>
+
+      {linkPOsConfirm && (
+        <Modal onClose={() => (!linkingPOs ? setLinkPOsConfirm(false) : null)} width={440}>
+          <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: "0 0 12px", fontSize: 18 }}>
+            Link existing POs to supplier records?
+          </h3>
+          <p style={{ fontSize: 13, color: "#6b5240", lineHeight: 1.5, margin: "0 0 18px" }}>
+            This finds POs whose supplier name matches a supplier record exactly, and links them by ID —
+            so they'll appear on that supplier's record reliably, even if the name is edited later. POs
+            with no matching supplier name are left unchanged. Safe to run more than once.
+          </p>
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+            <Btn variant="ghost" onClick={() => setLinkPOsConfirm(false)} disabled={linkingPOs}>
+              Cancel
+            </Btn>
+            <Btn variant="primary" onClick={linkPOsToSuppliers} disabled={linkingPOs}>
+              {linkingPOs ? "Linking…" : "Yes, link matching POs"}
+            </Btn>
+          </div>
+        </Modal>
+      )}
 
       {linkQuotesConfirm && (
         <Modal onClose={() => (!linkingQuotes ? setLinkQuotesConfirm(false) : null)} width={440}>
@@ -3576,20 +3705,20 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
       {renumberConfirm && (
         <Modal onClose={() => (!renumbering ? setRenumberConfirm(false) : null)} width={440}>
           <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: "0 0 12px", fontSize: 18 }}>
-            Renumber all quotes?
+            Renumber all {isQuote ? "quotes" : "POs"}?
           </h3>
           <p style={{ fontSize: 13, color: "#6b5240", lineHeight: 1.5, margin: "0 0 10px" }}>
-            This will replace the number on all {db.quotes.length} existing quote{db.quotes.length === 1 ? "" : "s"} with a new sequential number starting at <strong>QU-1000</strong>, ordered oldest to newest by creation date.
+            This will replace the number on all {isQuote ? db.quotes.length : db.pos.length} existing {isQuote ? "quote" : "PO"}{(isQuote ? db.quotes.length : db.pos.length) === 1 ? "" : "s"} with a new sequential number starting at <strong>{isQuote ? "QU-1000" : "PO-5001"}</strong>, ordered oldest to newest by creation date.
           </p>
           <p style={{ fontSize: 13, color: "#a3442e", lineHeight: 1.5, margin: "0 0 18px", fontWeight: 600 }}>
-            This cannot be undone. Existing quote numbers will be permanently overwritten.
+            This cannot be undone. Existing {isQuote ? "quote" : "PO"} numbers will be permanently overwritten.
           </p>
           <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
             <Btn variant="ghost" onClick={() => setRenumberConfirm(false)} disabled={renumbering}>
               Cancel
             </Btn>
-            <Btn variant="danger" onClick={renumberQuotes} disabled={renumbering}>
-              {renumbering ? "Renumbering…" : "Yes, renumber all quotes"}
+            <Btn variant="danger" onClick={isQuote ? renumberQuotes : renumberPOs} disabled={renumbering}>
+              {renumbering ? "Renumbering…" : `Yes, renumber all ${isQuote ? "quotes" : "POs"}`}
             </Btn>
           </div>
         </Modal>
@@ -5848,8 +5977,8 @@ function ContactModal({ kind, editing, onCancel, onSave, onCreateQuote, db, open
   // Find quotes/POs linked to this contact. Quotes prefer the proper ID-based
   // link (customerId) — reliable even if the name is edited later — falling
   // back to name-matching only for older quotes that predate that link and
-  // haven't been backfilled via "Link quotes to customers" yet. POs still
-  // link by name only (suppliers don't have an ID link built yet).
+  // haven't been backfilled via "Link quotes to customers" yet. POs now have
+  // the same ID-based link (supplierId) for the supplier side.
   const linkedQuotes =
     editing && db
       ? (db.quotes || []).filter(
@@ -5860,11 +5989,16 @@ function ContactModal({ kind, editing, onCancel, onSave, onCreateQuote, db, open
       : [];
   const linkedPOs =
     editing && db
-      ? (db.pos || []).filter(
-          (p) =>
-            (p.party && p.party.trim().toLowerCase() === editing.name.trim().toLowerCase()) ||
-            (p.customer && p.customer.trim().toLowerCase() === editing.name.trim().toLowerCase())
-        )
+      ? (db.pos || []).filter((p) => {
+          if (isSupplier) {
+            return (
+              p.supplierId === editing.id ||
+              (!p.supplierId && p.party && p.party.trim().toLowerCase() === editing.name.trim().toLowerCase())
+            );
+          }
+          // Customer side of a PO is still name-matched only (no ID link built for that yet).
+          return p.customer && p.customer.trim().toLowerCase() === editing.name.trim().toLowerCase();
+        })
       : [];
 
   return (
