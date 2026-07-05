@@ -154,6 +154,27 @@ function toSupabaseFormat(data, table) {
   
   switch (table) {
     case "suppliers":
+      if (copy.address) {
+        copy.address_street = copy.address.street || "";
+        copy.address_suburb = copy.address.suburb || "";
+        copy.address_state = copy.address.state || "QLD";
+        copy.address_postcode = copy.address.postcode || "";
+        delete copy.address;
+      }
+      if (copy.bankAccount) {
+        copy.bank_account_name = copy.bankAccount.name || "";
+        copy.bank_account_bsb = copy.bankAccount.bsb || "";
+        copy.bank_account_number = copy.bankAccount.account || "";
+        delete copy.bankAccount;
+      }
+      if (copy.contactPerson !== undefined) { copy.contact_person = copy.contactPerson; delete copy.contactPerson; }
+      // Strip customer-only fields not present on suppliers table
+      delete copy.invoices; delete copy.invoiceNumber; delete copy.invoiceAmount;
+      delete copy.lastQuoteNumber; delete copy.lastQuoteValue;
+      delete copy.attachments; delete copy.status; delete copy.product; delete copy.source;
+      delete copy.createdAt; delete copy.updatedAt;
+      break;
+
     case "customers":
       if (copy.address) {
         copy.address_street = copy.address.street || "";
@@ -4123,7 +4144,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
             minWidth: 0,
           }}
         >
-          {isNew ? (isQuote ? "New customer quote" : "New purchase order") : `${editing.number}`}
+          {isNew ? (isQuote ? "New customer quote" : "New purchase order") : (isQuote ? "Customer Quote" : "Purchase Order")}
         </h3>
         {!isNew && (
           <Field label="" >
@@ -4785,7 +4806,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
 
             {/* Cost and Profit Summary - screen only (excluded from PDF) */}
             {isQuote && hasCostData && (
-              <div className="no-print">
+              <div className="no-print" style={{ display: "block" }} data-no-print="true">
                 {/* Collapsible Header */}
                 <div
                   onClick={() => setShowProfitSection(!showProfitSection)}
@@ -4912,6 +4933,11 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                     const clone = printRef.current ? printRef.current.cloneNode(true) : null;
                     if (clone) {
                       clone.querySelectorAll(".no-print").forEach((el) => el.remove());
+                      clone.querySelectorAll("[data-no-print]").forEach((el) => el.remove());
+                      // Also strip any element whose text starts with "(" (internal notes)
+                      clone.querySelectorAll("div").forEach((el) => {
+                        if (el.textContent.trim().startsWith("(Gross profit")) el.remove();
+                      });
                     }
                     const html = `<!DOCTYPE html>
 <html>
