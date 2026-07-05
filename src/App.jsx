@@ -5856,7 +5856,7 @@ function ContactsTab({ kind, db, update, showToast, nextNumber, pendingOpen, cle
           onCancel={() => setEditingContact(undefined)}
           onSave={saveContact}
           onCreateQuote={!isSupplier ? createQuoteFromCustomer : undefined}
-          onArchive={!isSupplier ? archiveContact : undefined}
+          onArchive={!isSupplier ? (contact, archived) => { archiveContact(contact, archived); setEditingContact(undefined); } : undefined}
           db={db}
           openRecord={openRecord}
         />
@@ -6237,7 +6237,7 @@ function ContactModal({ kind, editing, onCancel, onSave, onCreateQuote, onArchiv
             )}
             {invoices.map((inv, idx) => (
               <div key={idx} style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 8, marginBottom: 6, alignItems: "end" }}>
-                <Field label={`Payment ${idx + 1} amount (AUD)`}>
+                <Field label={`Invoice ${idx + 1} amount (AUD)`}>
                   <input
                     style={inputStyle}
                     type="number"
@@ -7404,6 +7404,34 @@ function calculatePeriodSales(customers, startDate, endDate, status) {
   return { monthTotals, periodTotal };
 }
 
+// Companion to calculatePeriodSales: returns individual transaction-level detail
+// for a single YYYY-MM month, for the "click a monthly total to drill down" view.
+// Each row uses the customer's invoiceNumber (customers have one invoice number
+// covering potentially multiple payments — there is no separate per-payment
+// invoice number in the current data model, confirmed by the Payment Schedule
+// editor's fields, which are just amount + month, not a place to enter a
+// distinct invoice number per payment).
+function getTransactionsForMonth(customers, monthKey) {
+  const rows = [];
+  (customers || []).forEach((c) => {
+    const s = (c.status || "").trim().toLowerCase();
+    if (s === "canceled") return;
+    (c.invoices || []).forEach((inv) => {
+      if (!inv || !inv.invoiceMonth) return;
+      if (inv.invoiceMonth.slice(0, 7) !== monthKey) return;
+      rows.push({
+        customerName: c.name,
+        customerId: c.id,
+        invoiceNumber: c.invoiceNumber || "—",
+        amount: parseFloat(inv.amount) || 0,
+        product: c.product || "—",
+        invoiceMonth: inv.invoiceMonth,
+      });
+    });
+  });
+  return rows.sort((a, b) => (a.customerName || "").localeCompare(b.customerName || ""));
+}
+
 // Helper: Count distinct products sold in period
 function countProductsSold(customers, startDate, endDate, status) {
   const filtered = customers.filter((c) => (c.status || "").trim() === status.trim() && c.product && Array.isArray(c.invoices));
@@ -7425,7 +7453,13 @@ function DashboardTab({ db, setTab, openRecord }) {
   const currentCalYear = new Date().getFullYear();
   // Current FY end year: if we're past June, current FY ends next year; otherwise this year
   const currentFYEnd = currentMonth >= 7 ? currentCalYear + 1 : currentCalYear;
-  const [columns, setColumns] = React.useState([currentFYEnd - 2, currentFYEnd - 1, currentFYEnd]); // default: last 3 FYs
+  // Show every fiscal year from FY23/24 through to the current FY by default.
+  // fyEndYear 2024 = FY23/24 (Jul 2023 - Jun 2024).
+  const EARLIEST_FY_END = 2024;
+  const defaultColumns = [];
+  for (let y = EARLIEST_FY_END; y <= currentFYEnd; y++) defaultColumns.push(y);
+  const [columns, setColumns] = React.useState(defaultColumns);
+  const [drillDown, setDrillDown] = React.useState(null); // { key: "2026-06", label: "June FY25/26" }
 
   const getFYRange = (fyEndYear) => ({
     start: `${fyEndYear - 1}-07-01`,
@@ -7434,7 +7468,7 @@ function DashboardTab({ db, setTab, openRecord }) {
   });
 
   const addColumn = (fyEndYear) => {
-    if (!columns.includes(fyEndYear) && columns.length < 4) {
+    if (!columns.includes(fyEndYear) && columns.length < 12) {
       setColumns([...columns, fyEndYear].sort());
     }
   };
@@ -7611,7 +7645,8 @@ function DashboardTab({ db, setTab, openRecord }) {
           return (
             <>
               {/* ── Income / Sales table: rows = months, columns = FY years. Includes all non-Canceled statuses (Deposit + Paid + Delivered) ── */}
-              <h3 style={{ fontSize: 14, fontWeight: 700, color: "#6b5240", margin: "0 0 10px" }}>Income / Sales</h3>
+              <h3 style={{ fontSize: 14, fontWeight: 700, color: "#6b5240", margin: "0 0 4px" }}>Income / Sales</h3>
+              <p style={{ fontSize: 11, color: "#8a7a66", margin: "0 0 10px" }}>Click any monthly total to see the individual transactions behind it.</p>
               <div style={{ overflowX: "auto", marginBottom: 32 }}>
                 <table style={{ width: "100%", borderCollapse: "collapse", background: "#fff", borderRadius: 6, overflow: "hidden", border: "1px solid #e3d8c6" }}>
                   <thead>
@@ -7635,7 +7670,18 @@ function DashboardTab({ db, setTab, openRecord }) {
                             const key = `${calYear}-${String(monthNum).padStart(2, '0')}`;
                             const val = pd.income.monthTotals[key];
                             return (
-                              <td key={i} style={{ ...tdStyle, borderLeft: "2px solid #e3d8c6", color: "#b5552b" }}>
+                              <td
+                                key={i}
+                                onClick={() => val && setDrillDown({ key, label: `${mn} ${pd.label}` })}
+                                style={{
+                                  ...tdStyle,
+                                  borderLeft: "2px solid #e3d8c6",
+                                  color: "#b5552b",
+                                  cursor: val ? "pointer" : "default",
+                                  textDecoration: val ? "underline" : "none",
+                                  textDecorationColor: "#e3c9b5",
+                                }}
+                              >
                                 {val ? `$${val.toLocaleString()}` : "—"}
                               </td>
                             );
@@ -7846,6 +7892,63 @@ function DashboardTab({ db, setTab, openRecord }) {
           </div>
         )}
       </Panel>
+
+      {drillDown && (
+        <Modal onClose={() => setDrillDown(null)} width={620}>
+          <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: "0 0 4px", fontSize: 19 }}>
+            {drillDown.label}
+          </h3>
+          <p style={{ fontSize: 12, color: "#8a7a66", margin: "0 0 16px" }}>
+            Individual invoices contributing to this month's total.
+          </p>
+          {(() => {
+            const rows = getTransactionsForMonth(db.customers, drillDown.key);
+            const total = rows.reduce((s, r) => s + r.amount, 0);
+            if (rows.length === 0) {
+              return <p className="muted" style={{ fontSize: 13 }}>No transactions found for this month.</p>;
+            }
+            return (
+              <>
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                    <thead>
+                      <tr style={{ borderBottom: "2px solid #b5552b" }}>
+                        <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11, color: "#6b5240" }}>Customer</th>
+                        <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11, color: "#6b5240" }}>Invoice #</th>
+                        <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11, color: "#6b5240" }}>Product</th>
+                        <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11, color: "#6b5240" }}>Date</th>
+                        <th style={{ textAlign: "right", padding: "6px 8px", fontSize: 11, color: "#6b5240" }}>Amount</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rows.map((r, i) => (
+                        <tr key={i} style={{ borderBottom: "1px solid #f0e8d9" }}>
+                          <td style={{ padding: "8px", color: "#4a3527" }}>{r.customerName}</td>
+                          <td style={{ padding: "8px", color: "#4a3527" }}>{r.invoiceNumber}</td>
+                          <td style={{ padding: "8px", color: "#4a3527" }}>{r.product}</td>
+                          <td style={{ padding: "8px", color: "#4a3527" }}>{r.invoiceMonth}</td>
+                          <td style={{ padding: "8px", color: "#4a3527", textAlign: "right", fontWeight: 600 }}>
+                            ${r.amount.toLocaleString()}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr style={{ borderTop: "2px solid #b5552b", fontWeight: 700 }}>
+                        <td colSpan={4} style={{ padding: "10px 8px", color: "#4a3527" }}>Total</td>
+                        <td style={{ padding: "10px 8px", color: "#4a3527", textAlign: "right" }}>${total.toLocaleString()}</td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+                <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 18 }}>
+                  <Btn variant="ghost" onClick={() => setDrillDown(null)}>Close</Btn>
+                </div>
+              </>
+            );
+          })()}
+        </Modal>
+      )}
     </section>
     </>
   );
