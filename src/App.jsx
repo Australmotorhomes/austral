@@ -6492,6 +6492,58 @@ function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOp
     })();
   }
 
+  function editActivity(prospect, index, activityData) {
+    (async () => {
+      try {
+        const updatedActivities = (prospect.activities || []).map((a, i) =>
+          i === index ? { ...a, date: activityData.date, type: activityData.type, notes: activityData.notes } : a
+        );
+
+        const updatePayload = toSupabaseFormat({ activities: updatedActivities, updatedAt: todayISO() }, "crm_prospects");
+        await supabaseREST("PATCH", `crm_prospects?id=eq.${prospect.id}`, updatePayload);
+
+        update((next) => {
+          const target = next.crm.find((p) => p.id === prospect.id);
+          if (target) {
+            target.activities = updatedActivities;
+            target.updatedAt = todayISO();
+          }
+        });
+
+        setLoggingActivityFor(null);
+        showToast("Activity updated");
+      } catch (err) {
+        showToast(`Error updating activity: ${err.message}`);
+        console.error("Edit activity error:", err);
+      }
+    })();
+  }
+
+  function deleteActivity(prospect, index) {
+    (async () => {
+      try {
+        const updatedActivities = (prospect.activities || []).filter((_, i) => i !== index);
+
+        const updatePayload = toSupabaseFormat({ activities: updatedActivities, updatedAt: todayISO() }, "crm_prospects");
+        await supabaseREST("PATCH", `crm_prospects?id=eq.${prospect.id}`, updatePayload);
+
+        update((next) => {
+          const target = next.crm.find((p) => p.id === prospect.id);
+          if (target) {
+            target.activities = updatedActivities;
+            target.updatedAt = todayISO();
+          }
+        });
+
+        setLoggingActivityFor(null);
+        showToast("Activity deleted");
+      } catch (err) {
+        showToast(`Error deleting activity: ${err.message}`);
+        console.error("Delete activity error:", err);
+      }
+    })();
+  }
+
   function saveProspect(payload, editing) {
     // Save to Supabase first, then update local state
     (async () => {
@@ -6725,7 +6777,8 @@ function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOp
           onCancel={() => setEditingProspect(undefined)}
           onSave={saveProspect}
           openRecord={openRecord}
-          onLogActivity={() => setLoggingActivityFor(editingProspect)}
+          onLogActivity={() => setLoggingActivityFor({ prospect: editingProspect, activity: null, index: null })}
+          onEditActivity={(activity, index) => setLoggingActivityFor({ prospect: editingProspect, activity, index })}
           onCreateQuote={() => createQuoteFromProspect(editingProspect)}
           onConvertToCustomer={() => { convertProspectToCustomer(editingProspect); setEditingProspect(undefined); }}
           onDelete={() => { deleteProspect(editingProspect); setEditingProspect(undefined); }}
@@ -6734,9 +6787,21 @@ function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOp
 
       {loggingActivityFor && (
         <ActivityLogModal
-          prospect={loggingActivityFor}
+          prospect={loggingActivityFor.prospect}
+          activity={loggingActivityFor.activity}
           onCancel={() => setLoggingActivityFor(null)}
-          onSave={(activity) => logActivity(loggingActivityFor, activity)}
+          onSave={(activityData) => {
+            if (loggingActivityFor.activity) {
+              editActivity(loggingActivityFor.prospect, loggingActivityFor.index, activityData);
+            } else {
+              logActivity(loggingActivityFor.prospect, activityData);
+            }
+          }}
+          onDelete={
+            loggingActivityFor.activity
+              ? () => deleteActivity(loggingActivityFor.prospect, loggingActivityFor.index)
+              : null
+          }
         />
       )}
 
@@ -6813,7 +6878,8 @@ function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOp
   );
 }
 
-function CRMModal({ editing, db, onCancel, onSave, openRecord, onLogActivity, onCreateQuote, onConvertToCustomer, onDelete }) {
+function CRMModal({ editing, db, onCancel, onSave, openRecord, onLogActivity, onEditActivity, onCreateQuote, onConvertToCustomer, onDelete }) {
+  const isMobile = useIsMobile();
   const [name, setName] = useState(editing ? editing.name : "");
   const [email, setEmail] = useState(editing ? editing.email || "" : "");
   const [phone, setPhone] = useState(editing ? editing.phone || "" : "");
@@ -6863,7 +6929,7 @@ function CRMModal({ editing, db, onCancel, onSave, openRecord, onLogActivity, on
 
   return (
     <Modal onClose={onCancel}>
-      <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: "0 0 16px", fontSize: 19 }}>
+      <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: "0 0 16px", fontSize: isMobile ? 16 : 19 }}>
         {editing ? "Edit prospect" : "Add prospect"}
       </h3>
 
@@ -7025,11 +7091,31 @@ function CRMModal({ editing, db, onCancel, onSave, openRecord, onLogActivity, on
             <p className="muted" style={{ fontSize: 12 }}>No activities logged yet.</p>
           ) : (
             editing.activities.map((a, i) => (
-              <div key={i} style={{ marginBottom: 8, paddingBottom: 8, borderBottom: "1px solid #eee", fontSize: 12 }}>
-                <div style={{ fontWeight: 600, color: "#4a3527" }}>
-                  {fmtDate(a.date)} · {a.type || "note"}
+              <div
+                key={a.id || i}
+                onClick={() => onEditActivity && onEditActivity(a, i)}
+                style={{
+                  display: "flex",
+                  alignItems: "flex-start",
+                  justifyContent: "space-between",
+                  gap: 10,
+                  marginBottom: 8,
+                  padding: "10px 8px",
+                  borderBottom: "1px solid #eee",
+                  fontSize: 12,
+                  cursor: onEditActivity ? "pointer" : "default",
+                  borderRadius: 6,
+                }}
+              >
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ fontWeight: 600, color: "#4a3527" }}>
+                    {fmtDate(a.date)} · {a.type || "note"}
+                  </div>
+                  <div style={{ color: "#6b5240", marginTop: 2, wordBreak: "break-word" }}>{a.notes}</div>
                 </div>
-                <div style={{ color: "#6b5240", marginTop: 2 }}>{a.notes}</div>
+                {onEditActivity && (
+                  <span style={{ color: "#b5552b", fontSize: 16, flexShrink: 0, marginTop: 2 }}>›</span>
+                )}
               </div>
             ))
           )}
@@ -7054,11 +7140,14 @@ function CRMModal({ editing, db, onCancel, onSave, openRecord, onLogActivity, on
   );
 }
 
-function ActivityLogModal({ prospect, onCancel, onSave }) {
-  const [date, setDate] = useState(todayISO());
-  const [type, setType] = useState("call");
-  const [notes, setNotes] = useState("");
+function ActivityLogModal({ prospect, activity, onCancel, onSave, onDelete }) {
+  const isMobile = useIsMobile();
+  const isEditing = !!activity;
+  const [date, setDate] = useState(activity ? activity.date : todayISO());
+  const [type, setType] = useState(activity ? activity.type || "call" : "call");
+  const [notes, setNotes] = useState(activity ? activity.notes || "" : "");
   const [error, setError] = useState("");
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   function handleSave() {
     const trimmedNotes = notes.trim();
@@ -7071,8 +7160,8 @@ function ActivityLogModal({ prospect, onCancel, onSave }) {
 
   return (
     <Modal onClose={onCancel}>
-      <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: "0 0 16px", fontSize: 19 }}>
-        Log activity for {prospect.name}
+      <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: "0 0 16px", fontSize: isMobile ? 16 : 19 }}>
+        {isEditing ? `Edit activity — ${prospect.name}` : `Log activity for ${prospect.name}`}
       </h3>
 
       <div className="grid2">
@@ -7104,14 +7193,39 @@ function ActivityLogModal({ prospect, onCancel, onSave }) {
         </div>
       )}
 
-      <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 18 }}>
-        <Btn variant="ghost" onClick={onCancel}>
-          Cancel
-        </Btn>
-        <Btn variant="primary" onClick={handleSave}>
-          Log activity
-        </Btn>
-      </div>
+      {confirmDelete ? (
+        <div style={{ background: "#fbeae5", border: "1px solid #e6c9bf", borderRadius: 8, padding: 14, marginTop: 4 }}>
+          <p style={{ fontSize: 13, color: "#a3442e", margin: "0 0 12px", fontWeight: 600 }}>
+            Delete this activity? This cannot be undone.
+          </p>
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, flexWrap: "wrap" }}>
+            <Btn variant="ghost" onClick={() => setConfirmDelete(false)}>
+              Cancel
+            </Btn>
+            <Btn variant="danger" onClick={onDelete}>
+              Yes, delete
+            </Btn>
+          </div>
+        </div>
+      ) : (
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginTop: 18, flexWrap: "wrap" }}>
+          <div>
+            {isEditing && onDelete && (
+              <Btn variant="ghost" onClick={() => setConfirmDelete(true)} style={{ color: "#a3442e" }}>
+                Delete
+              </Btn>
+            )}
+          </div>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <Btn variant="ghost" onClick={onCancel}>
+              Cancel
+            </Btn>
+            <Btn variant="primary" onClick={handleSave}>
+              {isEditing ? "Save changes" : "Log activity"}
+            </Btn>
+          </div>
+        </div>
+      )}
     </Modal>
   );
 }
