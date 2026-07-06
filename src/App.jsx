@@ -3518,6 +3518,48 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
     setPoGenerationQuote(quote);
   }
 
+  function createCustomsPO(parentPO) {
+    // Create a dedicated Customs Clearance PO from the parent PO's customs amount
+    (async () => {
+      try {
+        const poNumber = nextNumber("po", db);
+        const amount = parentPO.customsClearance || 0;
+        const newPO = {
+          number: poNumber,
+          status: "Draft",
+          party: "Australian Border Force",
+          customer: parentPO.customer || parentPO.party || "",
+          model: parentPO.model || "",
+          date: todayISO(),
+          contact: "",
+          notes: `Customs clearance for PO ${parentPO.number}`,
+          discount: 0,
+          lines: [{ desc: `Customs clearance — PO ${parentPO.number}`, qty: 1, price: amount, currency: "AUD", cost: amount }],
+          subtotal: amount,
+          gst: 0,
+          total: amount,
+          grossProfitPct: null,
+          fxRateUsed: db.fx ? db.fx.usdAudRate : 1.55,
+          quoteId: parentPO.quoteId || null,
+          quoteNumber: parentPO.quoteNumber || "",
+          customsClearance: 0,
+          createdAt: todayISO(),
+        };
+        const createPayload = toSupabaseFormat(newPO, "purchase_orders");
+        const result = await supabaseRESTWithSchemaFallback("POST", "purchase_orders", createPayload);
+        const savedRow = Array.isArray(result) ? result[0] : result;
+        const saved = { ...newPO, ...fromSupabaseFormat(savedRow, "purchase_orders"), id: savedRow.id };
+        update((next) => { next.pos.push(saved); });
+        showToast(`Customs PO ${poNumber} created`);
+        // Open the new PO immediately
+        if (openRecord) openRecord("po", saved.id);
+      } catch (err) {
+        showToast(`Error creating customs PO: ${err.message}`);
+        console.error("Create customs PO error:", err);
+      }
+    })();
+  }
+
   function createPOsForSuppliers(supplierMap) {
     // Create POs in Supabase first, then update local state
     (async () => {
@@ -3981,6 +4023,7 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
             setPendingDelete(doc);
           }}
           onGeneratePOs={isQuote ? handleGeneratePOs : null}
+          onCreateCustomsPO={!isQuote ? createCustomsPO : null}
           openRecord={openRecord}
         />
       )}
@@ -4081,7 +4124,7 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
   );
 }
 
-function DocModal({ kind, editing, db, items, models, categories, fx, statusOptions, onCancel, onSave, onSaveMilestones, onAddItem, onAddModel, onAddCategory, onStatusChange, onDelete, onGeneratePOs, openRecord }) {
+function DocModal({ kind, editing, db, items, models, categories, fx, statusOptions, onCancel, onSave, onSaveMilestones, onAddItem, onAddModel, onAddCategory, onStatusChange, onDelete, onGeneratePOs, onCreateCustomsPO, openRecord }) {
   const isQuote = kind === "quote";
   const isMobile = useIsMobile();
   const rate = fx ? fx.usdAudRate : FALLBACK_USD_AUD_RATE;
@@ -4770,17 +4813,36 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
 
           {!isQuote && (
             <Panel>
-              <Field label="Estimated Customs Clearance Payment (AUD, optional)">
-                <input
-                  style={inputStyle}
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  value={customsClearance}
-                  onChange={(e) => setCustomsClearance(parseFloat(e.target.value) || 0)}
-                  placeholder="e.g. 500"
-                />
-              </Field>
+              <div style={{ display: "flex", alignItems: "flex-end", gap: 10 }}>
+                <div style={{ flex: 1 }}>
+                  <Field label="Estimated Customs Clearance Payment (AUD, optional)">
+                    <input
+                      style={inputStyle}
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={customsClearance}
+                      onChange={(e) => setCustomsClearance(parseFloat(e.target.value) || 0)}
+                      placeholder="e.g. 500"
+                    />
+                  </Field>
+                </div>
+                {onCreateCustomsPO && !isNew && customsClearance > 0 && (
+                  <div style={{ paddingBottom: 2 }}>
+                    <Btn
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => {
+                        // Save current PO first, then create customs PO
+                        handleSave();
+                        onCreateCustomsPO({ ...editing, customsClearance });
+                      }}
+                    >
+                      + Create Customs PO
+                    </Btn>
+                  </div>
+                )}
+              </div>
             </Panel>
           )}
 
