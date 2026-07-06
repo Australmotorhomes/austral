@@ -7622,7 +7622,7 @@ function DashboardTab({ db, setTab, openRecord }) {
                   }
                 });
               }
-              return { customer: c.name, product: c.product || "—", byKey };
+              return { customer: c.name, product: c.product || "—", customerId: c.id, byKey };
             })
             // Only keep customers who actually have a payment this month or later —
             // this is what excludes customers whose payments are all in the past.
@@ -7726,7 +7726,7 @@ function DashboardTab({ db, setTab, openRecord }) {
                         {depositColumnsTrimmed.map(col => (
                           <td
                             key={col.key}
-                            onClick={() => r.byKey[col.key] && setDrillDown({ key: col.key, label: `${col.label} — ${r.customer}`, filterCustomer: r.customer })}
+                            onClick={() => r.byKey[col.key] && openRecord && openRecord("customer", r.customerId)}
                             style={{
                               ...tdStyle, color: "#6b8fc4", borderLeft: "1px solid #e8eef5",
                               cursor: r.byKey[col.key] ? "pointer" : "default",
