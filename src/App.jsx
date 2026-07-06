@@ -403,6 +403,7 @@ function fromSupabaseFormat(data, table) {
       if (copy.quote_number !== undefined) { copy.quoteNumber = copy.quote_number; delete copy.quote_number; }
       copy.lines = Array.isArray(copy.lines) ? copy.lines : [];
       copy.paymentMilestones = Array.isArray(copy.paymentMilestones) ? copy.paymentMilestones : [];
+      copy.attachments = Array.isArray(copy.attachments) ? copy.attachments : [];
       break;
   }
   return copy;
@@ -4116,6 +4117,9 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
   const [customsClearance, setCustomsClearance] = useState(
     !isQuote && editing?.customsClearance ? editing.customsClearance : 0
   );
+  const [attachments, setAttachments] = useState(
+    editing?.attachments ? editing.attachments : []
+  );
 
   const sortedItems = items.slice().sort((a, b) => (a.model || "").localeCompare(b.model || "") || (a.name || "").localeCompare(b.name || ""));
 
@@ -4250,6 +4254,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
         grossProfitPct,
         fxRateUsed: rate,
         status,
+        attachments,
         ...(paymentMilestones.length > 0 && { paymentMilestones }),
         ...(!isQuote && customsClearance > 0 && { customsClearance }),
         ...(!isQuote && customer && { customer }),
@@ -4830,6 +4835,22 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                 onChange={(e) => setNotes(e.target.value)}
               />
             </Field>
+          </Panel>
+
+          {/* Attachments section */}
+          <Panel style={{ marginTop: 16 }}>
+            <h4 style={{ fontSize: 13, fontWeight: 600, color: "#6b5240", margin: "0 0 10px" }}>Attachments</h4>
+            {editing && (
+              <AttachmentsPanel
+                recordId={editing.id}
+                recordType={isQuote ? "quotes" : "purchase_orders"}
+                attachments={attachments}
+                onAttachmentsChange={setAttachments}
+              />
+            )}
+            {!editing && (
+              <p style={{ fontSize: 12, color: "#8a7a66" }}>Attachments will be available after saving.</p>
+            )}
           </Panel>
         </fieldset>
 
