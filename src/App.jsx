@@ -6689,29 +6689,26 @@ function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOp
   }
 
   function saveProspect(payload, editing) {
-    // Save to Supabase first, then update local state
     (async () => {
       try {
         if (editing) {
-          // Update existing prospect in Supabase (toSupabaseFormat will remove non-existent columns)
           const updatePayload = toSupabaseFormat(payload, "crm_prospects");
           await supabaseREST("PATCH", `crm_prospects?id=eq.${editing.id}`, updatePayload);
-          // Then update local state
           update((next) => {
             const target = next.crm.find((p) => p.id === editing.id);
             Object.assign(target, payload);
           });
         } else {
-          // Create new prospect in Supabase (no createdAt/updatedAt/activities)
-          const newProspect = {
-            id: uid("lead"),
-            ...payload,
-          };
-          const createPayload = toSupabaseFormat(newProspect, "crm_prospects");
-          await supabaseREST("POST", "crm_prospects", createPayload);
-          // Then update local state
+          // DON'T generate client-side id — let Supabase auto-generate UUID
+          const createPayload = toSupabaseFormat(payload, "crm_prospects");
+          const result = await supabaseREST("POST", "crm_prospects", createPayload);
+          
+          // Supabase returns the generated record with auto-gen id
+          if (result && result[0]) {
+            payload.id = result[0].id;
+          }
           update((next) => {
-            next.crm.push(newProspect);
+            next.crm.push({ ...payload, id: result[0]?.id });
           });
         }
         setEditingProspect(undefined);
