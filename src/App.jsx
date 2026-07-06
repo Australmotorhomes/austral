@@ -7702,8 +7702,8 @@ function DashboardTab({ db, setTab, openRecord }) {
               </div>
 
               {/* ── Deposits Received + Forecast table: rows = customer + product, columns = current month → forward ── */}
-              <h3 style={{ fontSize: 14, fontWeight: 700, color: "#4a5f7f", margin: "0 0 10px" }}>Deposits Received &amp; Forecast</h3>
-              <p style={{ fontSize: 11, color: "#8a7a66", margin: "0 0 10px" }}>First column is this month's payments received; remaining columns are scheduled/forecast. Rows drop off once all their payments are in the past.</p>
+              <h3 style={{ fontSize: 14, fontWeight: 700, color: "#4a5f7f", margin: "0 0 4px" }}>Deposits Received & Forecast</h3>
+              <p style={{ fontSize: 11, color: "#8a7a66", margin: "0 0 10px" }}>First column is this month's payments received; remaining columns are scheduled/forecast. Click any monthly total to see individual transactions.</p>
               <div style={{ overflowX: "auto" }}>
                 <table style={{ width: "100%", borderCollapse: "collapse", background: "#fff", borderRadius: 6, overflow: "hidden", border: "1px solid #c8d8e8", fontSize: 11 }}>
                   <thead>
@@ -7724,7 +7724,16 @@ function DashboardTab({ db, setTab, openRecord }) {
                         <td style={{ ...tdLeft, color: "#4a5f7f" }}>{r.customer}</td>
                         <td style={{ ...tdLeft, color: "#4a5f7f" }}>{r.product}</td>
                         {depositColumnsTrimmed.map(col => (
-                          <td key={col.key} style={{ ...tdStyle, color: "#6b8fc4", borderLeft: "1px solid #e8eef5" }}>
+                          <td
+                            key={col.key}
+                            onClick={() => r.byKey[col.key] && setDrillDown({ key: col.key, label: `${col.label} — ${r.customer}`, filterCustomer: r.customer })}
+                            style={{
+                              ...tdStyle, color: "#6b8fc4", borderLeft: "1px solid #e8eef5",
+                              cursor: r.byKey[col.key] ? "pointer" : "default",
+                              textDecoration: r.byKey[col.key] ? "underline" : "none",
+                              textDecorationColor: "#a8c4e8",
+                            }}
+                          >
                             {r.byKey[col.key] ? `$${r.byKey[col.key].toLocaleString()}` : "—"}
                           </td>
                         ))}
@@ -7734,7 +7743,16 @@ function DashboardTab({ db, setTab, openRecord }) {
                       <tr style={{ background: "#e8eef5", borderTop: "2px solid #6b8fc4", fontWeight: 700 }}>
                         <td style={{ ...tdLeft, fontWeight: 700, color: "#4a5f7f" }} colSpan={2}>Total (${depositGrandTotal.toLocaleString()})</td>
                         {depositColumnsTrimmed.map(col => (
-                          <td key={col.key} style={{ ...tdStyle, color: "#4a5f7f", borderLeft: "1px solid #c8d8e8", fontWeight: 700 }}>
+                          <td
+                            key={col.key}
+                            onClick={() => depositMonthTotals[col.key] && setDrillDown({ key: col.key, label: col.label })}
+                            style={{
+                              ...tdStyle, color: "#4a5f7f", borderLeft: "1px solid #c8d8e8", fontWeight: 700,
+                              cursor: depositMonthTotals[col.key] ? "pointer" : "default",
+                              textDecoration: depositMonthTotals[col.key] ? "underline" : "none",
+                              textDecorationColor: "#a8c4e8",
+                            }}
+                          >
                             {depositMonthTotals[col.key] ? `$${depositMonthTotals[col.key].toLocaleString()}` : "—"}
                           </td>
                         ))}
@@ -7902,7 +7920,10 @@ function DashboardTab({ db, setTab, openRecord }) {
             Individual invoices contributing to this month's total.
           </p>
           {(() => {
-            const rows = getTransactionsForMonth(db.customers, drillDown.key);
+            const allRows = getTransactionsForMonth(db.customers, drillDown.key);
+            const rows = drillDown.filterCustomer
+              ? allRows.filter(r => r.customerName === drillDown.filterCustomer)
+              : allRows;
             const total = rows.reduce((s, r) => s + r.amount, 0);
             if (rows.length === 0) {
               return <p className="muted" style={{ fontSize: 13 }}>No transactions found for this month.</p>;
