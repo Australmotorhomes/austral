@@ -3766,6 +3766,7 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
             quoteId: poGenerationQuote.id,
             quoteNumber: poGenerationQuote.number,
             createdAt: todayISO(),
+            ...(poGenerationQuote.eta && { eta: poGenerationQuote.eta }),  // Copy ETA from quote
           };
           
           const createPayload = toSupabaseFormat(newPOPayload, "purchase_orders");
@@ -4325,7 +4326,6 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
   const [contact, setContact] = useState(editing ? editing.contact || "" : "");
   const [notes, setNotes] = useState(editing ? editing.notes || "" : "");
   const [discount, setDiscount] = useState(editing ? String(editing.discount || 0) : "0");
-  const [eta, setEta] = useState(editing && !isQuote ? editing.eta || "" : "");
   const [lines, setLines] = useState(
     editing && editing.lines
       ? JSON.parse(JSON.stringify(editing.lines)).map((l) => ({ currency: "AUD", ...l }))
@@ -4344,11 +4344,14 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
     editing?.paymentMilestones ? editing.paymentMilestones : []
   );
   const [customsClearance, setCustomsClearance] = useState(
-    !isQuote && editing?.customsClearance ? editing.customsClearance : 0
+    !isQuote && (editing?.customsClearance !== undefined && editing.customsClearance !== null) ? editing.customsClearance : 0
   );
   const [consolidatedCustoms, setConsolidatedCustoms] = useState(customsClearance);
   const [attachments, setAttachments] = useState(
     editing?.attachments ? editing.attachments : []
+  );
+  const [eta, setEta] = useState(
+    editing?.eta ? editing.eta : ""
   );
 
   const sortedItems = items.slice().sort((a, b) => (a.model || "").localeCompare(b.model || "") || (a.name || "").localeCompare(b.name || ""));
@@ -4486,9 +4489,9 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
         status,
         attachments,
         ...(paymentMilestones.length > 0 && { paymentMilestones }),
-        ...(!isQuote && customsClearance > 0 && { customsClearance }),
+        ...(!isQuote && { customsClearance }),  // Always include for POs (allows setting to 0)
         ...(!isQuote && customer && { customer }),
-        ...(!isQuote && eta && { eta }),
+        ...(eta && { eta }),  // ETA for both quotes and POs
       },
       editing
     );
@@ -4765,6 +4768,17 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
             </div>
             <Field label={isQuote ? "Contact (email/phone)" : "Supplier contact"}>
               <input style={inputStyle} type="text" placeholder="Optional" value={contact} onChange={(e) => setContact(e.target.value)} />
+            </Field>
+            <Field label={isQuote ? "ETA (Estimated Delivery)" : "ETA (Estimated Time of Arrival)"}>
+              <input 
+                style={inputStyle} 
+                type="date" 
+                value={eta} 
+                onChange={(e) => setEta(e.target.value)}
+              />
+              <p style={{ fontSize: 11, color: "#8a7a66", margin: "4px 0 0" }}>
+                {isQuote ? "Will be copied to POs created from this quote" : "Required for all purchase orders"}
+              </p>
             </Field>
           </Panel>
 
