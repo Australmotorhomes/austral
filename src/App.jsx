@@ -4274,7 +4274,6 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
   const [showConsolidateModal, setShowConsolidateModal] = useState(false);
   const [consolidateSelected, setConsolidateSelected] = useState([]);
   const [showDetailedConsolidatedView, setShowDetailedConsolidatedView] = useState(false);
-  const [consolidatedCustoms, setConsolidatedCustoms] = useState(customsClearance);
   const [showProfitSection, setShowProfitSection] = useState(false);
   const [paymentMilestones, setPaymentMilestones] = useState(
     editing?.paymentMilestones ? editing.paymentMilestones : []
@@ -4282,6 +4281,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
   const [customsClearance, setCustomsClearance] = useState(
     !isQuote && editing?.customsClearance ? editing.customsClearance : 0
   );
+  const [consolidatedCustoms, setConsolidatedCustoms] = useState(customsClearance);
   const [attachments, setAttachments] = useState(
     editing?.attachments ? editing.attachments : []
   );
