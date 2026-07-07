@@ -345,10 +345,6 @@ function toSupabaseFormat(data, table) {
         copy.quote_number = copy.quoteNumber;
         delete copy.quoteNumber;
       }
-      // ETA field (only for purchase_orders, not quotes)
-      if (copy.eta !== undefined) {
-        copy.eta = copy.eta || null;
-      }
       // number/party/customer/model/date/contact/status/discount/total/notes/lines/subtotal/gst
       // already match their column names as-is.
       break;
@@ -419,7 +415,6 @@ function fromSupabaseFormat(data, table) {
       if (copy.consolidated_group_id !== undefined) { copy.consolidatedGroupId = copy.consolidated_group_id; delete copy.consolidated_group_id; }
       if (copy.consolidated_member_ids !== undefined) { copy.consolidatedMemberIds = Array.isArray(copy.consolidated_member_ids) ? copy.consolidated_member_ids : []; delete copy.consolidated_member_ids; }
       else { copy.consolidatedMemberIds = copy.consolidatedMemberIds || []; }
-      // ETA field (eta stays as-is, no conversion needed)
       break;
   }
   return copy;
@@ -3598,6 +3593,69 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
     })();
   }
 
+  function reverseConsolidation(groupPO) {
+    // Separate a consolidated PO back into independent POs
+    (async () => {
+      try {
+        const memberIds = groupPO.consolidatedMemberIds || [];
+        const memberPOs = (db.pos || []).filter(p => memberIds.includes(p.id));
+        
+        // Restore primary PO to original state (remove merged lines)
+        // Extract primary's original lines by filtering out member lines
+        // Member lines have "[PO#..." prefix, so we can identify them
+        const primaryOriginalLines = (groupPO.lines || []).filter(line => {
+          // Check if this line belongs to a member PO (has the [PO# prefix)
+          const isMemberLine = memberPOs.some(mpo => 
+            line.desc?.includes(`[${mpo.number}`)
+          );
+          return !isMemberLine;
+        });
+
+        const primaryTotal = primaryOriginalLines.reduce((s, l) => s + (parseFloat(l.amount) || 0), 0);
+
+        // Update primary PO: restore original lines, clear consolidation
+        const primaryUpdate = toSupabaseFormat({
+          lines: primaryOriginalLines,
+          total: primaryTotal,
+          subtotal: primaryTotal,
+          consolidatedMemberIds: [],
+          updatedAt: todayISO(),
+        }, "purchase_orders");
+        await supabaseRESTWithSchemaFallback("PATCH", `purchase_orders?id=eq.${groupPO.id}`, primaryUpdate);
+
+        // Update each member PO: remove consolidatedGroupId
+        for (const mpo of memberPOs) {
+          const memberUpdate = toSupabaseFormat({
+            consolidatedGroupId: null,
+            updatedAt: todayISO(),
+          }, "purchase_orders");
+          await supabaseRESTWithSchemaFallback("PATCH", `purchase_orders?id=eq.${mpo.id}`, memberUpdate);
+        }
+
+        update((next) => {
+          // Update primary PO
+          const primary = next.pos.find(p => p.id === groupPO.id);
+          if (primary) {
+            primary.lines = primaryOriginalLines;
+            primary.total = primaryTotal;
+            primary.subtotal = primaryTotal;
+            primary.consolidatedMemberIds = [];
+          }
+          // Update members
+          memberPOs.forEach(mpo => {
+            const mp = next.pos.find(p => p.id === mpo.id);
+            if (mp) mp.consolidatedGroupId = null;
+          });
+        });
+
+        showToast(`Reversed consolidation for PO ${groupPO.number}`);
+      } catch (err) {
+        showToast(`Reversal error: ${err.message}`);
+        console.error("Reverse consolidation error:", err);
+      }
+    })();
+  }
+
   function splitCustomsClearance(groupPO, customsAmount) {
     // Split customs clearance proportionally across member POs by value
     (async () => {
@@ -4146,6 +4204,7 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
           onGeneratePOs={isQuote ? handleGeneratePOs : null}
           onCreateCustomsPO={!isQuote ? createCustomsPO : null}
           onConsolidatePOs={!isQuote ? consolidatePOs : null}
+          onReverseConsolidation={!isQuote ? reverseConsolidation : null}
           onSplitCustoms={!isQuote ? splitCustomsClearance : null}
           openRecord={openRecord}
         />
@@ -4247,7 +4306,7 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
   );
 }
 
-function DocModal({ kind, editing, db, items, models, categories, fx, statusOptions, onCancel, onSave, onSaveMilestones, onAddItem, onAddModel, onAddCategory, onStatusChange, onDelete, onGeneratePOs, onCreateCustomsPO, onConsolidatePOs, onSplitCustoms, openRecord }) {
+function DocModal({ kind, editing, db, items, models, categories, fx, statusOptions, onCancel, onSave, onSaveMilestones, onAddItem, onAddModel, onAddCategory, onStatusChange, onDelete, onGeneratePOs, onCreateCustomsPO, onConsolidatePOs, onReverseConsolidation, onSplitCustoms, openRecord }) {
   const isQuote = kind === "quote";
   const isMobile = useIsMobile();
   const rate = fx ? fx.usdAudRate : FALLBACK_USD_AUD_RATE;
@@ -4289,9 +4348,6 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
   const [consolidatedCustoms, setConsolidatedCustoms] = useState(customsClearance);
   const [attachments, setAttachments] = useState(
     editing?.attachments ? editing.attachments : []
-  );
-  const [eta, setEta] = useState(
-    !isQuote && editing?.eta ? editing.eta : ""
   );
 
   const sortedItems = items.slice().sort((a, b) => (a.model || "").localeCompare(b.model || "") || (a.name || "").localeCompare(b.name || ""));
@@ -4412,10 +4468,6 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
       setError("Please add at least one line item.");
       return;
     }
-    if (!isQuote && !eta) {
-      setError("Please enter an ETA date for the purchase order.");
-      return;
-    }
     onSave(
       {
         party: trimmedParty,
@@ -4435,7 +4487,6 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
         ...(paymentMilestones.length > 0 && { paymentMilestones }),
         ...(!isQuote && customsClearance > 0 && { customsClearance }),
         ...(!isQuote && customer && { customer }),
-        ...(!isQuote && { eta }),
       },
       editing
     );
@@ -4713,18 +4764,6 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
             <Field label={isQuote ? "Contact (email/phone)" : "Supplier contact"}>
               <input style={inputStyle} type="text" placeholder="Optional" value={contact} onChange={(e) => setContact(e.target.value)} />
             </Field>
-            {!isQuote && (
-              <Field label="ETA (Estimated Time of Arrival) *">
-                <input 
-                  style={inputStyle} 
-                  type="date" 
-                  value={eta} 
-                  onChange={(e) => setEta(e.target.value)}
-                  required
-                />
-                <p style={{ fontSize: 11, color: "#8a7a66", margin: "4px 0 0" }}>Required for all purchase orders</p>
-              </Field>
-            )}
           </Panel>
 
           <Panel>
@@ -4988,7 +5027,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                     </Btn>
                   </div>
                 )}
-                {onConsolidatePOs && !isNew && !editing?.consolidatedGroupId && (
+                {onConsolidatePOs && !isNew && !editing?.consolidatedGroupId && !editing?.consolidatedMemberIds?.length && (
                   <div style={{ paddingBottom: 2 }}>
                     <Btn
                       variant="secondary"
@@ -4996,6 +5035,17 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                       onClick={() => { setConsolidateSelected([]); setShowConsolidateModal(true); }}
                     >
                       ⊕ Consolidate Shipment
+                    </Btn>
+                  </div>
+                )}
+                {onReverseConsolidation && !isNew && editing?.consolidatedMemberIds?.length > 0 && (
+                  <div style={{ paddingBottom: 2 }}>
+                    <Btn
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => onReverseConsolidation(editing)}
+                    >
+                      ⊖ Reverse Consolidation
                     </Btn>
                   </div>
                 )}
@@ -5735,9 +5785,9 @@ function POGenerationModal({ quote, items, suppliers, onCancel, onGenerate }) {
         name: supplierName,
         // Replace line price with item cost for POs
         lines: supplierGroups[supplierName].map((line) => {
-          // Use the cost from the quote line (not current price book)
-          // Quote line already has cost captured when item was added
-          return { ...line };
+          const item = items.find((i) => i.id === line.itemId);
+          const costPrice = item ? (item.cost || 0) : 0;
+          return { ...line, price: costPrice };
         }),
       };
     });
