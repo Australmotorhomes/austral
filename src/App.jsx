@@ -4325,6 +4325,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
   const [contact, setContact] = useState(editing ? editing.contact || "" : "");
   const [notes, setNotes] = useState(editing ? editing.notes || "" : "");
   const [discount, setDiscount] = useState(editing ? String(editing.discount || 0) : "0");
+  const [eta, setEta] = useState(editing && !isQuote ? editing.eta || "" : "");
   const [lines, setLines] = useState(
     editing && editing.lines
       ? JSON.parse(JSON.stringify(editing.lines)).map((l) => ({ currency: "AUD", ...l }))
@@ -4487,6 +4488,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
         ...(paymentMilestones.length > 0 && { paymentMilestones }),
         ...(!isQuote && customsClearance > 0 && { customsClearance }),
         ...(!isQuote && customer && { customer }),
+        ...(!isQuote && eta && { eta }),
       },
       editing
     );
@@ -4999,6 +5001,16 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
 
           {!isQuote && (
             <Panel>
+              <div className="grid2" style={{ marginBottom: 10 }}>
+                <Field label="Expected delivery date (ETA)">
+                  <input
+                    style={inputStyle}
+                    type="date"
+                    value={eta}
+                    onChange={(e) => setEta(e.target.value)}
+                  />
+                </Field>
+              </div>
               <div style={{ display: "flex", alignItems: "flex-end", gap: 10 }}>
                 <div style={{ flex: 1 }}>
                   <Field label="Estimated Customs Clearance Payment (AUD, optional)">
@@ -5365,6 +5377,11 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                   {contact && (
                     <div>
                       <b>Contact:</b> {contact}
+                    </div>
+                  )}
+                  {eta && (
+                    <div>
+                      <b>ETA:</b> {fmtDate(eta)}
                     </div>
                   )}
                 </>
