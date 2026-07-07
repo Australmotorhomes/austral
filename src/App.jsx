@@ -96,6 +96,11 @@ async function supabaseREST(method, table, data = null, filter = null) {
 async function supabaseRESTWithSchemaFallback(method, table, data, filter = null) {
   const payload = { ...data };
   const droppedFields = [];
+  // NEVER retry POST requests — each retry creates a duplicate record.
+  // For POST, fail fast so the caller can fix toSupabaseFormat instead.
+  if (method === "POST") {
+    return supabaseREST(method, table, payload, filter);
+  }
   for (let attempt = 0; attempt < 15; attempt++) {
     try {
       const result = await supabaseREST(method, table, payload, filter);
@@ -345,7 +350,18 @@ function toSupabaseFormat(data, table) {
         copy.quote_number = copy.quoteNumber;
         delete copy.quoteNumber;
       }
-      // number/party/customer/model/date/contact/status/discount/total/notes/lines/subtotal/gst
+      if (copy.consolidatedGroupId !== undefined) {
+        copy.consolidated_group_id = copy.consolidatedGroupId || null;
+        delete copy.consolidatedGroupId;
+      }
+      if (copy.consolidatedMemberIds !== undefined) {
+        copy.consolidated_member_ids = copy.consolidatedMemberIds;
+        delete copy.consolidatedMemberIds;
+      }
+      // Strip camelCase timestamps — columns are created_at/updated_at (server defaults)
+      delete copy.createdAt;
+      delete copy.updatedAt;
+      // number/party/customer/model/date/contact/status/discount/total/notes/lines/subtotal/gst/eta
       // already match their column names as-is.
       break;
   }
