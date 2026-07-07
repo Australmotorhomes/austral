@@ -321,6 +321,14 @@ function toSupabaseFormat(data, table) {
         copy.fx_rate_used = copy.fxRateUsed;
         delete copy.fxRateUsed;
       }
+      if (copy.consolidatedGroupId !== undefined) {
+        copy.consolidated_group_id = copy.consolidatedGroupId || null;
+        delete copy.consolidatedGroupId;
+      }
+      if (copy.consolidatedMemberIds !== undefined) {
+        copy.consolidated_member_ids = copy.consolidatedMemberIds;
+        delete copy.consolidatedMemberIds;
+      }
       if (copy.customerId !== undefined) {
         copy.customer_id = copy.customerId;
         delete copy.customerId;
@@ -404,6 +412,9 @@ function fromSupabaseFormat(data, table) {
       copy.lines = Array.isArray(copy.lines) ? copy.lines : [];
       copy.paymentMilestones = Array.isArray(copy.paymentMilestones) ? copy.paymentMilestones : [];
       copy.attachments = Array.isArray(copy.attachments) ? copy.attachments : [];
+      if (copy.consolidated_group_id !== undefined) { copy.consolidatedGroupId = copy.consolidated_group_id; delete copy.consolidated_group_id; }
+      if (copy.consolidated_member_ids !== undefined) { copy.consolidatedMemberIds = Array.isArray(copy.consolidated_member_ids) ? copy.consolidated_member_ids : []; delete copy.consolidated_member_ids; }
+      else { copy.consolidatedMemberIds = copy.consolidatedMemberIds || []; }
       break;
   }
   return copy;
@@ -3185,6 +3196,8 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
   const statusOptions = isQuote ? ["Draft", "Sent", "Accepted", "Declined"] : ["Draft", "Sent", "Received", "Cancelled"];
 
   let list = collection.slice();
+  // Hide individual POs that have been absorbed into a consolidated group
+  if (!isQuote) list = list.filter((d) => !d.consolidatedGroupId);
   if (search) {
     const s = search.toLowerCase();
     list = list.filter((d) => {
@@ -3516,6 +3529,104 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
 
   function handleGeneratePOs(quote) {
     setPoGenerationQuote(quote);
+  }
+
+  function consolidatePOs(primaryPO, memberPOs) {
+    // Merge memberPOs into primaryPO creating a consolidated group
+    // primaryPO becomes the "group leader" — its id is the group id
+    // memberPOs get consolidatedGroupId = primaryPO.id and are hidden from list
+    (async () => {
+      try {
+        const allPOs = [primaryPO, ...memberPOs];
+        const totalValue = allPOs.reduce((s, po) => s + (po.total || 0), 0);
+        
+        // Merged lines from all POs
+        const mergedLines = allPOs.flatMap(po =>
+          (po.lines || []).map(line => ({
+            ...line,
+            desc: `[${po.number}${po.customer ? " — " + po.customer : ""}] ${line.desc || ""}`.trim(),
+          }))
+        );
+        const mergedTotal = allPOs.reduce((s, po) => s + (po.total || 0), 0);
+        const memberIds = memberPOs.map(p => p.id);
+
+        // Update primaryPO: add merged lines + member ids
+        const primaryUpdate = toSupabaseFormat({
+          lines: mergedLines,
+          total: mergedTotal,
+          subtotal: mergedTotal,
+          consolidatedMemberIds: memberIds,
+          updatedAt: todayISO(),
+        }, "purchase_orders");
+        await supabaseRESTWithSchemaFallback("PATCH", `purchase_orders?id=eq.${primaryPO.id}`, primaryUpdate);
+
+        // Update each member PO: set consolidatedGroupId so they hide from list
+        for (const mpo of memberPOs) {
+          const memberUpdate = toSupabaseFormat({
+            consolidatedGroupId: primaryPO.id,
+            updatedAt: todayISO(),
+          }, "purchase_orders");
+          await supabaseRESTWithSchemaFallback("PATCH", `purchase_orders?id=eq.${mpo.id}`, memberUpdate);
+        }
+
+        update((next) => {
+          // Update primary PO
+          const primary = next.pos.find(p => p.id === primaryPO.id);
+          if (primary) {
+            primary.lines = mergedLines;
+            primary.total = mergedTotal;
+            primary.subtotal = mergedTotal;
+            primary.consolidatedMemberIds = memberIds;
+          }
+          // Update members
+          memberPOs.forEach(mpo => {
+            const mp = next.pos.find(p => p.id === mpo.id);
+            if (mp) mp.consolidatedGroupId = primaryPO.id;
+          });
+        });
+
+        showToast(`Consolidated ${allPOs.length} POs into ${primaryPO.number}`);
+      } catch (err) {
+        showToast(`Consolidation error: ${err.message}`);
+        console.error("Consolidate POs error:", err);
+      }
+    })();
+  }
+
+  function splitCustomsClearance(groupPO, customsAmount) {
+    // Split customs clearance proportionally across member POs by value
+    (async () => {
+      try {
+        const allPOIds = [groupPO.id, ...(groupPO.consolidatedMemberIds || [])];
+        const allPOs = (db.pos || []).filter(p => allPOIds.includes(p.id));
+        const totalValue = allPOs.reduce((s, p) => s + (p.total || 0), 0);
+        if (totalValue === 0) { showToast("Cannot split — all POs have zero value"); return; }
+
+        // Update each PO's customsClearance proportionally
+        for (const po of allPOs) {
+          const share = totalValue > 0 ? ((po.total || 0) / totalValue) * customsAmount : 0;
+          const roundedShare = Math.round(share * 100) / 100;
+          await supabaseRESTWithSchemaFallback("PATCH", `purchase_orders?id=eq.${po.id}`,
+            toSupabaseFormat({ customsClearance: roundedShare, updatedAt: todayISO() }, "purchase_orders")
+          );
+        }
+        update((next) => {
+          allPOs.forEach(po => {
+            const p = next.pos.find(x => x.id === po.id);
+            if (p) {
+              const share = totalValue > 0 ? ((po.total || 0) / totalValue) * customsAmount : 0;
+              p.customsClearance = Math.round(share * 100) / 100;
+            }
+          });
+          const gp = next.pos.find(p => p.id === groupPO.id);
+          if (gp) gp.customsClearance = customsAmount;
+        });
+        showToast(`Customs clearance $${customsAmount.toLocaleString()} split across ${allPOs.length} POs`);
+      } catch (err) {
+        showToast(`Split error: ${err.message}`);
+        console.error("Split customs error:", err);
+      }
+    })();
   }
 
   function createCustomsPO(parentPO) {
@@ -3981,6 +4092,11 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
                   <td className="num">{fmtMoney(d.total)}</td>
                   <td>
                     <Badge tone={d.status.toLowerCase()}>{d.status}</Badge>
+                    {!isQuote && d.consolidatedMemberIds?.length > 0 && (
+                      <span style={{ marginLeft: 6, fontSize: 10, background: "#d4a574", color: "#fff", borderRadius: 3, padding: "1px 5px", fontWeight: 600 }}>
+                        ⊕ {d.consolidatedMemberIds.length + 1} POs
+                      </span>
+                    )}
                   </td>
                   <td style={{ whiteSpace: "nowrap" }}>
                     <button
@@ -4024,6 +4140,8 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
           }}
           onGeneratePOs={isQuote ? handleGeneratePOs : null}
           onCreateCustomsPO={!isQuote ? createCustomsPO : null}
+          onConsolidatePOs={!isQuote ? consolidatePOs : null}
+          onSplitCustoms={!isQuote ? splitCustomsClearance : null}
           openRecord={openRecord}
         />
       )}
@@ -4124,7 +4242,7 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
   );
 }
 
-function DocModal({ kind, editing, db, items, models, categories, fx, statusOptions, onCancel, onSave, onSaveMilestones, onAddItem, onAddModel, onAddCategory, onStatusChange, onDelete, onGeneratePOs, onCreateCustomsPO, openRecord }) {
+function DocModal({ kind, editing, db, items, models, categories, fx, statusOptions, onCancel, onSave, onSaveMilestones, onAddItem, onAddModel, onAddCategory, onStatusChange, onDelete, onGeneratePOs, onCreateCustomsPO, onConsolidatePOs, onSplitCustoms, openRecord }) {
   const isQuote = kind === "quote";
   const isMobile = useIsMobile();
   const rate = fx ? fx.usdAudRate : FALLBACK_USD_AUD_RATE;
@@ -4153,6 +4271,8 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
   const [showQuickAddItem, setShowQuickAddItem] = useState(false);
   const [error, setError] = useState("");
   const [showPaymentModal, setShowPaymentModal] = useState(false);
+  const [showConsolidateModal, setShowConsolidateModal] = useState(false);
+  const [consolidateSelected, setConsolidateSelected] = useState([]);
   const [showProfitSection, setShowProfitSection] = useState(false);
   const [paymentMilestones, setPaymentMilestones] = useState(
     editing?.paymentMilestones ? editing.paymentMilestones : []
@@ -4833,7 +4953,6 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                       variant="secondary"
                       size="sm"
                       onClick={() => {
-                        // Save current PO first, then create customs PO
                         handleSave();
                         onCreateCustomsPO({ ...editing, customsClearance });
                       }}
@@ -4842,9 +4961,60 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                     </Btn>
                   </div>
                 )}
+                {onConsolidatePOs && !isNew && !editing?.consolidatedGroupId && (
+                  <div style={{ paddingBottom: 2 }}>
+                    <Btn
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => { setConsolidateSelected([]); setShowConsolidateModal(true); }}
+                    >
+                      ⊕ Consolidate Shipment
+                    </Btn>
+                  </div>
+                )}
               </div>
             </Panel>
           )}
+
+          {!isNew && editing?.consolidatedMemberIds?.length > 0 && (() => {
+            const members = (db.pos || []).filter(p => (editing.consolidatedMemberIds || []).includes(p.id));
+            const groupTotal = (editing.total || 0);
+            return (
+              <Panel>
+                <h4 style={{ fontSize: 13, fontWeight: 700, color: "#4a3527", margin: "0 0 10px" }}>
+                  Consolidated Shipment — {members.length + 1} POs
+                </h4>
+                {[editing, ...members].map((po, i) => (
+                  <div key={po.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 0", borderBottom: "1px solid #f0e8d9", fontSize: 12 }}>
+                    <div>
+                      <strong>PO #{po.number}</strong>
+                      {po.customer && <span style={{ color: "#8a7a66" }}> — {po.customer}</span>}
+                      {po.quoteNumber && <span style={{ color: "#8a7a66" }}> · Quote {po.quoteNumber}</span>}
+                    </div>
+                    <div style={{ textAlign: "right" }}>
+                      <div style={{ fontWeight: 600 }}>${(po.total || 0).toLocaleString()}</div>
+                      {po.customsClearance > 0 && (
+                        <div style={{ fontSize: 11, color: "#8a7a66" }}>Customs: ${po.customsClearance.toLocaleString()}</div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+                {customsClearance > 0 && (
+                  <div style={{ marginTop: 10 }}>
+                    <Btn variant="secondary" size="sm" onClick={() => onSplitCustoms && onSplitCustoms(editing, customsClearance)}>
+                      Split ${customsClearance.toLocaleString()} customs proportionally
+                    </Btn>
+                    <p style={{ fontSize: 11, color: "#8a7a66", margin: "4px 0 0" }}>
+                      Splits by PO value: {[editing, ...members].map(po => {
+                        const t = [editing, ...members].reduce((s, p) => s + (p.total || 0), 0);
+                        return `${po.number}: $${Math.round(((po.total||0)/t)*customsClearance).toLocaleString()}`;
+                      }).join(", ")}
+                    </p>
+                  </div>
+                )}
+              </Panel>
+            );
+          })()}
 
           {paymentMilestones.filter(m => m.due || m.amount).length > 0 && (
             <Panel>
@@ -5289,6 +5459,73 @@ ${clone?.innerHTML || ""}
           onSave={(payload) => handleQuickAddItem(payload)}
         />
       )}
+
+      {showConsolidateModal && !isNew && onConsolidatePOs && (() => {
+        // POs from same supplier, not already in a consolidated group, not this PO
+        const candidatePOs = (db.pos || []).filter(p =>
+          p.id !== editing.id &&
+          p.party === editing.party &&
+          !p.consolidatedGroupId &&
+          !(editing.consolidatedMemberIds || []).includes(p.id)
+        );
+        return (
+          <Modal onClose={() => setShowConsolidateModal(false)} width={540}>
+            <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: "0 0 8px", fontSize: 18 }}>
+              Consolidate Shipment
+            </h3>
+            <p style={{ fontSize: 12, color: "#8a7a66", margin: "0 0 16px" }}>
+              Select POs from <strong>{editing.party}</strong> to combine into a single shipment with PO #{editing.number}.
+            </p>
+            {candidatePOs.length === 0 ? (
+              <p style={{ color: "#8a7a66", fontSize: 13 }}>No other POs found for {editing.party}.</p>
+            ) : (
+              <div>
+                {candidatePOs.map(po => (
+                  <label key={po.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 0", borderBottom: "1px solid #f0e8d9", cursor: "pointer" }}>
+                    <input
+                      type="checkbox"
+                      checked={consolidateSelected.includes(po.id)}
+                      onChange={(e) => setConsolidateSelected(prev =>
+                        e.target.checked ? [...prev, po.id] : prev.filter(id => id !== po.id)
+                      )}
+                    />
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontSize: 13, fontWeight: 600, color: "#4a3527" }}>PO #{po.number}</div>
+                      <div style={{ fontSize: 12, color: "#8a7a66" }}>
+                        {po.customer && `Customer: ${po.customer}`}
+                        {po.quoteNumber && ` · Quote ${po.quoteNumber}`}
+                        {` · $${(po.total || 0).toLocaleString()}`}
+                        {` · ${po.status}`}
+                      </div>
+                    </div>
+                  </label>
+                ))}
+                <div style={{ marginTop: 16, padding: "10px 0", borderTop: "1px solid #e3d8c6", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <div style={{ fontSize: 12, color: "#8a7a66" }}>
+                    {consolidateSelected.length > 0
+                      ? `Combined total: $${[editing, ...candidatePOs.filter(p => consolidateSelected.includes(p.id))].reduce((s, p) => s + (p.total || 0), 0).toLocaleString()}`
+                      : "Select POs above to combine"}
+                  </div>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <Btn variant="ghost" onClick={() => setShowConsolidateModal(false)}>Cancel</Btn>
+                    <Btn
+                      variant="primary"
+                      onClick={() => {
+                        if (consolidateSelected.length === 0) return;
+                        const memberPOs = candidatePOs.filter(p => consolidateSelected.includes(p.id));
+                        onConsolidatePOs(editing, memberPOs);
+                        setShowConsolidateModal(false);
+                      }}
+                    >
+                      Consolidate {consolidateSelected.length > 0 ? `(${consolidateSelected.length + 1} POs)` : ""}
+                    </Btn>
+                  </div>
+                </div>
+              </div>
+            )}
+          </Modal>
+        );
+      })()}
     </Modal>
   );
 }
