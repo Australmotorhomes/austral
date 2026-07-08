@@ -3789,14 +3789,8 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
             status: "Draft",
             party: supplier.name,
             customer: poGenerationQuote.party,
-            // Reference field: list price book item names for this supplier
-            model: supplier.lines
-              .map(line => {
-                const item = db.items.find(i => i.id === line.itemId);
-                return item?.name || "Unknown item";
-              })
-              .filter((name, idx, arr) => arr.indexOf(name) === idx)  // Remove duplicates
-              .join(", "),
+            // Reference field: customer last name (extracted from quote party)
+            model: poGenerationQuote.party ? poGenerationQuote.party.split(" ").pop() : "",
             date: todayISO(),
             contact: "",
             notes: `Generated from quote ${poGenerationQuote.number}`,
@@ -4852,7 +4846,13 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
               <select style={{ ...inputStyle, flex: 1 }} value={pickerValue} onChange={(e) => setPickerValue(e.target.value)}>
                 <option value="">— choose an item —</option>
                 {sortedItems
-                  .filter((i) => !isQuote && party ? i.supplier === party : true)
+                  .filter((i) => {
+                    // For quotes: show all items
+                    if (isQuote) return true;
+                    // For POs: show items from selected supplier, or items with no supplier assigned
+                    if (!party) return true;  // No supplier selected, show all
+                    return !i.supplier || i.supplier === party;  // Show items with matching supplier OR no supplier
+                  })
                   .map((i) => {
                     const displayPrice = isQuote ? (i.sellPrice != null ? i.sellPrice : calcSellPrice(i.cost)) : i.cost;
                     return (
