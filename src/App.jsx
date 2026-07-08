@@ -390,6 +390,7 @@ function fromSupabaseFormat(data, table) {
       if (copy.last_quote_value !== undefined) copy.lastQuoteValue = copy.last_quote_value;
       if (copy.is_archived !== undefined) copy.archived = copy.is_archived;
       copy.attachments = Array.isArray(copy.attachments) ? copy.attachments : [];
+      copy.activities = Array.isArray(copy.activities) ? copy.activities : [];
       break;
       
     case "crm_prospects":
@@ -6092,6 +6093,7 @@ function ContactsTab({ kind, db, update, showToast, nextNumber, pendingOpen, cle
   const [editingContact, setEditingContact] = useState(undefined);
   const [importData, setImportData] = useState(null);
   const [pendingDelete, setPendingDelete] = useState(null);
+  const [loggingActivityFor, setLoggingActivityFor] = useState(null);
   const isMobile = useIsMobile();
 
   // Keep the open contact modal in sync with the latest data (e.g. a customer's
@@ -6328,6 +6330,71 @@ function ContactsTab({ kind, db, update, showToast, nextNumber, pendingOpen, cle
     })();
   }
 
+  function logCustomerActivity(contact, activity) {
+    (async () => {
+      try {
+        const newActivity = {
+          id: uid("act"),
+          date: activity.date,
+          type: activity.type,
+          notes: activity.notes,
+          createdAt: todayISO(),
+        };
+        const updatedActivities = [...(contact.activities || []), newActivity];
+        await supabaseRESTWithSchemaFallback("PATCH", `customers?id=eq.${contact.id}`, { activities: updatedActivities });
+        update((next) => {
+          const target = next.customers.find((c) => c.id === contact.id);
+          if (target) {
+            target.activities = updatedActivities;
+          }
+        });
+        setLoggingActivityFor(null);
+        showToast("Activity logged");
+      } catch (err) {
+        showToast(`Error logging activity: ${err.message}`);
+        console.error("Log customer activity error:", err);
+      }
+    })();
+  }
+
+  function editCustomerActivity(contact, index, activityData) {
+    (async () => {
+      try {
+        const updatedActivities = (contact.activities || []).map((a, i) =>
+          i === index ? { ...a, date: activityData.date, type: activityData.type, notes: activityData.notes } : a
+        );
+        await supabaseRESTWithSchemaFallback("PATCH", `customers?id=eq.${contact.id}`, { activities: updatedActivities });
+        update((next) => {
+          const target = next.customers.find((c) => c.id === contact.id);
+          if (target) target.activities = updatedActivities;
+        });
+        setLoggingActivityFor(null);
+        showToast("Activity updated");
+      } catch (err) {
+        showToast(`Error updating activity: ${err.message}`);
+        console.error("Edit customer activity error:", err);
+      }
+    })();
+  }
+
+  function deleteCustomerActivity(contact, index) {
+    (async () => {
+      try {
+        const updatedActivities = (contact.activities || []).filter((_, i) => i !== index);
+        await supabaseRESTWithSchemaFallback("PATCH", `customers?id=eq.${contact.id}`, { activities: updatedActivities });
+        update((next) => {
+          const target = next.customers.find((c) => c.id === contact.id);
+          if (target) target.activities = updatedActivities;
+        });
+        setLoggingActivityFor(null);
+        showToast("Activity deleted");
+      } catch (err) {
+        showToast(`Error deleting activity: ${err.message}`);
+        console.error("Delete customer activity error:", err);
+      }
+    })();
+  }
+
   function createQuoteFromCustomer(customer) {
     (async () => {
       try {
@@ -6495,6 +6562,8 @@ function ContactsTab({ kind, db, update, showToast, nextNumber, pendingOpen, cle
           onSave={saveContact}
           onCreateQuote={!isSupplier ? createQuoteFromCustomer : undefined}
           onArchive={!isSupplier ? (contact, archived) => { archiveContact(contact, archived); setEditingContact(undefined); } : undefined}
+          onLogActivity={!isSupplier ? () => setLoggingActivityFor({ contact: editingContact, activity: null, index: null }) : undefined}
+          onEditActivity={!isSupplier ? (activity, index) => setLoggingActivityFor({ contact: editingContact, activity, index }) : undefined}
           db={db}
           openRecord={openRecord}
         />
@@ -6539,6 +6608,26 @@ function ContactsTab({ kind, db, update, showToast, nextNumber, pendingOpen, cle
             </Btn>
           </div>
         </Modal>
+      )}
+
+      {loggingActivityFor && (
+        <ActivityLogModal
+          prospect={loggingActivityFor.contact}
+          activity={loggingActivityFor.activity}
+          onCancel={() => setLoggingActivityFor(null)}
+          onSave={(activityData) => {
+            if (loggingActivityFor.activity) {
+              editCustomerActivity(loggingActivityFor.contact, loggingActivityFor.index, activityData);
+            } else {
+              logCustomerActivity(loggingActivityFor.contact, activityData);
+            }
+          }}
+          onDelete={
+            loggingActivityFor.activity
+              ? () => deleteCustomerActivity(loggingActivityFor.contact, loggingActivityFor.index)
+              : null
+          }
+        />
       )}
 
       {pendingDelete && (
@@ -6646,7 +6735,7 @@ function AttachmentsPanel({ recordId, recordType, attachments, onAttachmentsChan
   );
 }
 
-function ContactModal({ kind, editing, onCancel, onSave, onCreateQuote, onArchive, db, openRecord }) {
+function ContactModal({ kind, editing, onCancel, onSave, onCreateQuote, onArchive, onLogActivity, onEditActivity, db, openRecord }) {
   const isSupplier = kind === "supplier";
   const [name, setName] = useState(editing ? editing.name : "");
   const [contactPerson, setContactPerson] = useState(isSupplier ? (editing ? editing.contactPerson || "" : "") : "");
@@ -6730,26 +6819,35 @@ function ContactModal({ kind, editing, onCancel, onSave, onCreateQuote, onArchiv
 
   return (
     <Modal onClose={onCancel}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
-        <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: 0, fontSize: 19 }}>
-          {editing ? `Edit ${isSupplier ? "supplier" : "customer"}` : `Add ${isSupplier ? "supplier" : "customer"}`}
-          {editing?.archived && (
-            <span style={{ marginLeft: 10, fontSize: 11, fontWeight: 700, color: "#a3442e", background: "#fbeae5", padding: "3px 8px", borderRadius: 6, verticalAlign: "middle" }}>
-              ARCHIVED
-            </span>
-          )}
-        </h3>
-        {editing && onArchive && (
-          <Btn
-            variant="ghost"
-            size="sm"
-            onClick={() => onArchive(editing, !editing.archived)}
-            style={editing.archived ? { color: "#5c7a4f" } : { color: "#a3442e" }}
-          >
-            {editing.archived ? "Restore customer" : "Archive customer"}
-          </Btn>
+      <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: "0 0 12px", fontSize: 19 }}>
+        {editing ? `Edit ${isSupplier ? "supplier" : "customer"}` : `Add ${isSupplier ? "supplier" : "customer"}`}
+        {editing?.archived && (
+          <span style={{ marginLeft: 10, fontSize: 11, fontWeight: 700, color: "#a3442e", background: "#fbeae5", padding: "3px 8px", borderRadius: 6, verticalAlign: "middle" }}>
+            ARCHIVED
+          </span>
         )}
-      </div>
+      </h3>
+
+      {editing && (
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
+          {onLogActivity && (
+            <Btn variant="ghost" size="sm" onClick={onLogActivity}>Log activity</Btn>
+          )}
+          {onCreateQuote && (
+            <Btn variant="ghost" size="sm" onClick={() => onCreateQuote(editing)}>Create quote</Btn>
+          )}
+          {onArchive && (
+            <Btn
+              variant="ghost"
+              size="sm"
+              onClick={() => onArchive(editing, !editing.archived)}
+              style={editing.archived ? { color: "#5c7a4f" } : { color: "#a3442e" }}
+            >
+              {editing.archived ? "Restore customer" : "Archive customer"}
+            </Btn>
+          )}
+        </div>
+      )}
 
       <Field label="Name (required)">
         <input style={inputStyle} type="text" value={name} onChange={(e) => setName(e.target.value)} />
@@ -7007,34 +7105,59 @@ function ContactModal({ kind, editing, onCancel, onSave, onCreateQuote, onArchiv
         </div>
       )}
 
+      {editing && !isSupplier && (
+        <div style={{ borderTop: "1px solid #e3d8c6", paddingTop: 14, marginTop: 14 }}>
+          <h4 style={{ fontSize: 13, fontWeight: 600, color: "#6b5240", margin: "0 0 10px" }}>
+            Activity timeline ({(editing.activities || []).length})
+          </h4>
+          {(editing.activities || []).length === 0 ? (
+            <p className="muted" style={{ fontSize: 12 }}>No activities logged yet.</p>
+          ) : (
+            (editing.activities || []).slice().sort((a, b) => (b.date || "").localeCompare(a.date || "")).map((a, i) => (
+              <div
+                key={a.id || i}
+                onClick={() => onEditActivity && onEditActivity(a, (editing.activities || []).findIndex((x) => x.id === a.id || x === a))}
+                style={{
+                  display: "flex",
+                  alignItems: "flex-start",
+                  justifyContent: "space-between",
+                  gap: 10,
+                  marginBottom: 8,
+                  padding: "10px 8px",
+                  borderBottom: "1px solid #eee",
+                  fontSize: 12,
+                  cursor: onEditActivity ? "pointer" : "default",
+                  borderRadius: 6,
+                }}
+              >
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div style={{ fontWeight: 600, color: "#4a3527" }}>
+                    {fmtDate(a.date)} · {a.type || "note"}
+                  </div>
+                  <div style={{ color: "#6b5240", marginTop: 2, wordBreak: "break-word" }}>{a.notes}</div>
+                </div>
+                {onEditActivity && (
+                  <span style={{ color: "#b5552b", fontSize: 16, flexShrink: 0, marginTop: 2 }}>›</span>
+                )}
+              </div>
+            ))
+          )}
+        </div>
+      )}
+
       {error && (
         <div style={{ background: "#fbeae5", border: "1px solid #e6c9bf", color: "#a3442e", borderRadius: 8, padding: "9px 12px", fontSize: 13, marginBottom: 14 }}>
           {error}
         </div>
       )}
 
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, marginTop: 18 }}>
-        <div>
-          {editing && onCreateQuote && (
-            <Btn
-              variant="secondary"
-              onClick={() => {
-                handleSave();
-                onCreateQuote(editing);
-              }}
-            >
-              + Create Quote
-            </Btn>
-          )}
-        </div>
-        <div style={{ display: "flex", gap: 10 }}>
-          <Btn variant="ghost" onClick={onCancel}>
-            Cancel
-          </Btn>
-          <Btn variant="primary" onClick={handleSave}>
-            {editing ? "Save changes" : "Add contact"}
-          </Btn>
-        </div>
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 18 }}>
+        <Btn variant="ghost" onClick={onCancel}>
+          Cancel
+        </Btn>
+        <Btn variant="primary" onClick={handleSave}>
+          {editing ? "Save changes" : "Add contact"}
+        </Btn>
       </div>
     </Modal>
   );
@@ -7045,7 +7168,6 @@ function ContactModal({ kind, editing, onCancel, onSave, onCreateQuote, onArchiv
    ============================================================ */
 
 function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOpen, openRecord }) {
-  const isMobile = useIsMobile();
   const [search, setSearch] = useState("");
   const [showLost, setShowLost] = useState(false);
   const [editingProspect, setEditingProspect] = useState(undefined);
@@ -7475,8 +7597,9 @@ function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOp
 
         {list.length === 0 ? (
           <Empty icon="📞" text="No prospects yet. Add one to start tracking." />
-        ) : isMobile ? (
-          // ── Compact clickable list for mobile ──
+        ) : (
+          // ── Compact clickable list (both mobile & desktop): tap/click a row to
+          // open the record, already editable — no separate view/edit step. ──
           <div style={{ display: "flex", flexDirection: "column" }}>
             {list.map((p) => (
               <div
@@ -7511,7 +7634,10 @@ function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOp
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
                   <button
-                    onClick={(e) => { e.stopPropagation(); deleteProspect(p); }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      deleteProspect(p);
+                    }}
                     title="Delete"
                     style={{ background: "none", border: "none", color: "#a3442e", cursor: "pointer", fontSize: 16, padding: 4 }}
                   >
@@ -7521,149 +7647,6 @@ function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOp
                 </div>
               </div>
             ))}
-          </div>
-        ) : (
-          // ── Rich multi-row desktop list ──
-          <div style={{ display: "flex", flexDirection: "column" }}>
-            {list.map((p) => {
-              const chance = p.chanceOfClosing || 0;
-              const chanceColor = chance >= 70 ? "#5c7a4f" : chance >= 30 ? "#a68d4a" : "#a3442e";
-              const chanceBg   = chance >= 70 ? "#e3ecdc" : chance >= 30 ? "#fef2e0" : "#fbeae5";
-              const statusColors = {
-                lost:    { bg: "#fbeae5", color: "#a3442e" },
-                deposit: { bg: "#e3ecdc", color: "#5c7a4f" },
-                quote:   { bg: "#e8f0fb", color: "#3a5fa0" },
-                call:    { bg: "#fef2e0", color: "#a68d4a" },
-                email:   { bg: "#f3eafc", color: "#7a4fa0" },
-              };
-              const statusKey = (p.currentStatus || "call").toLowerCase();
-              const statusStyle = statusColors[statusKey] || { bg: "#f0e8d9", color: "#6b5240" };
-
-              // Last activity: most recent entry in the activities array
-              const acts = (p.activities || []).slice().sort((a, b) => (b.date || "").localeCompare(a.date || ""));
-              const lastAct = acts[0];
-              const lastActLabel = lastAct
-                ? `${lastAct.type ? lastAct.type.charAt(0).toUpperCase() + lastAct.type.slice(1) : ""} on ${lastAct.date ? new Date(lastAct.date).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" }) : ""}${lastAct.notes ? ": " + lastAct.notes : ""}`
-                : null;
-
-              const fmtDate = (d) => d ? new Date(d).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" }) : "—";
-
-              return (
-                <div
-                  key={p.id}
-                  onClick={() => setEditingProspect(p)}
-                  style={{
-                    padding: "14px 6px",
-                    borderBottom: "1px solid #f0e8d9",
-                    cursor: "pointer",
-                    transition: "background 0.12s",
-                  }}
-                  onMouseOver={(e) => e.currentTarget.style.background = "#faf7f2"}
-                  onMouseOut={(e) => e.currentTarget.style.background = "transparent"}
-                >
-                  {/* Row 1: name, phone, email, product, value, status, chance */}
-                  <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
-                    {/* Name — widest column */}
-                    <div style={{ minWidth: 160, flex: "0 0 160px" }}>
-                      <div style={{ fontSize: 14, fontWeight: 700, color: "#4a3527", lineHeight: 1.3 }}>{p.name}</div>
-                    </div>
-
-                    {/* Phone */}
-                    {p.phone && (
-                      <div style={{ fontSize: 12, color: "#6b5240", display: "flex", alignItems: "center", gap: 4, flex: "0 0 auto" }}>
-                        <span style={{ opacity: 0.6, fontSize: 11 }}>📞</span>
-                        <span>{p.phone}</span>
-                      </div>
-                    )}
-
-                    {/* Email */}
-                    {p.email && (
-                      <div style={{ fontSize: 12, color: "#6b5240", display: "flex", alignItems: "center", gap: 4, flex: "1 1 180px", minWidth: 0, overflow: "hidden" }}>
-                        <span style={{ opacity: 0.6, fontSize: 11 }}>✉</span>
-                        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.email}</span>
-                      </div>
-                    )}
-
-                    {/* Enquired about */}
-                    {p.enquiryProduct && (
-                      <div style={{ fontSize: 12, color: "#6b5240", flex: "0 0 auto" }}>
-                        <span style={{ opacity: 0.6, fontSize: 10, marginRight: 3 }}>PRODUCT</span>
-                        <span style={{ fontWeight: 600 }}>{p.enquiryProduct}</span>
-                      </div>
-                    )}
-
-                    {/* Value */}
-                    {p.salesValue > 0 && (
-                      <div style={{ fontSize: 12, color: "#4a3527", fontWeight: 700, flex: "0 0 auto" }}>
-                        {fmtMoney(p.salesValue, "AUD")}
-                      </div>
-                    )}
-
-                    {/* Spacer */}
-                    <div style={{ flex: 1 }} />
-
-                    {/* Status badge */}
-                    <span style={{
-                      background: statusStyle.bg,
-                      color: statusStyle.color,
-                      padding: "3px 8px",
-                      borderRadius: 5,
-                      fontSize: 11,
-                      fontWeight: 700,
-                      letterSpacing: "0.04em",
-                      flex: "0 0 auto",
-                    }}>
-                      {(p.currentStatus || "call").toUpperCase()}
-                    </span>
-
-                    {/* Chance of closing */}
-                    <span style={{
-                      background: chanceBg,
-                      color: chanceColor,
-                      padding: "3px 8px",
-                      borderRadius: 5,
-                      fontSize: 11,
-                      fontWeight: 700,
-                      flex: "0 0 auto",
-                    }}>
-                      {chance}% close
-                    </span>
-
-                    {/* Delete + chevron */}
-                    <div style={{ display: "flex", alignItems: "center", gap: 6, flex: "0 0 auto" }}>
-                      <button
-                        onClick={(e) => { e.stopPropagation(); deleteProspect(p); }}
-                        title="Delete"
-                        style={{ background: "none", border: "none", color: "#a3442e", cursor: "pointer", fontSize: 15, padding: "2px 4px", opacity: 0.7 }}
-                      >
-                        ✕
-                      </button>
-                      <span style={{ color: "#b5552b", fontSize: 16 }}>›</span>
-                    </div>
-                  </div>
-
-                  {/* Row 2: first contact, last contact, last activity */}
-                  <div style={{ display: "flex", gap: 24, marginTop: 6, flexWrap: "wrap" }}>
-                    <div style={{ fontSize: 11, color: "#8a7a66" }}>
-                      <span style={{ fontWeight: 600, color: "#6b5240" }}>First contact:</span>{" "}
-                      {fmtDate(p.firstContactDate)}
-                    </div>
-                    <div style={{ fontSize: 11, color: "#8a7a66" }}>
-                      <span style={{ fontWeight: 600, color: "#6b5240" }}>Last contact:</span>{" "}
-                      {fmtDate(p.lastContactDate)}
-                    </div>
-                    {lastActLabel && (
-                      <div style={{ fontSize: 11, color: "#8a7a66", flex: 1, minWidth: 0 }}>
-                        <span style={{ fontWeight: 600, color: "#6b5240" }}>Last activity:</span>{" "}
-                        <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "inline-block", maxWidth: 480, verticalAlign: "bottom" }}>
-                          {lastActLabel}
-                        </span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
           </div>
         )}
       </Panel>
