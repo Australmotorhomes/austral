@@ -7349,12 +7349,15 @@ function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOp
         // Update prospect with new activity
         const updatedActivities = [...(prospect.activities || []), newActivity];
         console.log("📤 Logging activity for prospect:", prospect.id, "Activity:", newActivity);
+        console.log("📋 Full activities array being sent:", JSON.stringify(updatedActivities, null, 2));
         
         // Send activities and lastContactDate directly (no toSupabaseFormat)
-        const result = await supabaseREST("PATCH", `crm_prospects?id=eq.${prospect.id}`, {
+        const payload = {
           activities: updatedActivities,
           last_contact_date: activity.date,
-        });
+        };
+        console.log("📦 Payload to Supabase:", JSON.stringify(payload, null, 2));
+        const result = await supabaseREST("PATCH", `crm_prospects?id=eq.${prospect.id}`, payload);
         console.log("✅ Activity logged to Supabase:", result);
         
         // Then update local state
