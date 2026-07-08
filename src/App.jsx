@@ -8526,8 +8526,8 @@ function DashboardTab({ db, setTab, openRecord }) {
                     <td style={{ padding: "10px 8px", color: "#4a3527" }}>{po.party}</td>
                     <td style={{ padding: "10px 8px", color: "#4a3527", fontWeight: 600 }}>#{po.number}</td>
                     <td style={{ padding: "10px 8px", color: "#4a3527" }}>
-                      {po.paymentMilestones && po.paymentMilestones.length > 0
-                        ? new Date(po.paymentMilestones[po.paymentMilestones.length - 1].due).toLocaleDateString()
+                      {po.eta
+                        ? new Date(po.eta).toLocaleDateString()
                         : "—"}
                     </td>
                     <td style={{ padding: "10px 8px", color: "#4a3527", textAlign: "right", fontWeight: 600 }}>
