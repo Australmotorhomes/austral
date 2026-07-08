@@ -1068,6 +1068,8 @@ export default function App() {
   
   // Supabase REST API state
   const [supabaseConnected, setSupabaseConnected] = useState(false);
+  const [savingProspect, setSavingProspect] = useState(false);
+  const [loggingActivity, setLoggingActivity] = useState(false);
   const pollingIntervalRef = useRef(null);
 
   const showToast = useCallback((msg) => {
@@ -7334,8 +7336,6 @@ function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOp
     });
   }
 
-  const [loggingActivity, setLoggingActivity] = useState(false);
-
   function logActivity(prospect, activity) {
     if (loggingActivity) {
       console.warn("Activity save already in progress, ignoring duplicate request");
@@ -7440,8 +7440,6 @@ function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOp
       }
     })();
   }
-
-  const [savingProspect, setSavingProspect] = useState(false);
 
   function saveProspect(payload, editing) {
     if (savingProspect) {
