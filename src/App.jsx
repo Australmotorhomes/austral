@@ -5017,6 +5017,10 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                                 onChange={(e) => {
                                   const updated = [...paymentMilestones];
                                   updated[idx].paid = e.target.checked;
+                                  // Auto-fill paid date with due date when marked as paid
+                                  if (e.target.checked && milestone.due) {
+                                    updated[idx].paidDate = milestone.due;
+                                  }
                                   setPaymentMilestones(updated);
                                 }}
                               />
@@ -6023,7 +6027,13 @@ function PaymentMilestonesModal({ doc, docType, onSave, onClose }) {
                     <input
                       type="checkbox"
                       checked={m.paid || false}
-                      onChange={(e) => updateMilestone(idx, "paid", e.target.checked)}
+                      onChange={(e) => {
+                        updateMilestone(idx, "paid", e.target.checked);
+                        // Auto-fill paid date with due date when marked as paid
+                        if (e.target.checked && m.due) {
+                          updateMilestone(idx, "paidDate", m.due);
+                        }
+                      }}
                     />
                     <span style={{ fontSize: 13 }}>Marked as paid</span>
                   </label>
