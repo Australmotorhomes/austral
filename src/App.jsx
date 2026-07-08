@@ -152,6 +152,18 @@ function parseDateInput(ddmmyy) {
   }
 }
 
+// Safely parse an activities value from Supabase. The column is JSONB, so
+// PostgREST normally returns a JS array — but if the column type is text or
+// the value was stored as a JSON string, it comes back as a string and
+// Array.isArray returns false, silently resetting activities to [].
+function parseActivities(raw) {
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw === "string" && raw.trim().startsWith("[")) {
+    try { return JSON.parse(raw); } catch { /* fall through */ }
+  }
+  return [];
+}
+
 // ---- Data Transformation Helpers (camelCase <-> snake_case) ----
 function toSupabaseFormat(data, table) {
   if (!data) return data;
@@ -390,7 +402,7 @@ function fromSupabaseFormat(data, table) {
       if (copy.last_quote_value !== undefined) copy.lastQuoteValue = copy.last_quote_value;
       if (copy.is_archived !== undefined) copy.archived = copy.is_archived;
       copy.attachments = Array.isArray(copy.attachments) ? copy.attachments : [];
-      copy.activities = Array.isArray(copy.activities) ? copy.activities : [];
+      copy.activities = parseActivities(copy.activities);
       break;
       
     case "crm_prospects":
@@ -401,7 +413,7 @@ function fromSupabaseFormat(data, table) {
       if (copy.expected_order_eta_month !== undefined) copy.expectedOrderEtaMonth = copy.expected_order_eta_month;
       if (copy.enquiry_product !== undefined) copy.enquiryProduct = copy.enquiry_product;
       copy.salesValue = parseFloat(copy.sales_value || copy.value) || 0;
-      copy.activities = Array.isArray(copy.activities) ? copy.activities : [];
+      copy.activities = parseActivities(copy.activities);
       copy.attachments = Array.isArray(copy.attachments) ? copy.attachments : [];
       break;
       
@@ -6280,13 +6292,22 @@ function ContactsTab({ kind, db, update, showToast, nextNumber, pendingOpen, cle
         if (editing) {
           // Convert to Supabase format and PATCH (WITHOUT updatedAt since column doesn't exist)
           const updatePayload = toSupabaseFormat(payload, table);
-          await supabaseREST("PATCH", `${table}?id=eq.${editing.id}`, updatePayload);
-          
+          const result = await supabaseREST("PATCH", `${table}?id=eq.${editing.id}`, updatePayload);
+          // Use the full returned row to update local state so JSONB fields
+          // like `activities` that aren't part of the form payload are preserved.
+          const savedRow = Array.isArray(result) && result[0] ? result[0] : null;
           // Update local state (keep original payload structure)
           update((next) => {
             const coll = isSupplier ? next.suppliers : next.customers;
             const target = coll.find((c) => c.id === editing.id);
-            Object.assign(target, payload);
+            if (target) {
+              if (savedRow) {
+                Object.assign(target, fromSupabaseFormat(savedRow, table));
+              } else {
+                const existing = { activities: target.activities, attachments: target.attachments };
+                Object.assign(target, payload, existing);
+              }
+            }
           });
           showToast("Contact updated");
         } else {
@@ -6347,13 +6368,17 @@ function ContactsTab({ kind, db, update, showToast, nextNumber, pendingOpen, cle
           createdAt: todayISO(),
         };
         const updatedActivities = [...(contact.activities || []), newActivity];
-        await supabaseRESTWithSchemaFallback("PATCH", `customers?id=eq.${contact.id}`, { activities: updatedActivities });
+        // Use supabaseREST directly (not schema fallback) so a missing `activities`
+        // column produces a visible error rather than silently dropping the data.
+        await supabaseREST("PATCH", `customers?id=eq.${contact.id}`, { activities: updatedActivities });
         update((next) => {
           const target = next.customers.find((c) => c.id === contact.id);
-          if (target) {
-            target.activities = updatedActivities;
-          }
+          if (target) target.activities = updatedActivities;
         });
+        // Refresh the open modal so activities appear immediately
+        setEditingContact((prev) =>
+          prev && prev.id === contact.id ? { ...prev, activities: updatedActivities } : prev
+        );
         setLoggingActivityFor(null);
         showToast("Activity logged");
       } catch (err) {
@@ -6369,11 +6394,14 @@ function ContactsTab({ kind, db, update, showToast, nextNumber, pendingOpen, cle
         const updatedActivities = (contact.activities || []).map((a, i) =>
           i === index ? { ...a, date: activityData.date, type: activityData.type, notes: activityData.notes } : a
         );
-        await supabaseRESTWithSchemaFallback("PATCH", `customers?id=eq.${contact.id}`, { activities: updatedActivities });
+        await supabaseREST("PATCH", `customers?id=eq.${contact.id}`, { activities: updatedActivities });
         update((next) => {
           const target = next.customers.find((c) => c.id === contact.id);
           if (target) target.activities = updatedActivities;
         });
+        setEditingContact((prev) =>
+          prev && prev.id === contact.id ? { ...prev, activities: updatedActivities } : prev
+        );
         setLoggingActivityFor(null);
         showToast("Activity updated");
       } catch (err) {
@@ -6387,11 +6415,14 @@ function ContactsTab({ kind, db, update, showToast, nextNumber, pendingOpen, cle
     (async () => {
       try {
         const updatedActivities = (contact.activities || []).filter((_, i) => i !== index);
-        await supabaseRESTWithSchemaFallback("PATCH", `customers?id=eq.${contact.id}`, { activities: updatedActivities });
+        await supabaseREST("PATCH", `customers?id=eq.${contact.id}`, { activities: updatedActivities });
         update((next) => {
           const target = next.customers.find((c) => c.id === contact.id);
           if (target) target.activities = updatedActivities;
         });
+        setEditingContact((prev) =>
+          prev && prev.id === contact.id ? { ...prev, activities: updatedActivities } : prev
+        );
         setLoggingActivityFor(null);
         showToast("Activity deleted");
       } catch (err) {
@@ -7465,10 +7496,22 @@ function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOp
       try {
         if (editing) {
           const updatePayload = toSupabaseFormat(payload, "crm_prospects");
-          await supabaseREST("PATCH", `crm_prospects?id=eq.${editing.id}`, updatePayload);
+          const result = await supabaseREST("PATCH", `crm_prospects?id=eq.${editing.id}`, updatePayload);
+          // Supabase returns the full updated row (Prefer: return=representation).
+          // Using it here guarantees JSONB fields like `activities` and `attachments`
+          // that aren't in the save payload are never lost from local state.
+          const savedRow = Array.isArray(result) && result[0] ? result[0] : null;
           update((next) => {
             const target = next.crm.find((p) => p.id === editing.id);
-            Object.assign(target, payload);
+            if (target) {
+              if (savedRow) {
+                Object.assign(target, fromSupabaseFormat(savedRow, "crm_prospects"));
+              } else {
+                // Fallback: merge payload but explicitly keep existing activities
+                const existing = { activities: target.activities, attachments: target.attachments };
+                Object.assign(target, payload, existing);
+              }
+            }
           });
         } else {
           // DON'T generate client-side id — let Supabase auto-generate UUID
