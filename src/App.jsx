@@ -1068,8 +1068,6 @@ export default function App() {
   
   // Supabase REST API state
   const [supabaseConnected, setSupabaseConnected] = useState(false);
-  const [savingProspect, setSavingProspect] = useState(false);
-  const [loggingActivity, setLoggingActivity] = useState(false);
   const pollingIntervalRef = useRef(null);
 
   const showToast = useCallback((msg) => {
@@ -7337,12 +7335,6 @@ function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOp
   }
 
   function logActivity(prospect, activity) {
-    if (loggingActivity) {
-      console.warn("Activity save already in progress, ignoring duplicate request");
-      return;
-    }
-
-    setLoggingActivity(true);
     // Save activity to Supabase first, then update local state
     (async () => {
       try {
@@ -7383,8 +7375,6 @@ function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOp
       } catch (err) {
         console.error("Log activity error:", err);
         showToast(`Error logging activity: ${err.message}`);
-      } finally {
-        setLoggingActivity(false);
       }
     })();
   }
@@ -7442,12 +7432,6 @@ function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOp
   }
 
   function saveProspect(payload, editing) {
-    if (savingProspect) {
-      console.warn("Save already in progress, ignoring duplicate request");
-      return;
-    }
-
-    setSavingProspect(true);
     (async () => {
       try {
         if (editing) {
@@ -7460,7 +7444,9 @@ function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOp
         } else {
           // DON'T generate client-side id — let Supabase auto-generate UUID
           const createPayload = toSupabaseFormat(payload, "crm_prospects");
+          console.log("📤 Creating prospect:", payload.name);
           const result = await supabaseREST("POST", "crm_prospects", createPayload);
+          console.log("✅ Prospect created with ID:", result[0]?.id);
           
           // Supabase returns the generated record with auto-gen id
           if (result && result[0]) {
@@ -7475,8 +7461,6 @@ function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOp
       } catch (err) {
         showToast(`Error saving prospect: ${err.message}`);
         console.error("Save prospect error:", err);
-      } finally {
-        setSavingProspect(false);
       }
     })();
   }
