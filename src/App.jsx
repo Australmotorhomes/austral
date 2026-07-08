@@ -3770,7 +3770,14 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
             status: "Draft",
             party: supplier.name,
             customer: poGenerationQuote.party,
-            model: poGenerationQuote.model || "",
+            // Reference field: list price book item names for this supplier
+            model: supplier.lines
+              .map(line => {
+                const item = db.items.find(i => i.id === line.itemId);
+                return item?.name || "Unknown item";
+              })
+              .filter((name, idx, arr) => arr.indexOf(name) === idx)  // Remove duplicates
+              .join(", "),
             date: todayISO(),
             contact: "",
             notes: `Generated from quote ${poGenerationQuote.number}`,
