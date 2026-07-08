@@ -7334,7 +7334,15 @@ function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOp
     });
   }
 
+  const [loggingActivity, setLoggingActivity] = useState(false);
+
   function logActivity(prospect, activity) {
+    if (loggingActivity) {
+      console.warn("Activity save already in progress, ignoring duplicate request");
+      return;
+    }
+
+    setLoggingActivity(true);
     // Save activity to Supabase first, then update local state
     (async () => {
       try {
@@ -7355,7 +7363,9 @@ function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOp
         };
         
         const updatePayload = toSupabaseFormat(updatedProspect, "crm_prospects");
-        await supabaseREST("PATCH", `crm_prospects?id=eq.${prospect.id}`, updatePayload);
+        console.log("📤 Logging activity for prospect:", prospect.id, "Activity:", newActivity);
+        const result = await supabaseREST("PATCH", `crm_prospects?id=eq.${prospect.id}`, updatePayload);
+        console.log("✅ Activity logged to Supabase:", result);
         
         // Then update local state
         update((next) => {
@@ -7371,8 +7381,10 @@ function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOp
         setLoggingActivityFor(null);
         showToast("Activity logged");
       } catch (err) {
-        showToast(`Error logging activity: ${err.message}`);
         console.error("Log activity error:", err);
+        showToast(`Error logging activity: ${err.message}`);
+      } finally {
+        setLoggingActivity(false);
       }
     })();
   }
@@ -7429,7 +7441,15 @@ function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOp
     })();
   }
 
+  const [savingProspect, setSavingProspect] = useState(false);
+
   function saveProspect(payload, editing) {
+    if (savingProspect) {
+      console.warn("Save already in progress, ignoring duplicate request");
+      return;
+    }
+
+    setSavingProspect(true);
     (async () => {
       try {
         if (editing) {
@@ -7457,6 +7477,8 @@ function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOp
       } catch (err) {
         showToast(`Error saving prospect: ${err.message}`);
         console.error("Save prospect error:", err);
+      } finally {
+        setSavingProspect(false);
       }
     })();
   }
