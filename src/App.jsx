@@ -1109,7 +1109,13 @@ export default function App() {
         data.suppliers = (data.suppliers || []).map((s) => fromSupabaseFormat(s, "suppliers"));
         
         // Convert CRM prospects from Supabase format
-        data.crm = (data.crm || []).map((p) => fromSupabaseFormat(p, "crm_prospects"));
+        data.crm = (data.crm || []).map((p) => {
+          const converted = fromSupabaseFormat(p, "crm_prospects");
+          if (p.activities && p.activities.length > 0) {
+            console.log("📋 Prospect activities from Supabase:", p.name, "Activities:", JSON.stringify(p.activities, null, 2));
+          }
+          return converted;
+        });
         
         // Convert quotes and purchase orders from Supabase format
         data.quotes = (data.quotes || []).map((q) => fromSupabaseFormat(q, "quotes"));
