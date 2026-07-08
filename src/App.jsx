@@ -7346,27 +7346,23 @@ function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOp
           createdAt: todayISO(),
         };
         
-        // Update prospect in Supabase with new activity
-        const updatedProspect = {
-          ...prospect,
-          activities: [...(prospect.activities || []), newActivity],
-          lastContactDate: activity.date,
-          updatedAt: todayISO(),
-        };
-        
-        const updatePayload = toSupabaseFormat(updatedProspect, "crm_prospects");
+        // Update prospect with new activity
+        const updatedActivities = [...(prospect.activities || []), newActivity];
         console.log("📤 Logging activity for prospect:", prospect.id, "Activity:", newActivity);
-        const result = await supabaseREST("PATCH", `crm_prospects?id=eq.${prospect.id}`, updatePayload);
+        
+        // Send activities and lastContactDate directly (no toSupabaseFormat)
+        const result = await supabaseREST("PATCH", `crm_prospects?id=eq.${prospect.id}`, {
+          activities: updatedActivities,
+          last_contact_date: activity.date,
+        });
         console.log("✅ Activity logged to Supabase:", result);
         
         // Then update local state
         update((next) => {
           const target = next.crm.find((p) => p.id === prospect.id);
           if (target) {
-            target.activities = target.activities || [];
-            target.activities.push(newActivity);
+            target.activities = updatedActivities;
             target.lastContactDate = activity.date;
-            target.updatedAt = todayISO();
           }
         });
         
@@ -7386,14 +7382,15 @@ function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOp
           i === index ? { ...a, date: activityData.date, type: activityData.type, notes: activityData.notes } : a
         );
 
-        const updatePayload = toSupabaseFormat({ activities: updatedActivities, updatedAt: todayISO() }, "crm_prospects");
-        await supabaseREST("PATCH", `crm_prospects?id=eq.${prospect.id}`, updatePayload);
+        // Send activities directly (no toSupabaseFormat)
+        await supabaseREST("PATCH", `crm_prospects?id=eq.${prospect.id}`, {
+          activities: updatedActivities
+        });
 
         update((next) => {
           const target = next.crm.find((p) => p.id === prospect.id);
           if (target) {
             target.activities = updatedActivities;
-            target.updatedAt = todayISO();
           }
         });
 
@@ -7411,8 +7408,10 @@ function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOp
       try {
         const updatedActivities = (prospect.activities || []).filter((_, i) => i !== index);
 
-        const updatePayload = toSupabaseFormat({ activities: updatedActivities, updatedAt: todayISO() }, "crm_prospects");
-        await supabaseREST("PATCH", `crm_prospects?id=eq.${prospect.id}`, updatePayload);
+        // Send activities directly (no toSupabaseFormat)
+        await supabaseREST("PATCH", `crm_prospects?id=eq.${prospect.id}`, {
+          activities: updatedActivities
+        });
 
         update((next) => {
           const target = next.crm.find((p) => p.id === prospect.id);
