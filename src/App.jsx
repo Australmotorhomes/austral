@@ -7375,6 +7375,13 @@ function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOp
           }
         });
         
+        // CRITICAL: Also update editingProspect so the modal refreshes with new activities
+        setEditingProspect((prev) => 
+          prev && prev.id === prospect.id 
+            ? { ...prev, activities: updatedActivities, lastContactDate: activity.date }
+            : prev
+        );
+        
         setLoggingActivityFor(null);
         showToast("Activity logged");
       } catch (err) {
@@ -7402,6 +7409,13 @@ function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOp
             target.activities = updatedActivities;
           }
         });
+        
+        // Update editingProspect so modal refreshes
+        setEditingProspect((prev) =>
+          prev && prev.id === prospect.id
+            ? { ...prev, activities: updatedActivities }
+            : prev
+        );
 
         setLoggingActivityFor(null);
         showToast("Activity updated");
@@ -7429,6 +7443,13 @@ function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOp
             target.updatedAt = todayISO();
           }
         });
+        
+        // Update editingProspect so modal refreshes
+        setEditingProspect((prev) =>
+          prev && prev.id === prospect.id
+            ? { ...prev, activities: updatedActivities }
+            : prev
+        );
 
         setLoggingActivityFor(null);
         showToast("Activity deleted");
