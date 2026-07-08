@@ -7878,6 +7878,27 @@ function CRMModal({ editing, db, onCancel, onSave, openRecord, onLogActivity, on
       ? (db.quotes || []).filter((q) => q.party && q.party.trim().toLowerCase() === editing.name.trim().toLowerCase())
       : [];
 
+  // Build dropdown options dynamically from all prospects in the database,
+  // merged with a set of known defaults. This ensures any value already stored
+  // in Supabase (even if it wasn't in the original hardcoded list) always
+  // appears as a selectable option and is never silently swallowed.
+  const DEFAULT_PRODUCTS = ["Campo", "Scout", "Savanna", "Custom build"];
+  const DEFAULT_SOURCES  = ["Direct", "Carsales", "Facebook", "Website", "Referral", "Trade Show", "Other"];
+
+  const allProspects = (db && db.crm) || [];
+
+  const productOptions = Array.from(new Set([
+    ...DEFAULT_PRODUCTS,
+    ...allProspects.map((p) => p.enquiryProduct).filter(Boolean),
+    ...(editing?.enquiryProduct ? [editing.enquiryProduct] : []),
+  ])).sort();
+
+  const sourceOptions = Array.from(new Set([
+    ...DEFAULT_SOURCES,
+    ...allProspects.map((p) => p.source).filter(Boolean),
+    ...(editing?.source ? [editing.source] : []),
+  ])).sort();
+
   function handleSave() {
     const trimmedName = name.trim();
     if (!trimmedName) {
@@ -7976,21 +7997,13 @@ function CRMModal({ editing, db, onCancel, onSave, openRecord, onLogActivity, on
         <Field label="Source">
           <select style={inputStyle} value={source} onChange={(e) => setSource(e.target.value)}>
             <option value="">—</option>
-            <option value="Direct">Direct</option>
-            <option value="Carsales">Carsales</option>
-            <option value="Facebook">Facebook</option>
-            <option value="Website">Website</option>
-            <option value="Referral">Referral</option>
-            <option value="Other">Other</option>
+            {sourceOptions.map((s) => <option key={s} value={s}>{s}</option>)}
           </select>
         </Field>
         <Field label="Enquired about">
           <select style={inputStyle} value={enquiryProduct} onChange={(e) => setEnquiryProduct(e.target.value)}>
             <option value="">—</option>
-            <option value="Campo">Campo</option>
-            <option value="Scout">Scout</option>
-            <option value="Savanna">Savanna</option>
-            <option value="Custom build">Custom build</option>
+            {productOptions.map((p) => <option key={p} value={p}>{p}</option>)}
           </select>
         </Field>
       </div>
