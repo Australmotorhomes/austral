@@ -3752,11 +3752,13 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
 
   function createPOsForSuppliers(supplierMap) {
     // Create POs in Supabase first, then update local state
+    console.log("🔍 createPOsForSuppliers called with suppliers:", Object.keys(supplierMap));
     (async () => {
       try {
         const createdPOs = [];
         // Create each PO in Supabase — let Postgres generate the real UUID
         for (const supplier of Object.values(supplierMap)) {
+          console.log("📤 Creating PO for supplier:", supplier.name);
           const poNumber = nextNumber("po", db);
           const poTotal = supplier.lines.reduce((sum, line) => {
             const costInAud = line.currency === "USD" ? line.price * db.fx.usdAudRate : line.price;
@@ -3788,13 +3790,25 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
           const createPayload = toSupabaseFormat(newPOPayload, "purchase_orders");
           const result = await supabaseRESTWithSchemaFallback("POST", "purchase_orders", createPayload);
           const savedRow = Array.isArray(result) ? result[0] : result;
-          createdPOs.push({ ...newPOPayload, ...fromSupabaseFormat(savedRow, "purchase_orders"), id: savedRow.id });
+          const finalPO = { ...newPOPayload, ...fromSupabaseFormat(savedRow, "purchase_orders"), id: savedRow.id };
+          console.log("✅ Created PO:", finalPO.number, "ID:", finalPO.id);
+          createdPOs.push(finalPO);
         }
         
+        console.log("📋 Total POs created:", createdPOs.length, createdPOs.map(p => p.number));
         // Then update local state using the SAME ids Supabase generated,
         // so the local record actually matches the database row.
         update((next) => {
-          createdPOs.forEach((po) => next.pos.push(po));
+          createdPOs.forEach((po) => {
+            // Prevent duplicates: check if this PO already exists by id
+            const exists = next.pos.some(p => p.id === po.id);
+            if (!exists) {
+              console.log("📌 Adding PO to local state:", po.number);
+              next.pos.push(po);
+            } else {
+              console.log("⚠️ PO already exists in state:", po.number);
+            }
+          });
         });
         
         setPoGenerationQuote(null);
