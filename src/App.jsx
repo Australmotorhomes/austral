@@ -3828,6 +3828,12 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
   }
 
   function setStatus(doc, status) {
+    // Validate ETA required for quotes when changing to Accepted
+    if (isQuote && status === "Accepted" && !doc.eta) {
+      showToast("ETA is required to accept a quote");
+      return;
+    }
+    
     // Save to Supabase first, then update local state
     (async () => {
       try {
@@ -4528,7 +4534,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
         ...(paymentMilestones.length > 0 && { paymentMilestones }),
         ...(!isQuote && { customsClearance }),  // Always include for POs (allows setting to 0)
         ...(!isQuote && customer && { customer }),
-        ...(eta && { eta }),  // ETA for both quotes and POs
+        eta,  // Always include ETA for both quotes and POs (persist to Supabase)
       },
       editing
     );
