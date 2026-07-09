@@ -5162,9 +5162,9 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
             console.log("  members found:", members.length, members.map(m => `PO#${m.number}`));
             console.log("  allPOs:", allPOs.length, allPOs.map(p => `PO#${p.number}`));
             const groupTotal = allPOs.reduce((s, p) => s + (p.total || 0), 0);
-            // Format: PO5001&5002&5003c (c = consolidated indicator)
-            const memberNumbers = members.map(m => m.number).join('&');
-            const consolidatedPONumber = `PO${editing.number}${memberNumbers ? '&' + memberNumbers : ''}c`;
+            // Format: PO5005/5006 (forward slash separator, no suffix)
+            const memberNumbers = members.map(m => m.number).join('/');
+            const consolidatedPONumber = memberNumbers ? `PO${editing.number}/${memberNumbers}` : `PO${editing.number}`;
             // Note: isMobile already declared at component level, no need to call hook here
             
             // PDF generation function
@@ -5360,35 +5360,41 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                       <div style={{ overflow: "auto" }}>
                         <h5 style={{ fontSize: 12, fontWeight: 600, color: "#6b5240", marginBottom: 15 }}>Purchase Order Details</h5>
                         {allPOs && allPOs.length > 0 ? (
-                          allPOs.map((po, idx) => (
-                            <div key={po.id} style={{ marginBottom: 20, paddingBottom: 16, borderBottom: idx < allPOs.length - 1 ? "2px solid #d4a574" : "none" }}>
-                              <div style={{ fontSize: 12, fontWeight: 700, color: "#4a3527", marginBottom: 10 }}>
-                                PO #{po.number} — {po.customer || "No customer"}
-                              </div>
-                              {po.lines && po.lines.length > 0 ? (
-                                <div style={{ fontSize: 11, color: "#6b5240" }}>
-                                  {po.lines.map((line, li) => (
-                                    <div key={li} style={{ marginBottom: 8, paddingBottom: 8, borderBottom: li < po.lines.length - 1 ? "1px solid #e3d8c6" : "none" }}>
-                                      <div style={{ fontWeight: 600, color: "#4a3527" }}>{line.description || "Item"}</div>
-                                      {line.quantity && <div style={{ color: "#8a7a66", fontSize: 10 }}>Qty: {line.quantity}</div>}
-                                      {line.unitPrice && <div style={{ color: "#8a7a66", fontSize: 10 }}>Unit: ${parseFloat(line.unitPrice).toLocaleString()}</div>}
-                                      {line.amount && <div style={{ fontWeight: 600, color: "#b5552b", fontSize: 10 }}>Amount: ${parseFloat(line.amount).toLocaleString()}</div>}
+                          (() => {
+                            console.log("🔄 RENDERING allPOs.map - length:", allPOs.length, "POs:", allPOs.map(p => `#${p.number}`));
+                            return allPOs.map((po, idx) => {
+                              console.log(`  Rendering PO ${idx + 1}/${allPOs.length}: #${po.number}`);
+                              return (
+                                <div key={po.id} style={{ marginBottom: 20, paddingBottom: 16, borderBottom: idx < allPOs.length - 1 ? "2px solid #d4a574" : "none" }}>
+                                  <div style={{ fontSize: 12, fontWeight: 700, color: "#4a3527", marginBottom: 10 }}>
+                                    PO #{po.number} — {po.customer || "No customer"}
+                                  </div>
+                                  {po.lines && po.lines.length > 0 ? (
+                                    <div style={{ fontSize: 11, color: "#6b5240" }}>
+                                      {po.lines.map((line, li) => (
+                                        <div key={li} style={{ marginBottom: 8, paddingBottom: 8, borderBottom: li < po.lines.length - 1 ? "1px solid #e3d8c6" : "none" }}>
+                                          <div style={{ fontWeight: 600, color: "#4a3527" }}>{line.description || "Item"}</div>
+                                          {line.quantity && <div style={{ color: "#8a7a66", fontSize: 10 }}>Qty: {line.quantity}</div>}
+                                          {line.unitPrice && <div style={{ color: "#8a7a66", fontSize: 10 }}>Unit: ${parseFloat(line.unitPrice).toLocaleString()}</div>}
+                                          {line.amount && <div style={{ fontWeight: 600, color: "#b5552b", fontSize: 10 }}>Amount: ${parseFloat(line.amount).toLocaleString()}</div>}
+                                        </div>
+                                      ))}
                                     </div>
-                                  ))}
+                                  ) : (
+                                    <div style={{ fontSize: 10, color: "#ccc" }}>No line items</div>
+                                  )}
+                                  <div style={{ marginTop: 10, paddingTop: 8, borderTop: "1px solid #d4a574", fontWeight: 700, color: "#4a3527", fontSize: 11 }}>
+                                    PO #{po.number} Subtotal: ${(po.subtotal || 0).toLocaleString()}
+                                  </div>
+                                  {po.total && po.total !== po.subtotal && (
+                                    <div style={{ fontWeight: 700, color: "#b5552b", fontSize: 11 }}>
+                                      PO #{po.number} Total: ${(po.total).toLocaleString()}
+                                    </div>
+                                  )}
                                 </div>
-                              ) : (
-                                <div style={{ fontSize: 10, color: "#ccc" }}>No line items</div>
-                              )}
-                              <div style={{ marginTop: 10, paddingTop: 8, borderTop: "1px solid #d4a574", fontWeight: 700, color: "#4a3527", fontSize: 11 }}>
-                                PO #{po.number} Subtotal: ${(po.subtotal || 0).toLocaleString()}
-                              </div>
-                              {po.total && po.total !== po.subtotal && (
-                                <div style={{ fontWeight: 700, color: "#b5552b", fontSize: 11 }}>
-                                  PO #{po.number} Total: ${(po.total).toLocaleString()}
-                                </div>
-                              )}
-                            </div>
-                          ))
+                              );
+                            });
+                          })()
                         ) : (
                           <div style={{ fontSize: 11, color: "#ccc" }}>No purchase orders to display</div>
                         )}
