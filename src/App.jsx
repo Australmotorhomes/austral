@@ -5156,23 +5156,17 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
           {!isNew && editing?.consolidatedMemberIds?.length > 0 && (() => {
             const members = (db.pos || []).filter(p => (editing.consolidatedMemberIds || []).includes(p.id));
             const allPOs = [editing, ...members];
-            console.log("🔍 CONSOLIDATED PO DEBUG:");
-            console.log("  consolidatedMemberIds:", editing.consolidatedMemberIds);
-            console.log("  members found:", members.length, members.map(m => `PO#${m.number}`));
-            console.log("  allPOs:", allPOs.length, allPOs.map(p => `PO#${p.number}`));
             const groupTotal = allPOs.reduce((s, p) => s + (p.total || 0), 0);
-            // Format: PO5005/5006 (forward slash separator, no suffix)
-            const memberNumbers = members.map(m => m.number).join('/');
-            const consolidatedPONumber = memberNumbers ? `PO${editing.number}/${memberNumbers}` : `PO${editing.number}`;
-            // Note: isMobile already declared at component level, no need to call hook here
-            
-            // PDF generation function
+
+            // Strip any leading "PO-" prefix so we can format as PO5006/5007, not POPO-5006/PO-5007
+            const stripPO = (n) => String(n).replace(/^PO-?/i, "");
+            const consolidatedPONumber = `PO${stripPO(editing.number)}/${members.map(m => stripPO(m.number)).join("/")}`;
+
             const generateConsolidatedPDF = () => {
               const html = `
                 <div style="font-family: Arial, sans-serif; padding: 20px; color: #333;">
                   <h2 style="text-align: center; margin-bottom: 30px;">Consolidated Purchase Order</h2>
-                  <h3 style="font-size: 18px; margin-bottom: 20px;">PO #${consolidatedPONumber}</h3>
-                  
+                  <h3 style="font-size: 18px; margin-bottom: 20px;">${consolidatedPONumber}</h3>
                   <table style="width: 100%; border-collapse: collapse; margin-bottom: 30px;">
                     <thead>
                       <tr style="background-color: #f5f5f5; border-bottom: 2px solid #333;">
@@ -5183,282 +5177,187 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                       </tr>
                     </thead>
                     <tbody>
-                      ${allPOs.map(po => {
-                        const productDesc = (po.lines || []).map(l => l.description).join(', ') || 'N/A';
-                        return `
-                          <tr>
-                            <td style="padding: 10px; border: 1px solid #ddd;">PO-${po.number}</td>
-                            <td style="padding: 10px; border: 1px solid #ddd;">${po.customer || '—'}</td>
-                            <td style="padding: 10px; border: 1px solid #ddd;">${productDesc}</td>
-                            <td style="padding: 10px; border: 1px solid #ddd; text-align: right;">$${(po.total || 0).toLocaleString()}</td>
-                          </tr>
-                        `;
-                      }).join('')}
+                      ${allPOs.map(po => `
+                        <tr>
+                          <td style="padding: 10px; border: 1px solid #ddd;">PO-${stripPO(po.number)}</td>
+                          <td style="padding: 10px; border: 1px solid #ddd;">${po.customer || "—"}</td>
+                          <td style="padding: 10px; border: 1px solid #ddd;">${(po.lines || []).map(l => l.desc || l.description || "").filter(Boolean).join(", ") || "N/A"}</td>
+                          <td style="padding: 10px; border: 1px solid #ddd; text-align: right;">$${(po.total || 0).toLocaleString()}</td>
+                        </tr>`).join("")}
                       <tr style="background-color: #f5f5f5; font-weight: bold; border-top: 2px solid #333;">
                         <td colspan="3" style="padding: 10px; border: 1px solid #ddd; text-align: right;">TOTAL:</td>
                         <td style="padding: 10px; border: 1px solid #ddd; text-align: right;">$${groupTotal.toLocaleString()}</td>
                       </tr>
                     </tbody>
                   </table>
-                </div>
-              `;
-              
-              const element = document.createElement('div');
-              element.innerHTML = html;
-              const opt = {
+                </div>`;
+              const el = document.createElement("div");
+              el.innerHTML = html;
+              html2pdf().set({
                 margin: 10,
-                filename: `ConsolidatedPO-${editing.number}.pdf`,
-                image: { type: 'jpeg', quality: 0.98 },
+                filename: `ConsolidatedPO-${stripPO(editing.number)}.pdf`,
+                image: { type: "jpeg", quality: 0.98 },
                 html2canvas: { scale: 2 },
-                jsPDF: { orientation: 'portrait', unit: 'mm', format: 'a4' }
-              };
-              html2pdf().set(opt).from(element).save();
+                jsPDF: { orientation: "portrait", unit: "mm", format: "a4" },
+              }).from(el).save();
             };
 
-            if (!showDetailedConsolidatedView) {
-              // SIMPLE VIEW
-              return (
-                <Panel>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 15 }}>
-                    <h4 style={{ fontSize: 13, fontWeight: 700, color: "#4a3527", margin: 0 }}>
-                      {consolidatedPONumber} — {members.length + 1} POs
-                    </h4>
-                    <Btn variant="ghost" size="sm" onClick={() => setShowDetailedConsolidatedView(true)}>
-                      View Detailed
-                    </Btn>
-                  </div>
-                  {allPOs.map((po, i) => (
-                    <div key={po.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 0", borderBottom: "1px solid #f0e8d9", fontSize: 12 }}>
-                      <div>
-                        <strong>PO #{po.number}</strong>
-                        {po.customer && <span style={{ color: "#8a7a66" }}> — {po.customer}</span>}
-                        {po.quoteNumber && <span style={{ color: "#8a7a66" }}> · Quote {po.quoteNumber}</span>}
+            // One tab per PO, plus a Summary tab
+            const tabList = [
+              { id: "summary", label: "Summary" },
+              ...allPOs.map(po => ({ id: po.id, label: `PO-${stripPO(po.number)}` })),
+            ];
+            const activeTab = consolidatedTab && (consolidatedTab === "summary" || allPOs.find(p => p.id === consolidatedTab))
+              ? consolidatedTab
+              : allPOs[0]?.id || "summary";
+
+            return (
+              <Panel>
+                {/* Header */}
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
+                  <h4 style={{ fontSize: 13, fontWeight: 700, color: "#4a3527", margin: 0 }}>
+                    {consolidatedPONumber} — {allPOs.length} POs
+                  </h4>
+                  <Btn variant="secondary" size="sm" onClick={generateConsolidatedPDF}>📥 Download PDF</Btn>
+                </div>
+
+                {/* Tab bar — works on mobile and desktop */}
+                <div style={{ display: "flex", gap: 4, marginBottom: 14, borderBottom: "2px solid #e3d8c6", flexWrap: "wrap" }}>
+                  {tabList.map(tab => (
+                    <button
+                      key={tab.id}
+                      onClick={() => setConsolidatedTab(tab.id)}
+                      style={{
+                        padding: isMobile ? "7px 10px" : "8px 14px",
+                        fontSize: isMobile ? 11 : 12,
+                        fontWeight: activeTab === tab.id ? 700 : 500,
+                        background: activeTab === tab.id ? "#b5552b" : "transparent",
+                        color: activeTab === tab.id ? "#fff" : "#6b5240",
+                        border: "none",
+                        borderRadius: "4px 4px 0 0",
+                        cursor: "pointer",
+                        marginBottom: -2,
+                        borderBottom: activeTab === tab.id ? "2px solid #b5552b" : "2px solid transparent",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Summary tab */}
+                {activeTab === "summary" && (
+                  <div>
+                    {allPOs.map(po => (
+                      <div key={po.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 0", borderBottom: "1px solid #f0e8d9", fontSize: 12 }}>
+                        <div>
+                          <strong>PO-{stripPO(po.number)}</strong>
+                          {po.customer && <span style={{ color: "#8a7a66" }}> — {po.customer}</span>}
+                        </div>
+                        <div style={{ textAlign: "right" }}>
+                          <div style={{ fontWeight: 600 }}>${(po.total || 0).toLocaleString()}</div>
+                          {po.customsClearance > 0 && <div style={{ fontSize: 11, color: "#8a7a66" }}>Customs: ${po.customsClearance.toLocaleString()}</div>}
+                        </div>
                       </div>
-                      <div style={{ textAlign: "right" }}>
-                        <div style={{ fontWeight: 600 }}>${(po.total || 0).toLocaleString()}</div>
-                        {po.customsClearance > 0 && (
-                          <div style={{ fontSize: 11, color: "#8a7a66" }}>Customs: ${po.customsClearance.toLocaleString()}</div>
+                    ))}
+
+                    <div style={{ margin: "14px 0", padding: 12, background: "#f9f5f0", borderRadius: 4 }}>
+                      <label style={{ fontSize: 12, fontWeight: 600, color: "#6b5240", display: "block", marginBottom: 8 }}>
+                        Consolidated Customs / Shipping Charges
+                      </label>
+                      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                        <span style={{ fontSize: 11, color: "#8a7a66" }}>$</span>
+                        <input
+                          type="number"
+                          value={consolidatedCustoms}
+                          onChange={(e) => setConsolidatedCustoms(parseFloat(e.target.value) || 0)}
+                          style={{ flex: 1, padding: "6px 8px", fontSize: 12, border: "1px solid #d4a574", borderRadius: 3 }}
+                        />
+                      </div>
+                      {customsClearance > 0 && (
+                        <div style={{ marginTop: 8 }}>
+                          <Btn variant="secondary" size="sm" onClick={() => onSplitCustoms && onSplitCustoms(editing, customsClearance)}>
+                            Split ${customsClearance.toLocaleString()} freight 50/50
+                          </Btn>
+                          <p style={{ fontSize: 11, color: "#8a7a66", margin: "4px 0 0" }}>
+                            {allPOs.map(po => `PO-${stripPO(po.number)}: $${Math.round((customsClearance / allPOs.length) * 100) / 100}`).join(" · ")}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+
+                    {paymentMilestones.filter(m => m.due || m.amount).length > 0 && (
+                      <div style={{ marginBottom: 14 }}>
+                        <h5 style={{ fontSize: 12, fontWeight: 600, color: "#6b5240", marginBottom: 10 }}>Payment Schedule</h5>
+                        {paymentMilestones.filter(m => m.due || m.amount).map((m, i) => (
+                          <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: "1px solid #f0e8d9", fontSize: 11 }}>
+                            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                              {m.paid && <span style={{ background: "#d4edda", color: "#2d7a4f", borderRadius: 3, padding: "1px 6px", fontWeight: 600, fontSize: 10 }}>PAID</span>}
+                              <span style={{ color: "#6b5240" }}>{m.due ? new Date(m.due).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" }) : "Date TBC"}</span>
+                            </div>
+                            <span style={{ fontWeight: 600, color: m.paid ? "#2d7a4f" : "#b5552b" }}>
+                              {m.amount ? `$${parseFloat(m.amount).toLocaleString()}` : "Amount TBC"}
+                            </span>
+                          </div>
+                        ))}
+                        {paymentMilestones.filter(m => m.due || m.amount).length > 1 && (
+                          <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 0 2px", borderTop: "2px solid #b5552b", marginTop: 4 }}>
+                            <span style={{ fontWeight: 600, color: "#4a3527", fontSize: 12 }}>Total</span>
+                            <span style={{ fontWeight: 700, color: "#b5552b", fontSize: 12 }}>
+                              ${paymentMilestones.filter(m => m.amount).reduce((s, m) => s + (parseFloat(m.amount) || 0), 0).toLocaleString()}
+                            </span>
+                          </div>
                         )}
                       </div>
+                    )}
+
+                    <div style={{ padding: 12, background: "#b5552b", color: "#fff", borderRadius: 4, textAlign: "center" }}>
+                      <div style={{ fontSize: 11, fontWeight: 600, marginBottom: 4 }}>CONSOLIDATED TOTAL</div>
+                      <div style={{ fontSize: 16, fontWeight: 700 }}>${groupTotal.toLocaleString()}</div>
                     </div>
-                  ))}
-                  {customsClearance > 0 && (
-                    <div style={{ marginTop: 10 }}>
-                      <Btn variant="secondary" size="sm" onClick={() => onSplitCustoms && onSplitCustoms(editing, customsClearance)}>
-                        Split ${customsClearance.toLocaleString()} freight forward 50/50
-                      </Btn>
-                      <p style={{ fontSize: 11, color: "#8a7a66", margin: "4px 0 0" }}>
-                        50/50 split: {[editing, ...members].map(po => {
-                          const splitAmount = Math.round((customsClearance / allPOs.length) * 100) / 100;
-                          return `${po.number}: $${splitAmount.toLocaleString()}`;
-                        }).join(", ")}
-                      </p>
-                    </div>
-                  )}
-                </Panel>
-              );
-            } else {
-              // DETAILED VIEW with mobile-responsive tabs
-              return (
-                <Panel>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 15 }}>
-                    <h4 style={{ fontSize: 13, fontWeight: 700, color: "#4a3527", margin: 0 }}>
-                      {consolidatedPONumber} — {members.length + 1} POs
-                    </h4>
-                    <Btn variant="ghost" size="sm" onClick={() => setShowDetailedConsolidatedView(false)}>
-                      Back to Simple
-                    </Btn>
                   </div>
-                  
-                  {/* Mobile Tabs */}
-                  {isMobile && (
-                    <div style={{ display: "flex", gap: 8, marginBottom: 15, borderBottom: "2px solid #e3d8c6" }}>
-                      <button
-                        onClick={() => setConsolidatedTab("details")}
-                        style={{
-                          padding: "8px 12px",
-                          fontSize: 12,
-                          fontWeight: consolidatedTab === "details" ? 700 : 500,
-                          backgroundColor: consolidatedTab === "details" ? "#d4a574" : "transparent",
-                          color: consolidatedTab === "details" ? "#fff" : "#6b5240",
-                          border: "none",
-                          borderRadius: 3,
-                          cursor: "pointer"
-                        }}
-                      >
-                        Details
-                      </button>
-                      <button
-                        onClick={() => setConsolidatedTab("orders")}
-                        style={{
-                          padding: "8px 12px",
-                          fontSize: 12,
-                          fontWeight: consolidatedTab === "orders" ? 700 : 500,
-                          backgroundColor: consolidatedTab === "orders" ? "#d4a574" : "transparent",
-                          color: consolidatedTab === "orders" ? "#fff" : "#6b5240",
-                          border: "none",
-                          borderRadius: 3,
-                          cursor: "pointer"
-                        }}
-                      >
-                        PO Details
-                      </button>
+                )}
+
+                {/* Per-PO tabs */}
+                {allPOs.map(po => activeTab === po.id && (
+                  <div key={po.id}>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: "#4a3527", marginBottom: 12 }}>
+                      PO-{stripPO(po.number)}{po.customer ? ` — ${po.customer}` : ""}
                     </div>
-                  )}
-                  
-                  <div style={{ display: isMobile ? "block" : "grid", gridTemplateColumns: isMobile ? undefined : "1fr 1fr", gap: isMobile ? 0 : 20 }}>
-                    {/* LEFT SIDE / DETAILS TAB: Shipping/Customs + Payment Schedule */}
-                    {(!isMobile || consolidatedTab === "details") && (
+                    {po.lines && po.lines.length > 0 ? (
                       <div>
-                        {/* Consolidated Customs */}
-                        <div style={{ marginBottom: 20, padding: 12, backgroundColor: "#f9f5f0", borderRadius: 4 }}>
-                          <label style={{ fontSize: 12, fontWeight: 600, color: "#6b5240", display: "block", marginBottom: 8 }}>
-                            Consolidated Customs/Shipping Charges
-                          </label>
-                          <div style={{ display: "flex", gap: 8 }}>
-                            <span style={{ fontSize: 11, color: "#8a7a66" }}>$</span>
-                            <input
-                              type="number"
-                              value={consolidatedCustoms}
-                              onChange={(e) => setConsolidatedCustoms(parseFloat(e.target.value) || 0)}
-                              style={{ flex: 1, padding: "6px 8px", fontSize: 12, border: "1px solid #d4a574", borderRadius: 3 }}
-                            />
-                          </div>
-                        </div>
-                        
-                        {/* Payment Schedule */}
-                        {paymentMilestones.filter(m => m.due || m.amount).length > 0 && (
-                          <div>
-                            <h5 style={{ fontSize: 12, fontWeight: 600, color: "#6b5240", marginBottom: 10 }}>Payment Schedule</h5>
-                            {paymentMilestones.filter(m => m.due || m.amount).map((m, i) => (
-                              <div key={i} style={{
-                                display: "flex", justifyContent: "space-between", alignItems: "center",
-                                padding: "8px 0", borderBottom: "1px solid #f0e8d9", fontSize: 11
-                              }}>
-                                <span style={{ color: "#6b5240" }}>
-                                  {m.due ? new Date(m.due).toLocaleDateString("en-AU") : "Date TBC"}
-                                </span>
-                                <span style={{ fontWeight: 600, color: m.paid ? "#2d7a4f" : "#b5552b" }}>
-                                  {m.amount ? `$${parseFloat(m.amount).toLocaleString()}` : "Amount TBC"}
-                                </span>
-                              </div>
-                            ))}
-                            <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderTop: "2px solid #b5552b", marginTop: 4 }}>
-                              <span style={{ fontWeight: 600, color: "#4a3527" }}>Total:</span>
-                              <span style={{ fontWeight: 700, color: "#b5552b" }}>
-                                ${paymentMilestones.filter(m => m.due || m.amount).reduce((s, m) => s + (parseFloat(m.amount) || 0), 0).toLocaleString()}
+                        {po.lines.map((line, li) => (
+                          <div key={li} style={{ padding: "9px 0", borderBottom: li < po.lines.length - 1 ? "1px solid #f0e8d9" : "none", fontSize: 12 }}>
+                            <div style={{ fontWeight: 600, color: "#4a3527" }}>{line.desc || line.description || "Item"}</div>
+                            <div style={{ display: "flex", gap: 16, marginTop: 3, flexWrap: "wrap" }}>
+                              {(line.qty || line.quantity) && <span style={{ color: "#8a7a66", fontSize: 11 }}>Qty: {line.qty || line.quantity}</span>}
+                              {(line.price || line.unitPrice) && <span style={{ color: "#8a7a66", fontSize: 11 }}>Unit: ${parseFloat(line.price || line.unitPrice || 0).toLocaleString()}</span>}
+                              <span style={{ fontWeight: 600, color: "#b5552b", fontSize: 11 }}>
+                                ${(parseFloat(line.amount) || ((parseFloat(line.qty) || 0) * (parseFloat(line.price) || 0))).toLocaleString()}
                               </span>
                             </div>
                           </div>
+                        ))}
+                        <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 0 2px", borderTop: "2px solid #d4a574", marginTop: 6 }}>
+                          <span style={{ fontWeight: 700, color: "#4a3527", fontSize: 12 }}>Subtotal</span>
+                          <span style={{ fontWeight: 700, color: "#4a3527", fontSize: 12 }}>${(po.subtotal || 0).toLocaleString()}</span>
+                        </div>
+                        {po.total && po.total !== po.subtotal && (
+                          <div style={{ display: "flex", justifyContent: "space-between", paddingTop: 4 }}>
+                            <span style={{ fontWeight: 700, color: "#b5552b", fontSize: 12 }}>Total</span>
+                            <span style={{ fontWeight: 700, color: "#b5552b", fontSize: 12 }}>${po.total.toLocaleString()}</span>
+                          </div>
                         )}
                       </div>
+                    ) : (
+                      <p style={{ fontSize: 12, color: "#8a7a66" }}>No line items on this PO.</p>
                     )}
-                    
-                    {/* RIGHT SIDE / ORDERS TAB: PO Details */}
-                    {(!isMobile || consolidatedTab === "orders") && (
-                      <div style={{ overflow: "visible", maxHeight: "none" }}>
-                        <h5 style={{ fontSize: 12, fontWeight: 600, color: "#6b5240", marginBottom: 15 }}>Purchase Order Details ({allPOs.length} POs)</h5>
-                        {allPOs && allPOs.length > 0 ? (
-                          (() => {
-                            console.log("🔄 RENDERING allPOs.map START - length:", allPOs.length, "POs:", allPOs.map(p => `#${p.number}`));
-                            const result = allPOs.map((po, idx) => {
-                              console.log(`  ✏️  Rendering PO ${idx + 1}/${allPOs.length}: #${po.number}, has ${po.lines?.length || 0} lines`);
-                              return (
-                                <div key={po.id} style={{ marginBottom: 20, paddingBottom: 16, borderBottom: idx < allPOs.length - 1 ? "2px solid #d4a574" : "none" }}>
-                                  <div style={{ fontSize: 12, fontWeight: 700, color: "#4a3527", marginBottom: 10 }}>
-                                    PO #{po.number} — {po.customer || "No customer"}
-                                  </div>
-                                  {po.lines && po.lines.length > 0 ? (
-                                    <div style={{ fontSize: 11, color: "#6b5240" }}>
-                                      {po.lines.map((line, li) => (
-                                        <div key={li} style={{ marginBottom: 8, paddingBottom: 8, borderBottom: li < po.lines.length - 1 ? "1px solid #e3d8c6" : "none" }}>
-                                          <div style={{ fontWeight: 600, color: "#4a3527" }}>{line.description || "Item"}</div>
-                                          {line.quantity && <div style={{ color: "#8a7a66", fontSize: 10 }}>Qty: {line.quantity}</div>}
-                                          {line.unitPrice && <div style={{ color: "#8a7a66", fontSize: 10 }}>Unit: ${parseFloat(line.unitPrice).toLocaleString()}</div>}
-                                          {line.amount && <div style={{ fontWeight: 600, color: "#b5552b", fontSize: 10 }}>Amount: ${parseFloat(line.amount).toLocaleString()}</div>}
-                                        </div>
-                                      ))}
-                                    </div>
-                                  ) : (
-                                    <div style={{ fontSize: 10, color: "#ccc" }}>No line items</div>
-                                  )}
-                                  <div style={{ marginTop: 10, paddingTop: 8, borderTop: "1px solid #d4a574", fontWeight: 700, color: "#4a3527", fontSize: 11 }}>
-                                    PO #{po.number} Subtotal: ${(po.subtotal || 0).toLocaleString()}
-                                  </div>
-                                  {po.total && po.total !== po.subtotal && (
-                                    <div style={{ fontWeight: 700, color: "#b5552b", fontSize: 11 }}>
-                                      PO #{po.number} Total: ${(po.total).toLocaleString()}
-                                    </div>
-                                  )}
-                                </div>
-                              );
-                            });
-                            console.log("🔄 RENDERING allPOs.map END - rendered", result.length, "items");
-                            return result;
-                          })()
-                        ) : (
-                          <div style={{ fontSize: 11, color: "#ccc" }}>No purchase orders to display (allPOs: {allPOs ? allPOs.length : "undefined"})</div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                  
-                  {/* Grand Total - Outside grid, full width */}
-                  <div style={{ padding: 12, backgroundColor: "#d4a574", color: "#fff", borderRadius: 4, marginTop: 16, textAlign: "center" }}>
-                    <div style={{ fontSize: 11, fontWeight: 600, marginBottom: 4 }}>CONSOLIDATED TOTAL</div>
-                    <div style={{ fontSize: 16, fontWeight: 700 }}>${groupTotal.toLocaleString()}</div>
-                  </div>
-                  
-                  {/* PDF Download Button */}
-                  <Btn variant="secondary" size="sm" onClick={generateConsolidatedPDF} style={{ width: "100%", marginTop: 12 }}>
-                    📥 Download PDF
-                  </Btn>
-                </Panel>
-              );
-            }
-          })()}
-
-          {paymentMilestones.filter(m => m.due || m.amount).length > 0 && (
-            <Panel>
-              <h4 style={{ fontSize: 13, fontWeight: 700, color: "#4a3527", margin: "0 0 12px" }}>
-                Payment Schedule
-              </h4>
-              <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
-                {paymentMilestones.filter(m => m.due || m.amount).map((m, i) => (
-                  <div key={i} style={{
-                    display: "flex", justifyContent: "space-between", alignItems: "center",
-                    padding: "8px 0",
-                    borderBottom: "1px solid #f0e8d9",
-                  }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                      {m.paid && (
-                        <span style={{ fontSize: 11, background: "#d4edda", color: "#2d7a4f", borderRadius: 3, padding: "1px 6px", fontWeight: 600 }}>PAID</span>
-                      )}
-                      <span style={{ fontSize: 13, color: "#4a3527" }}>
-                        {m.due ? new Date(m.due).toLocaleDateString("en-AU", { day: "numeric", month: "long", year: "numeric" }) : "Date TBC"}
-                      </span>
-                      {m.paidDate && m.paid && (
-                        <span style={{ fontSize: 11, color: "#8a7a66" }}>
-                          — paid {new Date(m.paidDate).toLocaleDateString("en-AU")}
-                        </span>
-                      )}
-                    </div>
-                    <span style={{ fontSize: 14, fontWeight: 700, color: m.paid ? "#2d7a4f" : "#b5552b" }}>
-                      {m.amount ? `$${parseFloat(m.amount).toLocaleString("en-AU", { minimumFractionDigits: 0 })}` : "Amount TBC"}
-                    </span>
                   </div>
                 ))}
-                {paymentMilestones.filter(m => m.due || m.amount).length > 1 && (
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0 2px", borderTop: "2px solid #b5552b", marginTop: 4 }}>
-                    <span style={{ fontSize: 12, fontWeight: 700, color: "#4a3527" }}>Total</span>
-                    <span style={{ fontSize: 14, fontWeight: 700, color: "#b5552b" }}>
-                      ${paymentMilestones.filter(m => m.amount).reduce((s, m) => s + (parseFloat(m.amount) || 0), 0).toLocaleString("en-AU", { minimumFractionDigits: 0 })}
-                    </span>
-                  </div>
-                )}
-              </div>
-            </Panel>
-          )}
+              </Panel>
+            );
+          })()}
 
           <Panel>
             <Field label={isQuote ? "Notes (terms, validity, inclusions)" : "Notes (delivery instructions, terms)"}>
@@ -5498,14 +5397,11 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                 </h2>
                 <h3 style={{ fontSize: 15, fontWeight: 600, color: "#6b5240", marginBottom: 8, wordBreak: "break-word", overflowWrap: "break-word" }}>
                   {isNew ? "Draft — not yet saved" : (() => {
-                    // Check if this is a consolidated PO
                     if (!isQuote && editing?.consolidatedMemberIds?.length > 0) {
                       const members = (db.pos || []).filter(p => (editing.consolidatedMemberIds || []).includes(p.id));
-                      const memberNumbers = members.map(m => m.number).join('/');
-                      console.log("📋 Consolidated PO Header:", `PO${editing.number}/${memberNumbers}`);
-                      return `PO${editing.number}/${memberNumbers}`;
+                      const stripPO = (n) => String(n).replace(/^PO-?/i, "");
+                      return `PO${stripPO(editing.number)}/${members.map(m => stripPO(m.number)).join("/")}`;
                     }
-                    // Regular PO
                     return `#${editing.number}`;
                   })()}
                 </h3>
@@ -5840,9 +5736,6 @@ ${clone?.innerHTML || ""}
                   View original quote
                 </Btn>
               )}
-              <Btn variant="secondary" onClick={() => setShowPaymentModal(true)}>
-                Payment Milestones
-              </Btn>
             </>
           )}
           <Btn variant="ghost" onClick={onCancel}>
