@@ -442,7 +442,15 @@ function fromSupabaseFormat(data, table) {
       copy.paymentMilestones = Array.isArray(copy.paymentMilestones) ? copy.paymentMilestones : [];
       copy.attachments = Array.isArray(copy.attachments) ? copy.attachments : [];
       if (copy.consolidated_group_id !== undefined) { copy.consolidatedGroupId = copy.consolidated_group_id; delete copy.consolidated_group_id; }
-      if (copy.consolidated_member_ids !== undefined) { copy.consolidatedMemberIds = Array.isArray(copy.consolidated_member_ids) ? copy.consolidated_member_ids : []; delete copy.consolidated_member_ids; }
+      if (copy.consolidated_member_ids !== undefined) { 
+        // Handle both array and JSON string from Supabase
+        let parsed = copy.consolidated_member_ids;
+        if (typeof parsed === 'string') {
+          try { parsed = JSON.parse(parsed); } catch { parsed = []; }
+        }
+        copy.consolidatedMemberIds = Array.isArray(parsed) ? parsed : []; 
+        delete copy.consolidated_member_ids; 
+      }
       else { copy.consolidatedMemberIds = copy.consolidatedMemberIds || []; }
       break;
   }
@@ -5094,7 +5102,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
               </div>
               <div style={{ display: "flex", alignItems: "flex-end", gap: 10 }}>
                 <div style={{ flex: 1 }}>
-                  <Field label="Estimated Customs Clearance Payment (AUD, optional)">
+                  <Field label="Freight Forward Fee (AUD, optional)">
                     <input
                       style={inputStyle}
                       type="number"
@@ -5149,6 +5157,10 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
           {!isNew && editing?.consolidatedMemberIds?.length > 0 && (() => {
             const members = (db.pos || []).filter(p => (editing.consolidatedMemberIds || []).includes(p.id));
             const allPOs = [editing, ...members];
+            console.log("🔍 CONSOLIDATED PO DEBUG:");
+            console.log("  consolidatedMemberIds:", editing.consolidatedMemberIds);
+            console.log("  members found:", members.length, members.map(m => `PO#${m.number}`));
+            console.log("  allPOs:", allPOs.length, allPOs.map(p => `PO#${p.number}`));
             const groupTotal = allPOs.reduce((s, p) => s + (p.total || 0), 0);
             // Format: PO5001&5002&5003c (c = consolidated indicator)
             const memberNumbers = members.map(m => m.number).join('&');
