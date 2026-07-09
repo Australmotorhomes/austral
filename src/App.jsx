@@ -3700,34 +3700,33 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
   }
 
   function splitCustomsClearance(groupPO, customsAmount) {
-    // Split customs clearance proportionally across member POs by value
+    // Split customs clearance 50/50 across member POs
     (async () => {
       try {
         const allPOIds = [groupPO.id, ...(groupPO.consolidatedMemberIds || [])];
         const allPOs = (db.pos || []).filter(p => allPOIds.includes(p.id));
-        const totalValue = allPOs.reduce((s, p) => s + (p.total || 0), 0);
-        if (totalValue === 0) { showToast("Cannot split — all POs have zero value"); return; }
+        if (allPOs.length === 0) { showToast("No POs to split"); return; }
 
-        // Update each PO's customsClearance proportionally
+        // Split 50/50 across all POs
+        const splitAmount = Math.round((customsAmount / allPOs.length) * 100) / 100;
+        
+        // Update each PO's customsClearance with equal 50/50 split
         for (const po of allPOs) {
-          const share = totalValue > 0 ? ((po.total || 0) / totalValue) * customsAmount : 0;
-          const roundedShare = Math.round(share * 100) / 100;
           await supabaseRESTWithSchemaFallback("PATCH", `purchase_orders?id=eq.${po.id}`,
-            toSupabaseFormat({ customsClearance: roundedShare, updatedAt: todayISO() }, "purchase_orders")
+            toSupabaseFormat({ customsClearance: splitAmount, updatedAt: todayISO() }, "purchase_orders")
           );
         }
         update((next) => {
           allPOs.forEach(po => {
             const p = next.pos.find(x => x.id === po.id);
             if (p) {
-              const share = totalValue > 0 ? ((po.total || 0) / totalValue) * customsAmount : 0;
-              p.customsClearance = Math.round(share * 100) / 100;
+              p.customsClearance = splitAmount;
             }
           });
           const gp = next.pos.find(p => p.id === groupPO.id);
           if (gp) gp.customsClearance = customsAmount;
         });
-        showToast(`Customs clearance $${customsAmount.toLocaleString()} split across ${allPOs.length} POs`);
+        showToast(`Freight Forward Fee $${customsAmount.toLocaleString()} split 50/50 across ${allPOs.length} POs ($${splitAmount.toLocaleString()} each)`);
       } catch (err) {
         showToast(`Split error: ${err.message}`);
         console.error("Split customs error:", err);
@@ -5246,12 +5245,12 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                   {customsClearance > 0 && (
                     <div style={{ marginTop: 10 }}>
                       <Btn variant="secondary" size="sm" onClick={() => onSplitCustoms && onSplitCustoms(editing, customsClearance)}>
-                        Split ${customsClearance.toLocaleString()} customs proportionally
+                        Split ${customsClearance.toLocaleString()} freight forward 50/50
                       </Btn>
                       <p style={{ fontSize: 11, color: "#8a7a66", margin: "4px 0 0" }}>
-                        Splits by PO value: {[editing, ...members].map(po => {
-                          const t = allPOs.reduce((s, p) => s + (p.total || 0), 0);
-                          return `${po.number}: $${Math.round(((po.total||0)/t)*customsClearance).toLocaleString()}`;
+                        50/50 split: {[editing, ...members].map(po => {
+                          const splitAmount = Math.round((customsClearance / allPOs.length) * 100) / 100;
+                          return `${po.number}: $${splitAmount.toLocaleString()}`;
                         }).join(", ")}
                       </p>
                     </div>
@@ -5357,13 +5356,13 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                     
                     {/* RIGHT SIDE / ORDERS TAB: PO Details */}
                     {(!isMobile || consolidatedTab === "orders") && (
-                      <div style={{ overflow: "auto" }}>
-                        <h5 style={{ fontSize: 12, fontWeight: 600, color: "#6b5240", marginBottom: 15 }}>Purchase Order Details</h5>
+                      <div style={{ overflow: "visible", maxHeight: "none" }}>
+                        <h5 style={{ fontSize: 12, fontWeight: 600, color: "#6b5240", marginBottom: 15 }}>Purchase Order Details ({allPOs.length} POs)</h5>
                         {allPOs && allPOs.length > 0 ? (
                           (() => {
-                            console.log("🔄 RENDERING allPOs.map - length:", allPOs.length, "POs:", allPOs.map(p => `#${p.number}`));
-                            return allPOs.map((po, idx) => {
-                              console.log(`  Rendering PO ${idx + 1}/${allPOs.length}: #${po.number}`);
+                            console.log("🔄 RENDERING allPOs.map START - length:", allPOs.length, "POs:", allPOs.map(p => `#${p.number}`));
+                            const result = allPOs.map((po, idx) => {
+                              console.log(`  ✏️  Rendering PO ${idx + 1}/${allPOs.length}: #${po.number}, has ${po.lines?.length || 0} lines`);
                               return (
                                 <div key={po.id} style={{ marginBottom: 20, paddingBottom: 16, borderBottom: idx < allPOs.length - 1 ? "2px solid #d4a574" : "none" }}>
                                   <div style={{ fontSize: 12, fontWeight: 700, color: "#4a3527", marginBottom: 10 }}>
@@ -5394,9 +5393,11 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                                 </div>
                               );
                             });
+                            console.log("🔄 RENDERING allPOs.map END - rendered", result.length, "items");
+                            return result;
                           })()
                         ) : (
-                          <div style={{ fontSize: 11, color: "#ccc" }}>No purchase orders to display</div>
+                          <div style={{ fontSize: 11, color: "#ccc" }}>No purchase orders to display (allPOs: {allPOs ? allPOs.length : "undefined"})</div>
                         )}
                       </div>
                     )}
@@ -5496,7 +5497,17 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                   {isQuote ? "Customer Quote" : "Purchase Order"}
                 </h2>
                 <h3 style={{ fontSize: 15, fontWeight: 600, color: "#6b5240", marginBottom: 8, wordBreak: "break-word", overflowWrap: "break-word" }}>
-                  {isNew ? "Draft — not yet saved" : `#${editing.number}`}
+                  {isNew ? "Draft — not yet saved" : (() => {
+                    // Check if this is a consolidated PO
+                    if (!isQuote && editing?.consolidatedMemberIds?.length > 0) {
+                      const members = (db.pos || []).filter(p => (editing.consolidatedMemberIds || []).includes(p.id));
+                      const memberNumbers = members.map(m => m.number).join('/');
+                      console.log("📋 Consolidated PO Header:", `PO${editing.number}/${memberNumbers}`);
+                      return `PO${editing.number}/${memberNumbers}`;
+                    }
+                    // Regular PO
+                    return `#${editing.number}`;
+                  })()}
                 </h3>
                 <div style={{ color: "#8a7a66", fontSize: 13 }}>
                   {isNew ? "" : fmtDate(date)}
