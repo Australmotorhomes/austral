@@ -5357,7 +5357,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                     
                     {/* RIGHT SIDE / ORDERS TAB: PO Details */}
                     {(!isMobile || consolidatedTab === "orders") && (
-                      <div style={{ minHeight: "400px" }}>
+                      <div style={{ overflow: "auto" }}>
                         <h5 style={{ fontSize: 12, fontWeight: 600, color: "#6b5240", marginBottom: 15 }}>Purchase Order Details</h5>
                         {allPOs && allPOs.length > 0 ? (
                           allPOs.map((po, idx) => (
