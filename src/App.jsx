@@ -5348,24 +5348,24 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                       <div>
                         <h5 style={{ fontSize: 12, fontWeight: 600, color: "#6b5240", marginBottom: 10 }}>Purchase Order Details</h5>
                         {allPOs.map((po, idx) => (
-                          <details key={po.id} style={{ marginBottom: 12, padding: 12, backgroundColor: "#f9f5f0", borderRadius: 4, border: "1px solid #e3d8c6" }} open={idx === 0}>
-                            <summary style={{ cursor: "pointer", fontWeight: 600, color: "#4a3527", fontSize: 12 }}>
-                              PO-{po.number} — {po.customer || "—"}
-                            </summary>
-                            <div style={{ marginTop: 10, fontSize: 11, color: "#6b5240" }}>
+                          <div key={po.id} style={{ marginBottom: 16, paddingBottom: 16, borderBottom: idx < allPOs.length - 1 ? "2px solid #d4a574" : "none" }}>
+                            <h5 style={{ fontSize: 12, fontWeight: 700, color: "#4a3527", margin: "0 0 8px" }}>
+                              PO #{po.number} — {po.customer || "—"}
+                            </h5>
+                            <div style={{ fontSize: 11, color: "#6b5240" }}>
                               {(po.lines || []).map((line, li) => (
                                 <div key={li} style={{ marginBottom: 8, paddingBottom: 8, borderBottom: li < (po.lines.length - 1) ? "1px solid #e3d8c6" : "none" }}>
-                                  <div style={{ fontWeight: 600 }}>{line.description}</div>
-                                  {line.quantity && <div>Qty: {line.quantity}</div>}
-                                  {line.unitPrice && <div>Unit: ${parseFloat(line.unitPrice).toLocaleString()}</div>}
+                                  <div style={{ fontWeight: 600, color: "#4a3527" }}>{line.description}</div>
+                                  {line.quantity && <div style={{ color: "#8a7a66" }}>Qty: {line.quantity}</div>}
+                                  {line.unitPrice && <div style={{ color: "#8a7a66" }}>Unit: ${parseFloat(line.unitPrice).toLocaleString()}</div>}
                                   {line.amount && <div style={{ fontWeight: 600, color: "#b5552b" }}>Amount: ${parseFloat(line.amount).toLocaleString()}</div>}
                                 </div>
                               ))}
-                              <div style={{ marginTop: 8, fontWeight: 700, color: "#4a3527", fontSize: 12 }}>
-                                PO Total: ${(po.total || 0).toLocaleString()}
+                              <div style={{ marginTop: 10, padding: "8px 0", borderTop: "1px solid #d4a574", fontWeight: 700, color: "#4a3527", fontSize: 12 }}>
+                                PO #{po.number} Total: ${(po.total || 0).toLocaleString()}
                               </div>
                             </div>
-                          </details>
+                          </div>
                         ))}
                         
                         {/* Grand Total */}
