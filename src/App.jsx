@@ -5153,7 +5153,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
             // Format: PO5001&5002&5003c (c = consolidated indicator)
             const memberNumbers = members.map(m => m.number).join('&');
             const consolidatedPONumber = `PO${editing.number}${memberNumbers ? '&' + memberNumbers : ''}c`;
-            const isMobile = useIsMobile();
+            // Note: isMobile already declared at component level, no need to call hook here
             
             // PDF generation function
             const generateConsolidatedPDF = () => {
