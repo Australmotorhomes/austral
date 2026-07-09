@@ -5343,44 +5343,57 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                       </div>
                     )}
                     
-                    {/* RIGHT SIDE / ORDERS TAB: PO Details Accordion */}
+                    {/* RIGHT SIDE / ORDERS TAB: PO Details */}
                     {(!isMobile || consolidatedTab === "orders") && (
-                      <div>
-                        <h5 style={{ fontSize: 12, fontWeight: 600, color: "#6b5240", marginBottom: 10 }}>Purchase Order Details</h5>
-                        {allPOs.map((po, idx) => (
-                          <div key={po.id} style={{ marginBottom: 16, paddingBottom: 16, borderBottom: idx < allPOs.length - 1 ? "2px solid #d4a574" : "none" }}>
-                            <h5 style={{ fontSize: 12, fontWeight: 700, color: "#4a3527", margin: "0 0 8px" }}>
-                              PO #{po.number} — {po.customer || "—"}
-                            </h5>
-                            <div style={{ fontSize: 11, color: "#6b5240" }}>
-                              {(po.lines || []).map((line, li) => (
-                                <div key={li} style={{ marginBottom: 8, paddingBottom: 8, borderBottom: li < (po.lines.length - 1) ? "1px solid #e3d8c6" : "none" }}>
-                                  <div style={{ fontWeight: 600, color: "#4a3527" }}>{line.description}</div>
-                                  {line.quantity && <div style={{ color: "#8a7a66" }}>Qty: {line.quantity}</div>}
-                                  {line.unitPrice && <div style={{ color: "#8a7a66" }}>Unit: ${parseFloat(line.unitPrice).toLocaleString()}</div>}
-                                  {line.amount && <div style={{ fontWeight: 600, color: "#b5552b" }}>Amount: ${parseFloat(line.amount).toLocaleString()}</div>}
-                                </div>
-                              ))}
-                              <div style={{ marginTop: 10, padding: "8px 0", borderTop: "1px solid #d4a574", fontWeight: 700, color: "#4a3527", fontSize: 12 }}>
-                                PO #{po.number} Total: ${(po.total || 0).toLocaleString()}
+                      <div style={{ minHeight: "400px" }}>
+                        <h5 style={{ fontSize: 12, fontWeight: 600, color: "#6b5240", marginBottom: 15 }}>Purchase Order Details</h5>
+                        {allPOs && allPOs.length > 0 ? (
+                          allPOs.map((po, idx) => (
+                            <div key={po.id} style={{ marginBottom: 20, paddingBottom: 16, borderBottom: idx < allPOs.length - 1 ? "2px solid #d4a574" : "none" }}>
+                              <div style={{ fontSize: 12, fontWeight: 700, color: "#4a3527", marginBottom: 10 }}>
+                                PO #{po.number} — {po.customer || "No customer"}
                               </div>
+                              {po.lines && po.lines.length > 0 ? (
+                                <div style={{ fontSize: 11, color: "#6b5240" }}>
+                                  {po.lines.map((line, li) => (
+                                    <div key={li} style={{ marginBottom: 8, paddingBottom: 8, borderBottom: li < po.lines.length - 1 ? "1px solid #e3d8c6" : "none" }}>
+                                      <div style={{ fontWeight: 600, color: "#4a3527" }}>{line.description || "Item"}</div>
+                                      {line.quantity && <div style={{ color: "#8a7a66", fontSize: 10 }}>Qty: {line.quantity}</div>}
+                                      {line.unitPrice && <div style={{ color: "#8a7a66", fontSize: 10 }}>Unit: ${parseFloat(line.unitPrice).toLocaleString()}</div>}
+                                      {line.amount && <div style={{ fontWeight: 600, color: "#b5552b", fontSize: 10 }}>Amount: ${parseFloat(line.amount).toLocaleString()}</div>}
+                                    </div>
+                                  ))}
+                                </div>
+                              ) : (
+                                <div style={{ fontSize: 10, color: "#ccc" }}>No line items</div>
+                              )}
+                              <div style={{ marginTop: 10, paddingTop: 8, borderTop: "1px solid #d4a574", fontWeight: 700, color: "#4a3527", fontSize: 11 }}>
+                                PO #{po.number} Subtotal: ${(po.subtotal || 0).toLocaleString()}
+                              </div>
+                              {po.total && po.total !== po.subtotal && (
+                                <div style={{ fontWeight: 700, color: "#b5552b", fontSize: 11 }}>
+                                  PO #{po.number} Total: ${(po.total).toLocaleString()}
+                                </div>
+                              )}
                             </div>
-                          </div>
-                        ))}
-                        
-                        {/* Grand Total */}
-                        <div style={{ padding: 12, backgroundColor: "#d4a574", color: "#fff", borderRadius: 4, marginTop: 12, textAlign: "center" }}>
-                          <div style={{ fontSize: 11, fontWeight: 600, marginBottom: 4 }}>CONSOLIDATED TOTAL</div>
-                        <div style={{ fontSize: 16, fontWeight: 700 }}>${groupTotal.toLocaleString()}</div>
+                          ))
+                        ) : (
+                          <div style={{ fontSize: 11, color: "#ccc" }}>No purchase orders to display</div>
+                        )}
                       </div>
-                      
-                      {/* PDF Download Button */}
-                      <Btn variant="secondary" size="sm" onClick={generateConsolidatedPDF} style={{ width: "100%", marginTop: 12 }}>
-                        📥 Download PDF
-                      </Btn>
-                    </div>
                     )}
                   </div>
+                  
+                  {/* Grand Total - Outside grid, full width */}
+                  <div style={{ padding: 12, backgroundColor: "#d4a574", color: "#fff", borderRadius: 4, marginTop: 16, textAlign: "center" }}>
+                    <div style={{ fontSize: 11, fontWeight: 600, marginBottom: 4 }}>CONSOLIDATED TOTAL</div>
+                    <div style={{ fontSize: 16, fontWeight: 700 }}>${groupTotal.toLocaleString()}</div>
+                  </div>
+                  
+                  {/* PDF Download Button */}
+                  <Btn variant="secondary" size="sm" onClick={generateConsolidatedPDF} style={{ width: "100%", marginTop: 12 }}>
+                    📥 Download PDF
+                  </Btn>
                 </Panel>
               );
             }
