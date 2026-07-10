@@ -4994,106 +4994,98 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
             </div>
           </Panel>
 
-          {!isQuote && (
-            <Panel>
-              <div style={{ marginBottom: 12 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-                  <h3 style={{ fontSize: 13, fontWeight: 600, color: "#4a3527", margin: 0 }}>Payment Schedule</h3>
-                  <Btn 
-                    variant="ghost" 
-                    size="sm"
-                    onClick={() => {
-                      setPaymentMilestones([...paymentMilestones, { due: "", amount: "", paid: false, paidDate: "" }]);
-                    }}
-                  >
-                    + Add payment
-                  </Btn>
+          {/* Payment Schedule — shown for both quotes and POs, always visible */}
+          <Panel>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+              <h3 style={{ fontSize: 13, fontWeight: 600, color: "#4a3527", margin: 0 }}>Payment Schedule</h3>
+              <Btn
+                variant="ghost"
+                size="sm"
+                onClick={() => setPaymentMilestones([...paymentMilestones, { due: "", amount: "", paid: false, paidDate: "" }])}
+              >
+                + Add payment
+              </Btn>
+            </div>
+
+            {paymentMilestones.length === 0 ? (
+              <p style={{ fontSize: 12, color: "#8a7a66", margin: 0 }}>No payment milestones yet. Click "+ Add payment" to create one.</p>
+            ) : (
+              <>
+                {/* Compact table — one row per milestone */}
+                <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
+                  {/* Header row */}
+                  <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr auto" : "1fr 1fr 80px auto", gap: 8, padding: "4px 0 8px", borderBottom: "1px solid #d3c9b8" }}>
+                    <span style={{ fontSize: 11, fontWeight: 600, color: "#8a7a66" }}>DUE DATE</span>
+                    <span style={{ fontSize: 11, fontWeight: 600, color: "#8a7a66" }}>AMOUNT (AUD)</span>
+                    {!isMobile && <span style={{ fontSize: 11, fontWeight: 600, color: "#8a7a66" }}>PAID</span>}
+                    <span></span>
+                  </div>
+
+                  {paymentMilestones.map((milestone, idx) => (
+                    <div key={idx} style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr auto" : "1fr 1fr 80px auto", gap: 8, padding: "8px 0", borderBottom: "1px solid #f0e8d9", alignItems: "center" }}>
+                      <input
+                        type="date"
+                        value={milestone.due || ""}
+                        onChange={(e) => {
+                          const updated = [...paymentMilestones];
+                          updated[idx] = { ...updated[idx], due: e.target.value };
+                          setPaymentMilestones(updated);
+                        }}
+                        style={{ ...inputStyle, margin: 0, width: "100%" }}
+                      />
+                      <input
+                        type="number"
+                        step="0.01"
+                        placeholder="0.00"
+                        value={milestone.amount || ""}
+                        onChange={(e) => {
+                          const updated = [...paymentMilestones];
+                          updated[idx] = { ...updated[idx], amount: e.target.value };
+                          setPaymentMilestones(updated);
+                        }}
+                        style={{ ...inputStyle, margin: 0, width: "100%" }}
+                      />
+                      {!isMobile && (
+                        <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 12 }}>
+                          <input
+                            type="checkbox"
+                            checked={milestone.paid || false}
+                            onChange={(e) => {
+                              const updated = [...paymentMilestones];
+                              updated[idx] = {
+                                ...updated[idx],
+                                paid: e.target.checked,
+                                paidDate: e.target.checked && milestone.due ? milestone.due : updated[idx].paidDate,
+                              };
+                              setPaymentMilestones(updated);
+                            }}
+                          />
+                          {milestone.paid && <span style={{ color: "#5c7a4f", fontWeight: 600 }}>Paid</span>}
+                        </label>
+                      )}
+                      <button
+                        onClick={() => setPaymentMilestones(paymentMilestones.filter((_, i) => i !== idx))}
+                        style={{ background: "none", border: "none", color: "#a3442e", cursor: "pointer", fontSize: 16, padding: "0 4px", lineHeight: 1 }}
+                        title="Remove"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ))}
                 </div>
 
-                {paymentMilestones.length === 0 ? (
-                  <p style={{ fontSize: 12, color: "#8a7a66", margin: 0 }}>No payment milestones added. Click "Add payment" to create one.</p>
-                ) : (
-                  <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                    {paymentMilestones.map((milestone, idx) => (
-                      <div key={idx} style={{ background: "#f9f7f2", padding: 12, borderRadius: 6, border: "1px solid #d3c9b8" }}>
-                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 10 }}>
-                          <Field label="Due date">
-                            <input
-                              style={{ ...inputStyle, width: "100%", maxWidth: "100%" }}
-                              type="date"
-                              value={milestone.due || ""}
-                              onChange={(e) => {
-                                const updated = [...paymentMilestones];
-                                updated[idx].due = e.target.value;
-                                setPaymentMilestones(updated);
-                              }}
-                            />
-                          </Field>
-                          <Field label="Amount (AUD)">
-                            <input
-                              style={{ ...inputStyle, width: "100%", maxWidth: "100%" }}
-                              type="number"
-                              step="0.01"
-                              value={milestone.amount || ""}
-                              onChange={(e) => {
-                                const updated = [...paymentMilestones];
-                                updated[idx].amount = e.target.value;
-                                setPaymentMilestones(updated);
-                              }}
-                            />
-                          </Field>
-                        </div>
-                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 10 }}>
-                          <Field label="Paid">
-                            <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer" }}>
-                              <input
-                                type="checkbox"
-                                checked={milestone.paid || false}
-                                onChange={(e) => {
-                                  const updated = [...paymentMilestones];
-                                  updated[idx].paid = e.target.checked;
-                                  // Auto-fill paid date with due date when marked as paid
-                                  if (e.target.checked && milestone.due) {
-                                    updated[idx].paidDate = milestone.due;
-                                  }
-                                  setPaymentMilestones(updated);
-                                }}
-                              />
-                              <span style={{ fontSize: 13 }}>Marked as paid</span>
-                            </label>
-                          </Field>
-                          {milestone.paid && (
-                            <Field label="Paid date">
-                              <input
-                                style={{ ...inputStyle, width: "100%", maxWidth: "100%" }}
-                                type="date"
-                                value={milestone.paidDate || ""}
-                                onChange={(e) => {
-                                  const updated = [...paymentMilestones];
-                                  updated[idx].paidDate = e.target.value;
-                                  setPaymentMilestones(updated);
-                                }}
-                              />
-                            </Field>
-                          )}
-                        </div>
-                        <Btn
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => {
-                            setPaymentMilestones(paymentMilestones.filter((_, i) => i !== idx));
-                          }}
-                          style={{ color: "#a3442e" }}
-                        >
-                          Remove
-                        </Btn>
-                      </div>
-                    ))}
+                {/* Running total */}
+                {paymentMilestones.some(m => m.amount) && (
+                  <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 0 2px", borderTop: "2px solid #b5552b", marginTop: 8 }}>
+                    <span style={{ fontSize: 13, fontWeight: 600, color: "#4a3527" }}>Total scheduled</span>
+                    <span style={{ fontSize: 13, fontWeight: 700, color: "#b5552b" }}>
+                      {fmtMoney(paymentMilestones.reduce((s, m) => s + (parseFloat(m.amount) || 0), 0), "AUD")}
+                    </span>
                   </div>
                 )}
-              </div>
-            </Panel>
-          )}
+              </>
+            )}
+          </Panel>
 
           {!isQuote && (
             <Panel>
@@ -5837,11 +5829,6 @@ ${clone?.innerHTML || ""}
               {isQuote && editing.status === "Accepted" && onGeneratePOs && (
                 <Btn variant="primary" onClick={() => onGeneratePOs(editing)}>
                   Generate POs
-                </Btn>
-              )}
-              {isQuote && editing.status === "Accepted" && (
-                <Btn variant="secondary" onClick={() => setShowPaymentModal(true)}>
-                  💳 Payment Milestones
                 </Btn>
               )}
               {!isQuote && editing.quoteId && openRecord && (
