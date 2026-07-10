@@ -4403,6 +4403,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
   const [consolidateSelected, setConsolidateSelected] = useState([]);
   const [showDetailedConsolidatedView, setShowDetailedConsolidatedView] = useState(false);
   const [consolidatedTab, setConsolidatedTab] = useState("details");
+  const [previewPoId, setPreviewPoId] = useState(editing?.id || null);
   const [showProfitSection, setShowProfitSection] = useState(false);
   const [paymentMilestones, setPaymentMilestones] = useState(
     editing?.paymentMilestones ? editing.paymentMilestones : []
@@ -5390,134 +5391,181 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
         {/* ---------------- LIVE PREVIEW SIDE ---------------- */}
         <div>
           <div className="doc-paper" ref={printRef} style={{ position: "sticky", top: 0 }}>
-            <div className="doc-header">
-              <div style={{ minWidth: 0 }}>
-                <h2 style={{ fontSize: isMobile ? 20 : 22, fontWeight: 700, marginBottom: 6 }}>
-                  {isQuote ? "Customer Quote" : "Purchase Order"}
-                </h2>
-                <h3 style={{ fontSize: 15, fontWeight: 600, color: "#6b5240", marginBottom: 8, wordBreak: "break-word", overflowWrap: "break-word" }}>
-                  {isNew ? "Draft — not yet saved" : (() => {
-                    if (!isQuote && editing?.consolidatedMemberIds?.length > 0) {
-                      const members = (db.pos || []).filter(p => (editing.consolidatedMemberIds || []).includes(p.id));
-                      const stripPO = (n) => String(n).replace(/^PO-?/i, "");
-                      return `PO${stripPO(editing.number)}/${members.map(m => stripPO(m.number)).join("/")}`;
-                    }
-                    return `#${editing.number}`;
-                  })()}
-                </h3>
-                <div style={{ color: "#8a7a66", fontSize: 13 }}>
-                  {isNew ? "" : fmtDate(date)}
-                </div>
-              </div>
-              <div style={{ textAlign: "right" }}>
-                <strong style={{ fontFamily: "Georgia,serif", color: "#4a3527" }}>Austral Motorhomes & Platinum Pontoons</strong>
-                <br />
-                <span className="muted" style={{ fontSize: 12 }}>
-                  Kunda Park, QLD
-                </span>
-              </div>
-            </div>
-            <div className="doc-meta">
-              {isQuote ? (
-                <div style={{ textAlign: "left" }}>
-                  <div style={{ fontWeight: 700, fontSize: 15 }}>{party || "—"}</div>
-                  {contact && (
-                    <div style={{ fontSize: 13, color: "#6b5240", marginTop: 2 }}>{contact}</div>
-                  )}
-                  <div style={{ marginTop: 32 }} />
-                </div>
-              ) : (
-                <>
-                  <div>
-                    <b>Supplier:</b> {party || "—"}
-                  </div>
-                  {model && (
-                    <div>
-                      <b>Reference:</b> {model}
-                    </div>
-                  )}
-                  {contact && (
-                    <div>
-                      <b>Contact:</b> {contact}
-                    </div>
-                  )}
-                  {eta && (
-                    <div>
-                      <b>ETA:</b> {fmtDate(eta)}
-                    </div>
-                  )}
-                </>
-              )}
-            </div>
-            {lines.length === 0 ? (
-              <p className="muted" style={{ fontSize: 13 }}>
-                Add line items on the left to see them appear here.
-              </p>
-            ) : (
-              <table>
-                <thead>
-                  <tr>
-                    <th>Description</th>
-                    <th className="num">Qty</th>
-                    <th className="num">{isQuote ? "Price" : "Cost"}</th>
-                    <th className="num">Line total</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {lines.map((li, idx) => (
-                    <React.Fragment key={idx}>
-                      <tr>
-                        <td>{li.desc || <span className="muted">(no description)</span>}</td>
-                        <td className="num">{li.qty}</td>
-                        <td className="num">{fmtMoney(li.price, li.currency || "AUD")}</td>
-                        <td className="num">{fmtMoney(lineAudTotal(li), "AUD")}</td>
-                      </tr>
-                      {li.lineNote && li.lineNote.trim() && (() => {
-                        const bullets = li.lineNote.split("\n").map(l => l.trim()).filter(Boolean);
-                        return (
-                          <tr>
-                            <td colSpan={4} style={{ paddingLeft: 24, paddingTop: 4, paddingBottom: 8, borderTop: "none" }}>
-                              <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12, color: "#6b5240", lineHeight: 1.7 }}>
-                                {bullets.map((b, bi) => (
-                                  <li key={bi}>{b}</li>
-                                ))}
-                              </ul>
-                            </td>
-                          </tr>
-                        );
-                      })()}
-                    </React.Fragment>
-                  ))}
-                </tbody>
-              </table>
-            )}
-            <div style={{ marginTop: 30, paddingTop: 20, borderTop: "2px solid #e3d8c6" }}>
-              <div className="totals-row">
-                <span>Subtotal (incl. GST)</span>
-                <span>{fmtMoney(subtotal, "AUD")}</span>
-              </div>
-              {discountNum > 0 && (
-                <div className="totals-row" style={{ marginTop: 12 }}>
-                  <span>{isQuote ? "Discount" : "Adjustment"}</span>
-                  <span>{(isQuote ? "-" : "") + fmtMoney(discountNum, "AUD")}</span>
-                </div>
-              )}
-              <div className="totals-row grand" style={{ marginTop: 18 }}>
-                <span>Total (incl. GST)</span>
-                <span>{fmtMoney(total, "AUD")}</span>
-              </div>
+            {(() => {
+              const isConsolidated = !isQuote && !isNew && editing?.consolidatedMemberIds?.length > 0;
+              const consolidatedMembers = isConsolidated
+                ? (db.pos || []).filter(p => (editing.consolidatedMemberIds || []).includes(p.id))
+                : [];
+              const allConsolidatedPOs = isConsolidated ? [editing, ...consolidatedMembers] : [];
+              const stripPO = (n) => String(n).replace(/^PO-?/i, "");
 
-              {isQuote && (
-                <div className="no-print" style={{ borderTop: "1px solid #e3d8c6", marginTop: 20, paddingTop: 12, fontSize: 11, color: "#8a7a66" }}>
-                  (Gross profit details for internal use only)
-                </div>
-              )}
-              {isQuote && !hasCostData && lines.length > 0 && (
-                <div className="no-print" style={{ fontSize: 11, color: "#8a7a66", marginTop: 4 }}>
-                  Gross profit isn't shown for manually-added lines with no linked price book cost.
-                </div>
-              )}
-            </div>
+              // Which PO is active in the preview? Default to the primary.
+              const activePo = isConsolidated
+                ? (allConsolidatedPOs.find(p => p.id === previewPoId) || allConsolidatedPOs[0])
+                : null;
+
+              // Lines: use live local state for the primary PO (reflects unsaved edits),
+              // stored lines for member POs
+              const previewLines = isConsolidated
+                ? (activePo?.id === editing?.id
+                    ? lines
+                    : (activePo?.lines || []).map(l => ({ currency: "AUD", ...l })))
+                : lines;
+
+              const previewSubtotal = isConsolidated && activePo?.id !== editing?.id
+                ? (activePo?.subtotal || 0) : subtotal;
+              const previewTotal = isConsolidated && activePo?.id !== editing?.id
+                ? (activePo?.total || 0) : total;
+              const previewDiscount = isConsolidated && activePo?.id !== editing?.id
+                ? (activePo?.discount || 0) : discountNum;
+
+              return (
+                <>
+                  <div className="doc-header">
+                    <div style={{ minWidth: 0 }}>
+                      <h2 style={{ fontSize: isMobile ? 20 : 22, fontWeight: 700, marginBottom: 6 }}>
+                        {isQuote ? "Customer Quote" : "Purchase Order"}
+                      </h2>
+
+                      {isConsolidated ? (
+                        /* Tab strip replaces the PO number for consolidated POs */
+                        <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginBottom: 8 }}>
+                          {allConsolidatedPOs.map(po => {
+                            const isActive = (previewPoId || allConsolidatedPOs[0]?.id) === po.id;
+                            return (
+                              <button
+                                key={po.id}
+                                onClick={() => setPreviewPoId(po.id)}
+                                style={{
+                                  padding: isMobile ? "5px 9px" : "6px 13px",
+                                  fontSize: isMobile ? 11 : 12,
+                                  fontWeight: isActive ? 700 : 500,
+                                  background: isActive ? "#6b5240" : "#f0e8d9",
+                                  color: isActive ? "#fff" : "#6b5240",
+                                  border: "1px solid " + (isActive ? "#6b5240" : "#d4c4b0"),
+                                  borderRadius: 4,
+                                  cursor: "pointer",
+                                  whiteSpace: "nowrap",
+                                  letterSpacing: "0.01em",
+                                }}
+                              >
+                                PO-{stripPO(po.number)}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <h3 style={{ fontSize: 15, fontWeight: 600, color: "#6b5240", marginBottom: 8, wordBreak: "break-word", overflowWrap: "break-word" }}>
+                          {isNew ? "Draft — not yet saved" : `#${editing.number}`}
+                        </h3>
+                      )}
+
+                      <div style={{ color: "#8a7a66", fontSize: 13 }}>
+                        {isNew ? "" : fmtDate(isConsolidated ? (activePo?.date || date) : date)}
+                      </div>
+                    </div>
+                    <div style={{ textAlign: "right" }}>
+                      <strong style={{ fontFamily: "Georgia,serif", color: "#4a3527" }}>Austral Motorhomes & Platinum Pontoons</strong>
+                      <br />
+                      <span className="muted" style={{ fontSize: 12 }}>
+                        Kunda Park, QLD
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="doc-meta">
+                    {isQuote ? (
+                      <div style={{ textAlign: "left" }}>
+                        <div style={{ fontWeight: 700, fontSize: 15 }}>{party || "—"}</div>
+                        {contact && (
+                          <div style={{ fontSize: 13, color: "#6b5240", marginTop: 2 }}>{contact}</div>
+                        )}
+                        <div style={{ marginTop: 32 }} />
+                      </div>
+                    ) : (
+                      <>
+                        <div><b>Supplier:</b> {party || "—"}</div>
+                        {isConsolidated && activePo?.customer && (
+                          <div><b>Customer:</b> {activePo.customer}</div>
+                        )}
+                        {model && <div><b>Reference:</b> {model}</div>}
+                        {contact && <div><b>Contact:</b> {contact}</div>}
+                        {eta && <div><b>ETA:</b> {fmtDate(eta)}</div>}
+                      </>
+                    )}
+                  </div>
+
+                  {previewLines.length === 0 ? (
+                    <p className="muted" style={{ fontSize: 13 }}>
+                      {isConsolidated ? "No line items on this PO." : "Add line items on the left to see them appear here."}
+                    </p>
+                  ) : (
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Description</th>
+                          <th className="num">Qty</th>
+                          <th className="num">{isQuote ? "Price" : "Cost"}</th>
+                          <th className="num">Line total</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {previewLines.map((li, idx) => (
+                          <React.Fragment key={idx}>
+                            <tr>
+                              <td>{li.desc || <span className="muted">(no description)</span>}</td>
+                              <td className="num">{li.qty}</td>
+                              <td className="num">{fmtMoney(li.price, li.currency || "AUD")}</td>
+                              <td className="num">{fmtMoney(lineAudTotal(li), "AUD")}</td>
+                            </tr>
+                            {li.lineNote && li.lineNote.trim() && (() => {
+                              const bullets = li.lineNote.split("\n").map(l => l.trim()).filter(Boolean);
+                              return (
+                                <tr>
+                                  <td colSpan={4} style={{ paddingLeft: 24, paddingTop: 4, paddingBottom: 8, borderTop: "none" }}>
+                                    <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12, color: "#6b5240", lineHeight: 1.7 }}>
+                                      {bullets.map((b, bi) => <li key={bi}>{b}</li>)}
+                                    </ul>
+                                  </td>
+                                </tr>
+                              );
+                            })()}
+                          </React.Fragment>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+
+                  <div style={{ marginTop: 30, paddingTop: 20, borderTop: "2px solid #e3d8c6" }}>
+                    <div className="totals-row">
+                      <span>Subtotal (incl. GST)</span>
+                      <span>{fmtMoney(previewSubtotal, "AUD")}</span>
+                    </div>
+                    {previewDiscount > 0 && (
+                      <div className="totals-row" style={{ marginTop: 12 }}>
+                        <span>{isQuote ? "Discount" : "Adjustment"}</span>
+                        <span>{(isQuote ? "-" : "") + fmtMoney(previewDiscount, "AUD")}</span>
+                      </div>
+                    )}
+                    <div className="totals-row grand" style={{ marginTop: 18 }}>
+                      <span>Total (incl. GST)</span>
+                      <span>{fmtMoney(previewTotal, "AUD")}</span>
+                    </div>
+
+                    {isQuote && (
+                      <div className="no-print" style={{ borderTop: "1px solid #e3d8c6", marginTop: 20, paddingTop: 12, fontSize: 11, color: "#8a7a66" }}>
+                        (Gross profit details for internal use only)
+                      </div>
+                    )}
+                    {isQuote && !hasCostData && lines.length > 0 && (
+                      <div className="no-print" style={{ fontSize: 11, color: "#8a7a66", marginTop: 4 }}>
+                        Gross profit isn't shown for manually-added lines with no linked price book cost.
+                      </div>
+                    )}
+                  </div>
+                </>
+              );
+            })()}
 
 
 
