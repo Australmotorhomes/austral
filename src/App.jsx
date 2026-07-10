@@ -5209,7 +5209,8 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
               const qty = Number(l.qty || l.quantity || 1);
               const price = Number(l.price || l.unitPrice || 0);
               const amt = Number(l.amount || 0);
-              return s + (amt || qty * price);
+              const lineTotal = amt || qty * price;
+              return s + lineTotal;
             }, 0);
 
             // For the primary PO use the live local-state total (reflects any unsaved edits);
@@ -5221,7 +5222,10 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
             };
             const poSubtotalVal = (p) => {
               if (p.id === editing.id) return subtotal || editing.subtotal || sumLines(lines);
-              return p.subtotal || sumLines(p.lines);
+              // For member POs: use subtotal if available, otherwise calculate from lines
+              const calculated = sumLines(p.lines);
+              console.log(`📊 poSubtotalVal for PO#${p.number}: subtotal=${p.subtotal}, calculated=${calculated}, lines=${p.lines?.length || 0}`);
+              return p.subtotal || calculated;
             };
 
             const groupTotal = allPOs.reduce((s, p) => s + poTotal(p), 0);
@@ -5254,7 +5258,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                         </tr>`).join("")}
                       <tr style="background-color: #f5f5f5; font-weight: bold; border-top: 2px solid #333;">
                         <td colspan="3" style="padding: 10px; border: 1px solid #ddd; text-align: right;">TOTAL:</td>
-                        <td style="padding: 10px; border: 1px solid #ddd; text-align: right;">$${groupTotal.toLocaleString()}</td>
+                        <td style="padding: 10px; border: 1px solid #ddd; text-align: right;">$${(Number(groupTotal) || 0).toLocaleString()}</td>
                       </tr>
                     </tbody>
                   </table>
@@ -5382,7 +5386,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
 
                     <div style={{ padding: 12, background: "#b5552b", color: "#fff", borderRadius: 4, textAlign: "center" }}>
                       <div style={{ fontSize: 11, fontWeight: 600, marginBottom: 4 }}>CONSOLIDATED TOTAL</div>
-                      <div style={{ fontSize: 16, fontWeight: 700 }}>${groupTotal.toLocaleString()}</div>
+                      <div style={{ fontSize: 16, fontWeight: 700 }}>${(Number(groupTotal) || 0).toLocaleString()}</div>
                     </div>
                   </div>
                 )}
@@ -5409,12 +5413,16 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                         ))}
                         <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 0 2px", borderTop: "2px solid #d4a574", marginTop: 6 }}>
                           <span style={{ fontWeight: 700, color: "#4a3527", fontSize: 12 }}>Subtotal</span>
-                          <span style={{ fontWeight: 700, color: "#4a3527", fontSize: 12 }}>${poSubtotalVal(po).toLocaleString()}</span>
+                          <span style={{ fontWeight: 700, color: "#4a3527", fontSize: 12 }}>
+                            ${(Number(poSubtotalVal(po)) || 0).toLocaleString()}
+                          </span>
                         </div>
                         {poTotal(po) !== poSubtotalVal(po) && (
                           <div style={{ display: "flex", justifyContent: "space-between", paddingTop: 4 }}>
                             <span style={{ fontWeight: 700, color: "#b5552b", fontSize: 12 }}>Total</span>
-                            <span style={{ fontWeight: 700, color: "#b5552b", fontSize: 12 }}>${poTotal(po).toLocaleString()}</span>
+                            <span style={{ fontWeight: 700, color: "#b5552b", fontSize: 12 }}>
+                              ${(Number(poTotal(po)) || 0).toLocaleString()}
+                            </span>
                           </div>
                         )}
                       </div>
