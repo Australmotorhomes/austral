@@ -375,6 +375,10 @@ function toSupabaseFormat(data, table) {
       delete copy.updatedAt;
       // number/party/customer/model/date/contact/status/discount/total/notes/lines/subtotal/gst/eta
       // already match their column names as-is.
+      // BUT: eta column only exists on purchase_orders, NOT on quotes
+      if (table === "quotes") {
+        delete copy.eta;  // Quotes don't have eta column in Supabase
+      }
       break;
   }
   return copy;
@@ -5157,6 +5161,59 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
             </Panel>
           )}
 
+          {/* Payment Schedule for Accepted Quotes */}
+          {isQuote && !isNew && editing.status === "Accepted" && paymentMilestones.filter(m => m.due || m.amount).length > 0 && (
+            <Panel>
+              <h4 style={{ fontSize: 13, fontWeight: 700, color: "#4a3527", margin: "0 0 12px" }}>
+                Payment Schedule
+              </h4>
+              <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
+                {paymentMilestones.filter(m => m.due || m.amount).map((m, i) => (
+                  <div key={i} style={{
+                    display: "flex", justifyContent: "space-between", alignItems: "center",
+                    padding: "8px 0", borderBottom: "1px solid #f0e8d9",
+                  }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      {m.paid && (
+                        <span style={{ fontSize: 11, background: "#d4edda", color: "#2d7a4f", borderRadius: 3, padding: "1px 6px", fontWeight: 600 }}>PAID</span>
+                      )}
+                      <span style={{ fontSize: 12 }}>
+                        {m.due ? new Date(m.due).toLocaleDateString("en-AU") : "Date TBC"}
+                      </span>
+                    </div>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: m.paid ? "#2d7a4f" : "#b5552b" }}>
+                      {m.amount ? `$${parseFloat(m.amount).toLocaleString()}` : "Amount TBC"}
+                    </span>
+                  </div>
+                ))}
+                {paymentMilestones.filter(m => m.due || m.amount).length > 1 && (
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0 2px", borderTop: "2px solid #b5552b", marginTop: 4 }}>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: "#4a3527" }}>Total</span>
+                    <span style={{ fontSize: 14, fontWeight: 700, color: "#b5552b" }}>
+                      ${paymentMilestones.filter(m => m.amount).reduce((s, m) => s + (parseFloat(m.amount) || 0), 0).toLocaleString("en-AU", { minimumFractionDigits: 0 })}
+                    </span>
+                  </div>
+                )}
+              </div>
+            </Panel>
+          )}
+
+          {/* Prompt to add payment milestones for accepted quotes */}
+          {isQuote && !isNew && editing.status === "Accepted" && paymentMilestones.filter(m => m.due || m.amount).length === 0 && (
+            <Panel style={{ backgroundColor: "#fffbf0", borderLeft: "4px solid #d4a574" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                <div>
+                  <h4 style={{ fontSize: 13, fontWeight: 700, color: "#4a3527", margin: "0 0 6px" }}>
+                    📋 Add Payment Schedule
+                  </h4>
+                  <p style={{ fontSize: 12, color: "#6b5240", margin: 0 }}>
+                    Click "Payment Milestones" to add payment terms for this accepted quote.
+                  </p>
+                </div>
+              </div>
+            </Panel>
+          )}
+
           {!isNew && editing?.consolidatedMemberIds?.length > 0 && (() => {
             const members = (db.pos || []).filter(p => (editing.consolidatedMemberIds || []).includes(p.id));
             const allPOs = [editing, ...members];
@@ -5165,6 +5222,46 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
             // Strip any leading "PO-" prefix so we can format as PO5006/5007, not POPO-5006/PO-5007
             const stripPO = (n) => String(n).replace(/^PO-?/i, "");
             const consolidatedPONumber = `PO${stripPO(editing.number)}/${members.map(m => stripPO(m.number)).join("/")}`;
+
+            const generateConsolidatedPDF = () => {
+              const html = `
+                <div style="font-family: Arial, sans-serif; padding: 20px; color: #333;">
+                  <h2 style="text-align: center; margin-bottom: 30px;">Consolidated Purchase Order</h2>
+                  <h3 style="font-size: 18px; margin-bottom: 20px;">${consolidatedPONumber}</h3>
+                  <table style="width: 100%; border-collapse: collapse; margin-bottom: 30px;">
+                    <thead>
+                      <tr style="background-color: #f5f5f5; border-bottom: 2px solid #333;">
+                        <th style="text-align: left; padding: 10px; border: 1px solid #ddd;">PO #</th>
+                        <th style="text-align: left; padding: 10px; border: 1px solid #ddd;">Customer</th>
+                        <th style="text-align: left; padding: 10px; border: 1px solid #ddd;">Product</th>
+                        <th style="text-align: right; padding: 10px; border: 1px solid #ddd;">Total</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      ${allPOs.map(po => `
+                        <tr>
+                          <td style="padding: 10px; border: 1px solid #ddd;">PO-${stripPO(po.number)}</td>
+                          <td style="padding: 10px; border: 1px solid #ddd;">${po.customer || "—"}</td>
+                          <td style="padding: 10px; border: 1px solid #ddd;">${(po.lines || []).map(l => l.desc || l.description || "").filter(Boolean).join(", ") || "N/A"}</td>
+                          <td style="padding: 10px; border: 1px solid #ddd; text-align: right;">$${(po.total || 0).toLocaleString()}</td>
+                        </tr>`).join("")}
+                      <tr style="background-color: #f5f5f5; font-weight: bold; border-top: 2px solid #333;">
+                        <td colspan="3" style="padding: 10px; border: 1px solid #ddd; text-align: right;">TOTAL:</td>
+                        <td style="padding: 10px; border: 1px solid #ddd; text-align: right;">$${groupTotal.toLocaleString()}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>`;
+              const el = document.createElement("div");
+              el.innerHTML = html;
+              html2pdf().set({
+                margin: 10,
+                filename: `ConsolidatedPO-${stripPO(editing.number)}.pdf`,
+                image: { type: "jpeg", quality: 0.98 },
+                html2canvas: { scale: 2 },
+                jsPDF: { orientation: "portrait", unit: "mm", format: "a4" },
+              }).from(el).save();
+            };
 
             // One tab per PO, plus a Summary tab
             const tabList = [
@@ -5177,11 +5274,12 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
 
             return (
               <Panel>
-                {/* Header — no PDF button here; use the main Download PDF button in the footer */}
-                <div style={{ marginBottom: 12 }}>
+                {/* Header */}
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
                   <h4 style={{ fontSize: 13, fontWeight: 700, color: "#4a3527", margin: 0 }}>
-                    {consolidatedPONumber} — {allPOs.length} POs consolidated
+                    {consolidatedPONumber} — {allPOs.length} POs
                   </h4>
+                  <Btn variant="secondary" size="sm" onClick={generateConsolidatedPDF}>📥 Download PDF</Btn>
                 </div>
 
                 {/* Tab bar — works on mobile and desktop */}
@@ -5651,153 +5749,17 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                 variant="ghost" 
                 onClick={() => {
                   try {
-                    const isConsolidatedPO = !isQuote && editing?.consolidatedMemberIds?.length > 0;
-
-                    if (isConsolidatedPO) {
-                      // ── Consolidated PO: build a fully custom multi-page PDF ──
-                      // Page 1: centred heading + first PO details
-                      // Page N: subsequent PO details (page-break-before each)
-                      const memberPOs = (db.pos || []).filter(p =>
-                        (editing.consolidatedMemberIds || []).includes(p.id)
-                      );
-                      const allPOs = [editing, ...memberPOs];
-                      const stripPO = (n) => String(n).replace(/^PO-?/i, "");
-                      const consolidatedNumber = `PO${stripPO(editing.number)}/${memberPOs.map(m => stripPO(m.number)).join("/")}`;
-
-                      const fmtAUD = (v) =>
-                        "$" + (Number(v) || 0).toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-
-                      const buildPOSection = (po) => {
-                        const poLines = po.id === editing.id ? lines : (po.lines || []);
-                        const poSubtotal = po.id === editing.id ? subtotal : (po.subtotal || 0);
-                        const poTotal   = po.id === editing.id ? total   : (po.total   || 0);
-                        const poDiscount = po.id === editing.id ? discountNum : (po.discount || 0);
-                        const poDate = po.date
-                          ? new Date(po.date).toLocaleDateString("en-AU", { day: "numeric", month: "long", year: "numeric" })
-                          : "";
-
-                        const rowsHtml = poLines.map(li => {
-                          const lineTotal = (Number(li.qty) || 0) * (Number(li.price) || 0);
-                          const noteBullets = li.lineNote
-                            ? li.lineNote.split("\n").map(b => b.trim()).filter(Boolean)
-                                .map(b => `<li style="font-size:11px;color:#6b5240;">${b}</li>`).join("")
-                            : "";
-                          return `
-                            <tr>
-                              <td>${li.desc || "(no description)"}
-                                ${noteBullets ? `<ul style="margin:4px 0 0 16px;padding:0;">${noteBullets}</ul>` : ""}
-                              </td>
-                              <td class="num">${li.qty ?? 1}</td>
-                              <td class="num">${fmtAUD(li.price)}</td>
-                              <td class="num">${fmtAUD(lineTotal)}</td>
-                            </tr>`;
-                        }).join("");
-
-                        return `
-                          <div style="margin-bottom:12px;">
-                            <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px;">
-                              <div>
-                                <div style="font-size:15px;font-weight:700;color:#4a3527;">PO-${stripPO(po.number)}</div>
-                                ${poDate ? `<div style="font-size:12px;color:#8a7a66;margin-top:2px;">${poDate}</div>` : ""}
-                              </div>
-                              <div style="text-align:right;">
-                                <div style="font-size:13px;font-weight:700;color:#4a3527;">Austral Motorhomes &amp; Platinum Pontoons</div>
-                                <div style="font-size:11px;color:#8a7a66;">Kunda Park, QLD</div>
-                              </div>
-                            </div>
-                            <div style="font-size:13px;margin-bottom:20px;line-height:1.8;">
-                              <div><b>Supplier:</b> ${party || "—"}</div>
-                              ${po.customer ? `<div><b>Customer:</b> ${po.customer}</div>` : ""}
-                              ${contact ? `<div><b>Contact:</b> ${contact}</div>` : ""}
-                              ${eta ? `<div><b>ETA:</b> ${eta}</div>` : ""}
-                            </div>
-                          </div>
-                          <table>
-                            <thead>
-                              <tr>
-                                <th>Description</th>
-                                <th class="num">Qty</th>
-                                <th class="num">Cost</th>
-                                <th class="num">Line Total</th>
-                              </tr>
-                            </thead>
-                            <tbody>${rowsHtml}</tbody>
-                          </table>
-                          <div class="totals">
-                            <div class="totals-row">
-                              <span>Subtotal (incl. GST)</span>
-                              <span>${fmtAUD(poSubtotal)}</span>
-                            </div>
-                            ${poDiscount > 0 ? `
-                            <div class="totals-row">
-                              <span>Adjustment</span>
-                              <span>${fmtAUD(poDiscount)}</span>
-                            </div>` : ""}
-                            <div class="totals-row grand">
-                              <span>Total (incl. GST)</span>
-                              <span>${fmtAUD(poTotal)}</span>
-                            </div>
-                          </div>
-                          ${po.notes ? `<div class="notes"><b>Notes:</b><br>${po.notes}</div>` : ""}
-                          <div class="footer">All prices include GST. &nbsp;${consolidatedNumber}</div>`;
-                      };
-
-                      const pagesHtml = allPOs.map((po, i) => `
-                        <div${i > 0 ? ' style="page-break-before:always;padding-top:40px;"' : ''}>
-                          ${buildPOSection(po)}
-                        </div>`).join("");
-
-                      const html = `<!DOCTYPE html>
-<html><head><meta charset="UTF-8">
-<style>
-* { margin:0; padding:0; box-sizing:border-box; }
-body { font-family:Georgia,serif; color:#2b2018; padding:40px; line-height:1.7; }
-.heading { text-align:center; padding-bottom:24px; border-bottom:3px solid #b5552b; margin-bottom:36px; }
-.heading h1 { font-size:26px; font-weight:700; color:#4a3527; margin-bottom:6px; }
-.heading h2 { font-size:16px; font-weight:600; color:#6b5240; letter-spacing:0.03em; }
-table { width:100%; border-collapse:collapse; margin:28px 0; }
-th { text-align:left; border-bottom:2px solid #b5552b; padding:10px 10px 10px 0; font-size:12px; font-weight:700; }
-th.num { text-align:right; }
-td { padding:12px 10px 12px 0; border-bottom:1px solid #e3d8c6; font-size:13px; vertical-align:top; }
-td.num { text-align:right; }
-.totals { margin:28px 0; }
-.totals-row { display:flex; justify-content:space-between; padding:8px 0; font-size:13px; }
-.grand { font-weight:800; font-size:16px; border-top:2px solid #b5552b; border-bottom:1px solid #b5552b; padding:14px 0; margin-top:14px; }
-.notes { margin-top:40px; padding-top:24px; border-top:1px solid #e3d8c6; font-size:12px; color:#6b5240; }
-.footer { margin-top:30px; font-size:10px; color:#8a7a66; }
-</style></head>
-<body>
-  <div class="heading">
-    <h1>Consolidated Purchase Order</h1>
-    <h2>${consolidatedNumber}</h2>
-  </div>
-  ${pagesHtml}
-</body></html>`;
-
-                      const worker = html2pdf().set({
-                        margin: 12,
-                        filename: `ConsolidatedPO-${stripPO(editing.number)}.pdf`,
-                        image: { type: "jpeg", quality: 0.98 },
-                        html2canvas: { scale: 2 },
-                        jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
-                        pagebreak: { mode: ["css", "legacy"] },
-                      }).from(html, "string");
-
-                      if (isMobile) {
-                        worker.outputPdf("blob").then((blob) => {
-                          window.open(URL.createObjectURL(blob), "_blank");
-                        }).catch((e) => alert("PDF error: " + (e?.message || e)));
-                      } else {
-                        worker.save().catch((e) => alert("PDF error: " + (e?.message || e)));
-                      }
-                      return;
-                    }
-
-                    // ── Standard (non-consolidated) PDF ── uses the live preview clone
+                    // Clone the preview and explicitly remove every .no-print element
+                    // (gross profit, internal-only notes, etc.) from the clone before
+                    // building the HTML string. This is a certain fix, unlike relying
+                    // on the .no-print CSS rule alone — .remove() guarantees the node
+                    // is gone from the resulting HTML, with no dependency on whether
+                    // html2canvas's rendering pipeline honours display:none in every case.
                     const clone = printRef.current ? printRef.current.cloneNode(true) : null;
                     if (clone) {
                       clone.querySelectorAll(".no-print").forEach((el) => el.remove());
                       clone.querySelectorAll("[data-no-print]").forEach((el) => el.remove());
+                      // Also strip any element whose text starts with "(" (internal notes)
                       clone.querySelectorAll("div").forEach((el) => {
                         if (el.textContent.trim().startsWith("(Gross profit")) el.remove();
                       });
@@ -5875,6 +5837,11 @@ ${clone?.innerHTML || ""}
               {isQuote && editing.status === "Accepted" && onGeneratePOs && (
                 <Btn variant="primary" onClick={() => onGeneratePOs(editing)}>
                   Generate POs
+                </Btn>
+              )}
+              {isQuote && editing.status === "Accepted" && (
+                <Btn variant="secondary" onClick={() => setShowPaymentModal(true)}>
+                  💳 Payment Milestones
                 </Btn>
               )}
               {!isQuote && editing.quoteId && openRecord && (
@@ -7681,6 +7648,7 @@ function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOp
           status: "Deposit",
           source: prospect.source || "",
           notes: `Converted from prospect.${prospect.notes ? " " + prospect.notes : ""}`,
+          activities: prospect.activities || [],  // Copy activities from prospect
         };
         const createPayload = toSupabaseFormat(newCustomerLocal, "customers");
         delete createPayload.id;
@@ -7689,6 +7657,8 @@ function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOp
         const newCustomer = { ...newCustomerLocal, ...fromSupabaseFormat(savedRow, "customers"), id: savedRow.id };
 
         // Remove the prospect from Supabase now that they're a customer
+        console.log("📋 Converting prospect to customer:", prospect.name);
+        console.log("  Activities being copied:", prospect.activities?.length || 0, "activities");
         await supabaseREST("DELETE", `crm_prospects?id=eq.${prospect.id}`);
 
         // Retroactively link any existing quotes for this prospect (matched by
