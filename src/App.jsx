@@ -5154,6 +5154,43 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
             </Panel>
           )}
 
+          {/* Payment Schedule for Accepted Quotes */}
+          {isQuote && !isNew && editing.status === "Accepted" && paymentMilestones.filter(m => m.due || m.amount).length > 0 && (
+            <Panel>
+              <h4 style={{ fontSize: 13, fontWeight: 700, color: "#4a3527", margin: "0 0 12px" }}>
+                Payment Schedule
+              </h4>
+              <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
+                {paymentMilestones.filter(m => m.due || m.amount).map((m, i) => (
+                  <div key={i} style={{
+                    display: "flex", justifyContent: "space-between", alignItems: "center",
+                    padding: "8px 0", borderBottom: "1px solid #f0e8d9",
+                  }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      {m.paid && (
+                        <span style={{ fontSize: 11, background: "#d4edda", color: "#2d7a4f", borderRadius: 3, padding: "1px 6px", fontWeight: 600 }}>PAID</span>
+                      )}
+                      <span style={{ fontSize: 12 }}>
+                        {m.due ? new Date(m.due).toLocaleDateString("en-AU") : "Date TBC"}
+                      </span>
+                    </div>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: m.paid ? "#2d7a4f" : "#b5552b" }}>
+                      {m.amount ? `$${parseFloat(m.amount).toLocaleString()}` : "Amount TBC"}
+                    </span>
+                  </div>
+                ))}
+                {paymentMilestones.filter(m => m.due || m.amount).length > 1 && (
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0 2px", borderTop: "2px solid #b5552b", marginTop: 4 }}>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: "#4a3527" }}>Total</span>
+                    <span style={{ fontSize: 14, fontWeight: 700, color: "#b5552b" }}>
+                      ${paymentMilestones.filter(m => m.amount).reduce((s, m) => s + (parseFloat(m.amount) || 0), 0).toLocaleString("en-AU", { minimumFractionDigits: 0 })}
+                    </span>
+                  </div>
+                )}
+              </div>
+            </Panel>
+          )}
+
           {!isNew && editing?.consolidatedMemberIds?.length > 0 && (() => {
             const members = (db.pos || []).filter(p => (editing.consolidatedMemberIds || []).includes(p.id));
             const allPOs = [editing, ...members];
