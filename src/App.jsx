@@ -375,6 +375,10 @@ function toSupabaseFormat(data, table) {
       delete copy.updatedAt;
       // number/party/customer/model/date/contact/status/discount/total/notes/lines/subtotal/gst/eta
       // already match their column names as-is.
+      // BUT: eta column only exists on purchase_orders, NOT on quotes
+      if (table === "quotes") {
+        delete copy.eta;  // Quotes don't have eta column in Supabase
+      }
       break;
   }
   return copy;
@@ -5157,6 +5161,59 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
             </Panel>
           )}
 
+          {/* Payment Schedule for Accepted Quotes */}
+          {isQuote && !isNew && editing.status === "Accepted" && paymentMilestones.filter(m => m.due || m.amount).length > 0 && (
+            <Panel>
+              <h4 style={{ fontSize: 13, fontWeight: 700, color: "#4a3527", margin: "0 0 12px" }}>
+                Payment Schedule
+              </h4>
+              <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
+                {paymentMilestones.filter(m => m.due || m.amount).map((m, i) => (
+                  <div key={i} style={{
+                    display: "flex", justifyContent: "space-between", alignItems: "center",
+                    padding: "8px 0", borderBottom: "1px solid #f0e8d9",
+                  }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      {m.paid && (
+                        <span style={{ fontSize: 11, background: "#d4edda", color: "#2d7a4f", borderRadius: 3, padding: "1px 6px", fontWeight: 600 }}>PAID</span>
+                      )}
+                      <span style={{ fontSize: 12 }}>
+                        {m.due ? new Date(m.due).toLocaleDateString("en-AU") : "Date TBC"}
+                      </span>
+                    </div>
+                    <span style={{ fontSize: 12, fontWeight: 600, color: m.paid ? "#2d7a4f" : "#b5552b" }}>
+                      {m.amount ? `$${parseFloat(m.amount).toLocaleString()}` : "Amount TBC"}
+                    </span>
+                  </div>
+                ))}
+                {paymentMilestones.filter(m => m.due || m.amount).length > 1 && (
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0 2px", borderTop: "2px solid #b5552b", marginTop: 4 }}>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: "#4a3527" }}>Total</span>
+                    <span style={{ fontSize: 14, fontWeight: 700, color: "#b5552b" }}>
+                      ${paymentMilestones.filter(m => m.amount).reduce((s, m) => s + (parseFloat(m.amount) || 0), 0).toLocaleString("en-AU", { minimumFractionDigits: 0 })}
+                    </span>
+                  </div>
+                )}
+              </div>
+            </Panel>
+          )}
+
+          {/* Prompt to add payment milestones for accepted quotes */}
+          {isQuote && !isNew && editing.status === "Accepted" && paymentMilestones.filter(m => m.due || m.amount).length === 0 && (
+            <Panel style={{ backgroundColor: "#fffbf0", borderLeft: "4px solid #d4a574" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                <div>
+                  <h4 style={{ fontSize: 13, fontWeight: 700, color: "#4a3527", margin: "0 0 6px" }}>
+                    📋 Add Payment Schedule
+                  </h4>
+                  <p style={{ fontSize: 12, color: "#6b5240", margin: 0 }}>
+                    Click "Payment Milestones" to add payment terms for this accepted quote.
+                  </p>
+                </div>
+              </div>
+            </Panel>
+          )}
+
           {!isNew && editing?.consolidatedMemberIds?.length > 0 && (() => {
             const members = (db.pos || []).filter(p => (editing.consolidatedMemberIds || []).includes(p.id));
             const allPOs = [editing, ...members];
@@ -5875,6 +5932,11 @@ ${clone?.innerHTML || ""}
               {isQuote && editing.status === "Accepted" && onGeneratePOs && (
                 <Btn variant="primary" onClick={() => onGeneratePOs(editing)}>
                   Generate POs
+                </Btn>
+              )}
+              {isQuote && editing.status === "Accepted" && (
+                <Btn variant="secondary" onClick={() => setShowPaymentModal(true)}>
+                  💳 Payment Milestones
                 </Btn>
               )}
               {!isQuote && editing.quoteId && openRecord && (
@@ -7681,6 +7743,7 @@ function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOp
           status: "Deposit",
           source: prospect.source || "",
           notes: `Converted from prospect.${prospect.notes ? " " + prospect.notes : ""}`,
+          activities: prospect.activities || [],  // Copy activities from prospect
         };
         const createPayload = toSupabaseFormat(newCustomerLocal, "customers");
         delete createPayload.id;
@@ -7689,6 +7752,8 @@ function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOp
         const newCustomer = { ...newCustomerLocal, ...fromSupabaseFormat(savedRow, "customers"), id: savedRow.id };
 
         // Remove the prospect from Supabase now that they're a customer
+        console.log("📋 Converting prospect to customer:", prospect.name);
+        console.log("  Activities being copied:", prospect.activities?.length || 0, "activities");
         await supabaseREST("DELETE", `crm_prospects?id=eq.${prospect.id}`);
 
         // Retroactively link any existing quotes for this prospect (matched by
