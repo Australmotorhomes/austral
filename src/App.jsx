@@ -373,12 +373,6 @@ function toSupabaseFormat(data, table) {
       // Strip camelCase timestamps — columns are created_at/updated_at (server defaults)
       delete copy.createdAt;
       delete copy.updatedAt;
-      // number/party/customer/model/date/contact/status/discount/total/notes/lines/subtotal/gst/eta
-      // already match their column names as-is.
-      // BUT: eta column only exists on purchase_orders, NOT on quotes
-      if (table === "quotes") {
-        delete copy.eta;  // Quotes don't have eta column in Supabase
-      }
       break;
   }
   return copy;
