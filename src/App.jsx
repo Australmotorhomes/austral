@@ -5203,10 +5203,27 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
           {!isNew && editing?.consolidatedMemberIds?.length > 0 && (() => {
             const members = (db.pos || []).filter(p => (editing.consolidatedMemberIds || []).includes(p.id));
             const allPOs = [editing, ...members];
-            // Use the live local-state `total` for the primary PO so the figure
-            // reflects the current lines, not the potentially stale Supabase value.
-            const poTotal = (p) => p.id === editing.id ? total : (p.total || 0);
-            const poSubtotalVal = (p) => p.id === editing.id ? subtotal : (p.subtotal || 0);
+
+            // Helper: sum a PO's lines regardless of whether they use qty/price or quantity/unitPrice/amount
+            const sumLines = (poLines) => (poLines || []).reduce((s, l) => {
+              const qty = Number(l.qty || l.quantity || 1);
+              const price = Number(l.price || l.unitPrice || 0);
+              const amt = Number(l.amount || 0);
+              return s + (amt || qty * price);
+            }, 0);
+
+            // For the primary PO use the live local-state total (reflects any unsaved edits);
+            // fall back to stored editing.total if lines compute to zero (different field names).
+            // For member POs use stored total, falling back to summing their lines.
+            const poTotal = (p) => {
+              if (p.id === editing.id) return total || editing.total || sumLines(lines);
+              return p.total || sumLines(p.lines);
+            };
+            const poSubtotalVal = (p) => {
+              if (p.id === editing.id) return subtotal || editing.subtotal || sumLines(lines);
+              return p.subtotal || sumLines(p.lines);
+            };
+
             const groupTotal = allPOs.reduce((s, p) => s + poTotal(p), 0);
 
             // Strip any leading "PO-" prefix so we can format as PO5006/5007, not POPO-5006/PO-5007
