@@ -5203,7 +5203,11 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
           {!isNew && editing?.consolidatedMemberIds?.length > 0 && (() => {
             const members = (db.pos || []).filter(p => (editing.consolidatedMemberIds || []).includes(p.id));
             const allPOs = [editing, ...members];
-            const groupTotal = allPOs.reduce((s, p) => s + (p.total || 0), 0);
+            // Use the live local-state `total` for the primary PO so the figure
+            // reflects the current lines, not the potentially stale Supabase value.
+            const poTotal = (p) => p.id === editing.id ? total : (p.total || 0);
+            const poSubtotalVal = (p) => p.id === editing.id ? subtotal : (p.subtotal || 0);
+            const groupTotal = allPOs.reduce((s, p) => s + poTotal(p), 0);
 
             // Strip any leading "PO-" prefix so we can format as PO5006/5007, not POPO-5006/PO-5007
             const stripPO = (n) => String(n).replace(/^PO-?/i, "");
@@ -5229,7 +5233,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                           <td style="padding: 10px; border: 1px solid #ddd;">PO-${stripPO(po.number)}</td>
                           <td style="padding: 10px; border: 1px solid #ddd;">${po.customer || "—"}</td>
                           <td style="padding: 10px; border: 1px solid #ddd;">${(po.lines || []).map(l => l.desc || l.description || "").filter(Boolean).join(", ") || "N/A"}</td>
-                          <td style="padding: 10px; border: 1px solid #ddd; text-align: right;">$${(po.total || 0).toLocaleString()}</td>
+                          <td style="padding: 10px; border: 1px solid #ddd; text-align: right;">$${poTotal(po).toLocaleString()}</td>
                         </tr>`).join("")}
                       <tr style="background-color: #f5f5f5; font-weight: bold; border-top: 2px solid #333;">
                         <td colspan="3" style="padding: 10px; border: 1px solid #ddd; text-align: right;">TOTAL:</td>
@@ -5303,7 +5307,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                           {po.customer && <span style={{ color: "#8a7a66" }}> — {po.customer}</span>}
                         </div>
                         <div style={{ textAlign: "right" }}>
-                          <div style={{ fontWeight: 600 }}>${(po.total || 0).toLocaleString()}</div>
+                          <div style={{ fontWeight: 600 }}>${poTotal(po).toLocaleString()}</div>
                           {po.customsClearance > 0 && <div style={{ fontSize: 11, color: "#8a7a66" }}>Customs: ${po.customsClearance.toLocaleString()}</div>}
                         </div>
                       </div>
@@ -5388,12 +5392,12 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                         ))}
                         <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 0 2px", borderTop: "2px solid #d4a574", marginTop: 6 }}>
                           <span style={{ fontWeight: 700, color: "#4a3527", fontSize: 12 }}>Subtotal</span>
-                          <span style={{ fontWeight: 700, color: "#4a3527", fontSize: 12 }}>${(po.subtotal || 0).toLocaleString()}</span>
+                          <span style={{ fontWeight: 700, color: "#4a3527", fontSize: 12 }}>${poSubtotalVal(po).toLocaleString()}</span>
                         </div>
-                        {po.total && po.total !== po.subtotal && (
+                        {poTotal(po) !== poSubtotalVal(po) && (
                           <div style={{ display: "flex", justifyContent: "space-between", paddingTop: 4 }}>
                             <span style={{ fontWeight: 700, color: "#b5552b", fontSize: 12 }}>Total</span>
-                            <span style={{ fontWeight: 700, color: "#b5552b", fontSize: 12 }}>${po.total.toLocaleString()}</span>
+                            <span style={{ fontWeight: 700, color: "#b5552b", fontSize: 12 }}>${poTotal(po).toLocaleString()}</span>
                           </div>
                         )}
                       </div>
