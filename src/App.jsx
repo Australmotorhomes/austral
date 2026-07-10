@@ -4082,9 +4082,10 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
                   <div style={{ fontSize: 14, fontWeight: 600, color: "#4a3527" }}>
                     #{d.number} · {d.party}
                   </div>
-                  <div style={{ fontSize: 12, color: "#8a7a66", marginTop: 2, display: "flex", gap: 8, alignItems: "center" }}>
+                  <div style={{ fontSize: 12, color: "#8a7a66", marginTop: 2, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                     <Badge tone={d.status.toLowerCase()}>{d.status}</Badge>
                     <span>{fmtMoney(d.total)}</span>
+                    {d.eta && <span>ETA {fmtDate(d.eta)}</span>}
                   </div>
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
@@ -4112,6 +4113,7 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
                   <th>Supplier</th>
                   <th>Reference</th>
                   <th>Date</th>
+                  <th>ETA</th>
                   <th className="num">Total (AUD)</th>
                   <th>Status</th>
                   <th></th>
@@ -4126,6 +4128,7 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
                     <td>{d.party}</td>
                     <td>{d.model ? <span className="muted">{d.model}</span> : <span className="muted">—</span>}</td>
                     <td className="muted">{fmtDate(d.date)}</td>
+                    <td className="muted">{d.eta ? fmtDate(d.eta) : <span className="muted">—</span>}</td>
                     <td className="num">{fmtMoney(d.total)}</td>
                     <td>
                       <Badge tone={d.status.toLowerCase()}>{d.status}</Badge>
@@ -4403,6 +4406,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
   const [consolidateSelected, setConsolidateSelected] = useState([]);
   const [showDetailedConsolidatedView, setShowDetailedConsolidatedView] = useState(false);
   const [consolidatedTab, setConsolidatedTab] = useState("details");
+  const [previewPoId, setPreviewPoId] = useState(editing?.id || null);
   const [showProfitSection, setShowProfitSection] = useState(false);
   const [paymentMilestones, setPaymentMilestones] = useState(
     editing?.paymentMilestones ? editing.paymentMilestones : []
@@ -5162,46 +5166,6 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
             const stripPO = (n) => String(n).replace(/^PO-?/i, "");
             const consolidatedPONumber = `PO${stripPO(editing.number)}/${members.map(m => stripPO(m.number)).join("/")}`;
 
-            const generateConsolidatedPDF = () => {
-              const html = `
-                <div style="font-family: Arial, sans-serif; padding: 20px; color: #333;">
-                  <h2 style="text-align: center; margin-bottom: 30px;">Consolidated Purchase Order</h2>
-                  <h3 style="font-size: 18px; margin-bottom: 20px;">${consolidatedPONumber}</h3>
-                  <table style="width: 100%; border-collapse: collapse; margin-bottom: 30px;">
-                    <thead>
-                      <tr style="background-color: #f5f5f5; border-bottom: 2px solid #333;">
-                        <th style="text-align: left; padding: 10px; border: 1px solid #ddd;">PO #</th>
-                        <th style="text-align: left; padding: 10px; border: 1px solid #ddd;">Customer</th>
-                        <th style="text-align: left; padding: 10px; border: 1px solid #ddd;">Product</th>
-                        <th style="text-align: right; padding: 10px; border: 1px solid #ddd;">Total</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      ${allPOs.map(po => `
-                        <tr>
-                          <td style="padding: 10px; border: 1px solid #ddd;">PO-${stripPO(po.number)}</td>
-                          <td style="padding: 10px; border: 1px solid #ddd;">${po.customer || "—"}</td>
-                          <td style="padding: 10px; border: 1px solid #ddd;">${(po.lines || []).map(l => l.desc || l.description || "").filter(Boolean).join(", ") || "N/A"}</td>
-                          <td style="padding: 10px; border: 1px solid #ddd; text-align: right;">$${(po.total || 0).toLocaleString()}</td>
-                        </tr>`).join("")}
-                      <tr style="background-color: #f5f5f5; font-weight: bold; border-top: 2px solid #333;">
-                        <td colspan="3" style="padding: 10px; border: 1px solid #ddd; text-align: right;">TOTAL:</td>
-                        <td style="padding: 10px; border: 1px solid #ddd; text-align: right;">$${groupTotal.toLocaleString()}</td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>`;
-              const el = document.createElement("div");
-              el.innerHTML = html;
-              html2pdf().set({
-                margin: 10,
-                filename: `ConsolidatedPO-${stripPO(editing.number)}.pdf`,
-                image: { type: "jpeg", quality: 0.98 },
-                html2canvas: { scale: 2 },
-                jsPDF: { orientation: "portrait", unit: "mm", format: "a4" },
-              }).from(el).save();
-            };
-
             // One tab per PO, plus a Summary tab
             const tabList = [
               { id: "summary", label: "Summary" },
@@ -5213,12 +5177,11 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
 
             return (
               <Panel>
-                {/* Header */}
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
+                {/* Header — no PDF button here; use the main Download PDF button in the footer */}
+                <div style={{ marginBottom: 12 }}>
                   <h4 style={{ fontSize: 13, fontWeight: 700, color: "#4a3527", margin: 0 }}>
-                    {consolidatedPONumber} — {allPOs.length} POs
+                    {consolidatedPONumber} — {allPOs.length} POs consolidated
                   </h4>
-                  <Btn variant="secondary" size="sm" onClick={generateConsolidatedPDF}>📥 Download PDF</Btn>
                 </div>
 
                 {/* Tab bar — works on mobile and desktop */}
@@ -5390,134 +5353,181 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
         {/* ---------------- LIVE PREVIEW SIDE ---------------- */}
         <div>
           <div className="doc-paper" ref={printRef} style={{ position: "sticky", top: 0 }}>
-            <div className="doc-header">
-              <div style={{ minWidth: 0 }}>
-                <h2 style={{ fontSize: isMobile ? 20 : 22, fontWeight: 700, marginBottom: 6 }}>
-                  {isQuote ? "Customer Quote" : "Purchase Order"}
-                </h2>
-                <h3 style={{ fontSize: 15, fontWeight: 600, color: "#6b5240", marginBottom: 8, wordBreak: "break-word", overflowWrap: "break-word" }}>
-                  {isNew ? "Draft — not yet saved" : (() => {
-                    if (!isQuote && editing?.consolidatedMemberIds?.length > 0) {
-                      const members = (db.pos || []).filter(p => (editing.consolidatedMemberIds || []).includes(p.id));
-                      const stripPO = (n) => String(n).replace(/^PO-?/i, "");
-                      return `PO${stripPO(editing.number)}/${members.map(m => stripPO(m.number)).join("/")}`;
-                    }
-                    return `#${editing.number}`;
-                  })()}
-                </h3>
-                <div style={{ color: "#8a7a66", fontSize: 13 }}>
-                  {isNew ? "" : fmtDate(date)}
-                </div>
-              </div>
-              <div style={{ textAlign: "right" }}>
-                <strong style={{ fontFamily: "Georgia,serif", color: "#4a3527" }}>Austral Motorhomes & Platinum Pontoons</strong>
-                <br />
-                <span className="muted" style={{ fontSize: 12 }}>
-                  Kunda Park, QLD
-                </span>
-              </div>
-            </div>
-            <div className="doc-meta">
-              {isQuote ? (
-                <div style={{ textAlign: "left" }}>
-                  <div style={{ fontWeight: 700, fontSize: 15 }}>{party || "—"}</div>
-                  {contact && (
-                    <div style={{ fontSize: 13, color: "#6b5240", marginTop: 2 }}>{contact}</div>
-                  )}
-                  <div style={{ marginTop: 32 }} />
-                </div>
-              ) : (
-                <>
-                  <div>
-                    <b>Supplier:</b> {party || "—"}
-                  </div>
-                  {model && (
-                    <div>
-                      <b>Reference:</b> {model}
-                    </div>
-                  )}
-                  {contact && (
-                    <div>
-                      <b>Contact:</b> {contact}
-                    </div>
-                  )}
-                  {eta && (
-                    <div>
-                      <b>ETA:</b> {fmtDate(eta)}
-                    </div>
-                  )}
-                </>
-              )}
-            </div>
-            {lines.length === 0 ? (
-              <p className="muted" style={{ fontSize: 13 }}>
-                Add line items on the left to see them appear here.
-              </p>
-            ) : (
-              <table>
-                <thead>
-                  <tr>
-                    <th>Description</th>
-                    <th className="num">Qty</th>
-                    <th className="num">{isQuote ? "Price" : "Cost"}</th>
-                    <th className="num">Line total</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {lines.map((li, idx) => (
-                    <React.Fragment key={idx}>
-                      <tr>
-                        <td>{li.desc || <span className="muted">(no description)</span>}</td>
-                        <td className="num">{li.qty}</td>
-                        <td className="num">{fmtMoney(li.price, li.currency || "AUD")}</td>
-                        <td className="num">{fmtMoney(lineAudTotal(li), "AUD")}</td>
-                      </tr>
-                      {li.lineNote && li.lineNote.trim() && (() => {
-                        const bullets = li.lineNote.split("\n").map(l => l.trim()).filter(Boolean);
-                        return (
-                          <tr>
-                            <td colSpan={4} style={{ paddingLeft: 24, paddingTop: 4, paddingBottom: 8, borderTop: "none" }}>
-                              <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12, color: "#6b5240", lineHeight: 1.7 }}>
-                                {bullets.map((b, bi) => (
-                                  <li key={bi}>{b}</li>
-                                ))}
-                              </ul>
-                            </td>
-                          </tr>
-                        );
-                      })()}
-                    </React.Fragment>
-                  ))}
-                </tbody>
-              </table>
-            )}
-            <div style={{ marginTop: 30, paddingTop: 20, borderTop: "2px solid #e3d8c6" }}>
-              <div className="totals-row">
-                <span>Subtotal (incl. GST)</span>
-                <span>{fmtMoney(subtotal, "AUD")}</span>
-              </div>
-              {discountNum > 0 && (
-                <div className="totals-row" style={{ marginTop: 12 }}>
-                  <span>{isQuote ? "Discount" : "Adjustment"}</span>
-                  <span>{(isQuote ? "-" : "") + fmtMoney(discountNum, "AUD")}</span>
-                </div>
-              )}
-              <div className="totals-row grand" style={{ marginTop: 18 }}>
-                <span>Total (incl. GST)</span>
-                <span>{fmtMoney(total, "AUD")}</span>
-              </div>
+            {(() => {
+              const isConsolidated = !isQuote && !isNew && editing?.consolidatedMemberIds?.length > 0;
+              const consolidatedMembers = isConsolidated
+                ? (db.pos || []).filter(p => (editing.consolidatedMemberIds || []).includes(p.id))
+                : [];
+              const allConsolidatedPOs = isConsolidated ? [editing, ...consolidatedMembers] : [];
+              const stripPO = (n) => String(n).replace(/^PO-?/i, "");
 
-              {isQuote && (
-                <div className="no-print" style={{ borderTop: "1px solid #e3d8c6", marginTop: 20, paddingTop: 12, fontSize: 11, color: "#8a7a66" }}>
-                  (Gross profit details for internal use only)
-                </div>
-              )}
-              {isQuote && !hasCostData && lines.length > 0 && (
-                <div className="no-print" style={{ fontSize: 11, color: "#8a7a66", marginTop: 4 }}>
-                  Gross profit isn't shown for manually-added lines with no linked price book cost.
-                </div>
-              )}
-            </div>
+              // Which PO is active in the preview? Default to the primary.
+              const activePo = isConsolidated
+                ? (allConsolidatedPOs.find(p => p.id === previewPoId) || allConsolidatedPOs[0])
+                : null;
+
+              // Lines: use live local state for the primary PO (reflects unsaved edits),
+              // stored lines for member POs
+              const previewLines = isConsolidated
+                ? (activePo?.id === editing?.id
+                    ? lines
+                    : (activePo?.lines || []).map(l => ({ currency: "AUD", ...l })))
+                : lines;
+
+              const previewSubtotal = isConsolidated && activePo?.id !== editing?.id
+                ? (activePo?.subtotal || 0) : subtotal;
+              const previewTotal = isConsolidated && activePo?.id !== editing?.id
+                ? (activePo?.total || 0) : total;
+              const previewDiscount = isConsolidated && activePo?.id !== editing?.id
+                ? (activePo?.discount || 0) : discountNum;
+
+              return (
+                <>
+                  <div className="doc-header">
+                    <div style={{ minWidth: 0 }}>
+                      <h2 style={{ fontSize: isMobile ? 20 : 22, fontWeight: 700, marginBottom: 6 }}>
+                        {isQuote ? "Customer Quote" : "Purchase Order"}
+                      </h2>
+
+                      {isConsolidated ? (
+                        /* Tab strip replaces the PO number for consolidated POs */
+                        <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginBottom: 8 }}>
+                          {allConsolidatedPOs.map(po => {
+                            const isActive = (previewPoId || allConsolidatedPOs[0]?.id) === po.id;
+                            return (
+                              <button
+                                key={po.id}
+                                onClick={() => setPreviewPoId(po.id)}
+                                style={{
+                                  padding: isMobile ? "5px 9px" : "6px 13px",
+                                  fontSize: isMobile ? 11 : 12,
+                                  fontWeight: isActive ? 700 : 500,
+                                  background: isActive ? "#6b5240" : "#f0e8d9",
+                                  color: isActive ? "#fff" : "#6b5240",
+                                  border: "1px solid " + (isActive ? "#6b5240" : "#d4c4b0"),
+                                  borderRadius: 4,
+                                  cursor: "pointer",
+                                  whiteSpace: "nowrap",
+                                  letterSpacing: "0.01em",
+                                }}
+                              >
+                                PO-{stripPO(po.number)}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        <h3 style={{ fontSize: 15, fontWeight: 600, color: "#6b5240", marginBottom: 8, wordBreak: "break-word", overflowWrap: "break-word" }}>
+                          {isNew ? "Draft — not yet saved" : `#${editing.number}`}
+                        </h3>
+                      )}
+
+                      <div style={{ color: "#8a7a66", fontSize: 13 }}>
+                        {isNew ? "" : fmtDate(isConsolidated ? (activePo?.date || date) : date)}
+                      </div>
+                    </div>
+                    <div style={{ textAlign: "right" }}>
+                      <strong style={{ fontFamily: "Georgia,serif", color: "#4a3527" }}>Austral Motorhomes & Platinum Pontoons</strong>
+                      <br />
+                      <span className="muted" style={{ fontSize: 12 }}>
+                        Kunda Park, QLD
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="doc-meta">
+                    {isQuote ? (
+                      <div style={{ textAlign: "left" }}>
+                        <div style={{ fontWeight: 700, fontSize: 15 }}>{party || "—"}</div>
+                        {contact && (
+                          <div style={{ fontSize: 13, color: "#6b5240", marginTop: 2 }}>{contact}</div>
+                        )}
+                        <div style={{ marginTop: 32 }} />
+                      </div>
+                    ) : (
+                      <>
+                        <div><b>Supplier:</b> {party || "—"}</div>
+                        {isConsolidated && activePo?.customer && (
+                          <div><b>Customer:</b> {activePo.customer}</div>
+                        )}
+                        {model && <div><b>Reference:</b> {model}</div>}
+                        {contact && <div><b>Contact:</b> {contact}</div>}
+                        {eta && <div><b>ETA:</b> {fmtDate(eta)}</div>}
+                      </>
+                    )}
+                  </div>
+
+                  {previewLines.length === 0 ? (
+                    <p className="muted" style={{ fontSize: 13 }}>
+                      {isConsolidated ? "No line items on this PO." : "Add line items on the left to see them appear here."}
+                    </p>
+                  ) : (
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>Description</th>
+                          <th className="num">Qty</th>
+                          <th className="num">{isQuote ? "Price" : "Cost"}</th>
+                          <th className="num">Line total</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {previewLines.map((li, idx) => (
+                          <React.Fragment key={idx}>
+                            <tr>
+                              <td>{li.desc || <span className="muted">(no description)</span>}</td>
+                              <td className="num">{li.qty}</td>
+                              <td className="num">{fmtMoney(li.price, li.currency || "AUD")}</td>
+                              <td className="num">{fmtMoney(lineAudTotal(li), "AUD")}</td>
+                            </tr>
+                            {li.lineNote && li.lineNote.trim() && (() => {
+                              const bullets = li.lineNote.split("\n").map(l => l.trim()).filter(Boolean);
+                              return (
+                                <tr>
+                                  <td colSpan={4} style={{ paddingLeft: 24, paddingTop: 4, paddingBottom: 8, borderTop: "none" }}>
+                                    <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12, color: "#6b5240", lineHeight: 1.7 }}>
+                                      {bullets.map((b, bi) => <li key={bi}>{b}</li>)}
+                                    </ul>
+                                  </td>
+                                </tr>
+                              );
+                            })()}
+                          </React.Fragment>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+
+                  <div style={{ marginTop: 30, paddingTop: 20, borderTop: "2px solid #e3d8c6" }}>
+                    <div className="totals-row">
+                      <span>Subtotal (incl. GST)</span>
+                      <span>{fmtMoney(previewSubtotal, "AUD")}</span>
+                    </div>
+                    {previewDiscount > 0 && (
+                      <div className="totals-row" style={{ marginTop: 12 }}>
+                        <span>{isQuote ? "Discount" : "Adjustment"}</span>
+                        <span>{(isQuote ? "-" : "") + fmtMoney(previewDiscount, "AUD")}</span>
+                      </div>
+                    )}
+                    <div className="totals-row grand" style={{ marginTop: 18 }}>
+                      <span>Total (incl. GST)</span>
+                      <span>{fmtMoney(previewTotal, "AUD")}</span>
+                    </div>
+
+                    {isQuote && (
+                      <div className="no-print" style={{ borderTop: "1px solid #e3d8c6", marginTop: 20, paddingTop: 12, fontSize: 11, color: "#8a7a66" }}>
+                        (Gross profit details for internal use only)
+                      </div>
+                    )}
+                    {isQuote && !hasCostData && lines.length > 0 && (
+                      <div className="no-print" style={{ fontSize: 11, color: "#8a7a66", marginTop: 4 }}>
+                        Gross profit isn't shown for manually-added lines with no linked price book cost.
+                      </div>
+                    )}
+                  </div>
+                </>
+              );
+            })()}
 
 
 
@@ -5641,17 +5651,153 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                 variant="ghost" 
                 onClick={() => {
                   try {
-                    // Clone the preview and explicitly remove every .no-print element
-                    // (gross profit, internal-only notes, etc.) from the clone before
-                    // building the HTML string. This is a certain fix, unlike relying
-                    // on the .no-print CSS rule alone — .remove() guarantees the node
-                    // is gone from the resulting HTML, with no dependency on whether
-                    // html2canvas's rendering pipeline honours display:none in every case.
+                    const isConsolidatedPO = !isQuote && editing?.consolidatedMemberIds?.length > 0;
+
+                    if (isConsolidatedPO) {
+                      // ── Consolidated PO: build a fully custom multi-page PDF ──
+                      // Page 1: centred heading + first PO details
+                      // Page N: subsequent PO details (page-break-before each)
+                      const memberPOs = (db.pos || []).filter(p =>
+                        (editing.consolidatedMemberIds || []).includes(p.id)
+                      );
+                      const allPOs = [editing, ...memberPOs];
+                      const stripPO = (n) => String(n).replace(/^PO-?/i, "");
+                      const consolidatedNumber = `PO${stripPO(editing.number)}/${memberPOs.map(m => stripPO(m.number)).join("/")}`;
+
+                      const fmtAUD = (v) =>
+                        "$" + (Number(v) || 0).toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+                      const buildPOSection = (po) => {
+                        const poLines = po.id === editing.id ? lines : (po.lines || []);
+                        const poSubtotal = po.id === editing.id ? subtotal : (po.subtotal || 0);
+                        const poTotal   = po.id === editing.id ? total   : (po.total   || 0);
+                        const poDiscount = po.id === editing.id ? discountNum : (po.discount || 0);
+                        const poDate = po.date
+                          ? new Date(po.date).toLocaleDateString("en-AU", { day: "numeric", month: "long", year: "numeric" })
+                          : "";
+
+                        const rowsHtml = poLines.map(li => {
+                          const lineTotal = (Number(li.qty) || 0) * (Number(li.price) || 0);
+                          const noteBullets = li.lineNote
+                            ? li.lineNote.split("\n").map(b => b.trim()).filter(Boolean)
+                                .map(b => `<li style="font-size:11px;color:#6b5240;">${b}</li>`).join("")
+                            : "";
+                          return `
+                            <tr>
+                              <td>${li.desc || "(no description)"}
+                                ${noteBullets ? `<ul style="margin:4px 0 0 16px;padding:0;">${noteBullets}</ul>` : ""}
+                              </td>
+                              <td class="num">${li.qty ?? 1}</td>
+                              <td class="num">${fmtAUD(li.price)}</td>
+                              <td class="num">${fmtAUD(lineTotal)}</td>
+                            </tr>`;
+                        }).join("");
+
+                        return `
+                          <div style="margin-bottom:12px;">
+                            <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:16px;">
+                              <div>
+                                <div style="font-size:15px;font-weight:700;color:#4a3527;">PO-${stripPO(po.number)}</div>
+                                ${poDate ? `<div style="font-size:12px;color:#8a7a66;margin-top:2px;">${poDate}</div>` : ""}
+                              </div>
+                              <div style="text-align:right;">
+                                <div style="font-size:13px;font-weight:700;color:#4a3527;">Austral Motorhomes &amp; Platinum Pontoons</div>
+                                <div style="font-size:11px;color:#8a7a66;">Kunda Park, QLD</div>
+                              </div>
+                            </div>
+                            <div style="font-size:13px;margin-bottom:20px;line-height:1.8;">
+                              <div><b>Supplier:</b> ${party || "—"}</div>
+                              ${po.customer ? `<div><b>Customer:</b> ${po.customer}</div>` : ""}
+                              ${contact ? `<div><b>Contact:</b> ${contact}</div>` : ""}
+                              ${eta ? `<div><b>ETA:</b> ${eta}</div>` : ""}
+                            </div>
+                          </div>
+                          <table>
+                            <thead>
+                              <tr>
+                                <th>Description</th>
+                                <th class="num">Qty</th>
+                                <th class="num">Cost</th>
+                                <th class="num">Line Total</th>
+                              </tr>
+                            </thead>
+                            <tbody>${rowsHtml}</tbody>
+                          </table>
+                          <div class="totals">
+                            <div class="totals-row">
+                              <span>Subtotal (incl. GST)</span>
+                              <span>${fmtAUD(poSubtotal)}</span>
+                            </div>
+                            ${poDiscount > 0 ? `
+                            <div class="totals-row">
+                              <span>Adjustment</span>
+                              <span>${fmtAUD(poDiscount)}</span>
+                            </div>` : ""}
+                            <div class="totals-row grand">
+                              <span>Total (incl. GST)</span>
+                              <span>${fmtAUD(poTotal)}</span>
+                            </div>
+                          </div>
+                          ${po.notes ? `<div class="notes"><b>Notes:</b><br>${po.notes}</div>` : ""}
+                          <div class="footer">All prices include GST. &nbsp;${consolidatedNumber}</div>`;
+                      };
+
+                      const pagesHtml = allPOs.map((po, i) => `
+                        <div${i > 0 ? ' style="page-break-before:always;padding-top:40px;"' : ''}>
+                          ${buildPOSection(po)}
+                        </div>`).join("");
+
+                      const html = `<!DOCTYPE html>
+<html><head><meta charset="UTF-8">
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family:Georgia,serif; color:#2b2018; padding:40px; line-height:1.7; }
+.heading { text-align:center; padding-bottom:24px; border-bottom:3px solid #b5552b; margin-bottom:36px; }
+.heading h1 { font-size:26px; font-weight:700; color:#4a3527; margin-bottom:6px; }
+.heading h2 { font-size:16px; font-weight:600; color:#6b5240; letter-spacing:0.03em; }
+table { width:100%; border-collapse:collapse; margin:28px 0; }
+th { text-align:left; border-bottom:2px solid #b5552b; padding:10px 10px 10px 0; font-size:12px; font-weight:700; }
+th.num { text-align:right; }
+td { padding:12px 10px 12px 0; border-bottom:1px solid #e3d8c6; font-size:13px; vertical-align:top; }
+td.num { text-align:right; }
+.totals { margin:28px 0; }
+.totals-row { display:flex; justify-content:space-between; padding:8px 0; font-size:13px; }
+.grand { font-weight:800; font-size:16px; border-top:2px solid #b5552b; border-bottom:1px solid #b5552b; padding:14px 0; margin-top:14px; }
+.notes { margin-top:40px; padding-top:24px; border-top:1px solid #e3d8c6; font-size:12px; color:#6b5240; }
+.footer { margin-top:30px; font-size:10px; color:#8a7a66; }
+</style></head>
+<body>
+  <div class="heading">
+    <h1>Consolidated Purchase Order</h1>
+    <h2>${consolidatedNumber}</h2>
+  </div>
+  ${pagesHtml}
+</body></html>`;
+
+                      const worker = html2pdf().set({
+                        margin: 12,
+                        filename: `ConsolidatedPO-${stripPO(editing.number)}.pdf`,
+                        image: { type: "jpeg", quality: 0.98 },
+                        html2canvas: { scale: 2 },
+                        jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
+                        pagebreak: { mode: ["css", "legacy"] },
+                      }).from(html, "string");
+
+                      if (isMobile) {
+                        worker.outputPdf("blob").then((blob) => {
+                          window.open(URL.createObjectURL(blob), "_blank");
+                        }).catch((e) => alert("PDF error: " + (e?.message || e)));
+                      } else {
+                        worker.save().catch((e) => alert("PDF error: " + (e?.message || e)));
+                      }
+                      return;
+                    }
+
+                    // ── Standard (non-consolidated) PDF ── uses the live preview clone
                     const clone = printRef.current ? printRef.current.cloneNode(true) : null;
                     if (clone) {
                       clone.querySelectorAll(".no-print").forEach((el) => el.remove());
                       clone.querySelectorAll("[data-no-print]").forEach((el) => el.remove());
-                      // Also strip any element whose text starts with "(" (internal notes)
                       clone.querySelectorAll("div").forEach((el) => {
                         if (el.textContent.trim().startsWith("(Gross profit")) el.remove();
                       });
