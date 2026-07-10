@@ -7583,6 +7583,7 @@ function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOp
           status: "Deposit",
           source: prospect.source || "",
           notes: `Converted from prospect.${prospect.notes ? " " + prospect.notes : ""}`,
+          activities: prospect.activities || [],  // Copy activities from prospect
         };
         const createPayload = toSupabaseFormat(newCustomerLocal, "customers");
         delete createPayload.id;
@@ -7591,6 +7592,8 @@ function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOp
         const newCustomer = { ...newCustomerLocal, ...fromSupabaseFormat(savedRow, "customers"), id: savedRow.id };
 
         // Remove the prospect from Supabase now that they're a customer
+        console.log("📋 Converting prospect to customer:", prospect.name);
+        console.log("  Activities being copied:", prospect.activities?.length || 0, "activities");
         await supabaseREST("DELETE", `crm_prospects?id=eq.${prospect.id}`);
 
         // Retroactively link any existing quotes for this prospect (matched by
