@@ -5195,6 +5195,22 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
             </Panel>
           )}
 
+          {/* Prompt to add payment milestones for accepted quotes */}
+          {isQuote && !isNew && editing.status === "Accepted" && paymentMilestones.filter(m => m.due || m.amount).length === 0 && (
+            <Panel style={{ backgroundColor: "#fffbf0", borderLeft: "4px solid #d4a574" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+                <div>
+                  <h4 style={{ fontSize: 13, fontWeight: 700, color: "#4a3527", margin: "0 0 6px" }}>
+                    📋 Add Payment Schedule
+                  </h4>
+                  <p style={{ fontSize: 12, color: "#6b5240", margin: 0 }}>
+                    Click "Payment Milestones" to add payment terms for this accepted quote.
+                  </p>
+                </div>
+              </div>
+            </Panel>
+          )}
+
           {!isNew && editing?.consolidatedMemberIds?.length > 0 && (() => {
             const members = (db.pos || []).filter(p => (editing.consolidatedMemberIds || []).includes(p.id));
             const allPOs = [editing, ...members];
@@ -5818,6 +5834,11 @@ ${clone?.innerHTML || ""}
               {isQuote && editing.status === "Accepted" && onGeneratePOs && (
                 <Btn variant="primary" onClick={() => onGeneratePOs(editing)}>
                   Generate POs
+                </Btn>
+              )}
+              {isQuote && editing.status === "Accepted" && (
+                <Btn variant="secondary" onClick={() => setShowPaymentModal(true)}>
+                  💳 Payment Milestones
                 </Btn>
               )}
               {!isQuote && editing.quoteId && openRecord && (
