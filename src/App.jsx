@@ -5751,8 +5751,6 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
               {lines.some((l) => (l.currency || "AUD") === "USD") && ` USD lines converted at 1 USD = ${rate.toFixed(4)} AUD.`}
               {isQuote && " Quote valid for 7 days."}
             </div>
-            {notes && (
-            )}
           </div>
         </div>
       </div>
