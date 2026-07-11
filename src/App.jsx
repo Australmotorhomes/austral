@@ -4545,6 +4545,17 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
     }
   }
 
+  async function savePOSupplierNote(poId, newSupplierNote) {
+    // Save supplier note for a specific PO
+    try {
+      const update = toSupabaseFormat({ supplierNote: newSupplierNote, updatedAt: todayISO() }, "purchase_orders");
+      await supabaseRESTWithSchemaFallback("PATCH", `purchase_orders?id=eq.${poId}`, update);
+      console.log(`✅ Saved supplier note for PO ${poId}`);
+    } catch (err) {
+      console.error("Error saving PO supplier note:", err);
+    }
+  }
+
   function handleSave() {
     const trimmedParty = party.trim();
     if (!trimmedParty) {
@@ -4864,16 +4875,6 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                 {isQuote ? "Will be copied to POs created from this quote" : "Required for all purchase orders"}
               </p>
             </Field>
-            {!isQuote && (
-              <Field label="Supplier Notes (Instructions to supplier)">
-                <textarea
-                  style={{ ...inputStyle, minHeight: 60, resize: "vertical" }}
-                  placeholder="Optional - Instructions or notes for the supplier"
-                  value={supplierNote}
-                  onChange={(e) => setSupplierNote(e.target.value)}
-                />
-              </Field>
-            )}
           </Panel>
 
           <Panel>
@@ -5279,18 +5280,19 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                             </tr>` : ""}
                         </tbody>
                       </table>
-                      
-                      ${po.notes ? `
-                        <div style="margin-bottom: 20px; padding: 10px; background-color: #f9f5f0; border-left: 3px solid #d4a574;">
-                          <h4 style="margin: 0 0 5px 0; font-size: 12px;">Notes</h4>
-                          <p style="margin: 0; font-size: 12px; white-space: pre-wrap;">${po.notes}</p>
-                        </div>` : ""}
-                      
-                      ${po.supplierNote ? `
-                        <div style="margin-bottom: 20px; padding: 10px; background-color: #f0f8ff; border-left: 3px solid #4a7ba7;">
-                          <h4 style="margin: 0 0 5px 0; font-size: 12px;">Supplier Instructions</h4>
-                          <p style="margin: 0; font-size: 12px; white-space: pre-wrap;">${po.supplierNote}</p>
-                        </div>` : ""}
+                      ${idx === allPOs.length - 1 ? `
+                        ${po.notes ? `
+                          <div style="margin-bottom: 20px; padding: 10px; background-color: #f9f5f0; border-left: 3px solid #d4a574;">
+                            <h4 style="margin: 0 0 5px 0; font-size: 12px;">Notes</h4>
+                            <p style="margin: 0; font-size: 12px; white-space: pre-wrap;">${po.notes}</p>
+                          </div>` : ""}
+                        
+                        ${po.supplierNote ? `
+                          <div style="margin-bottom: 20px; padding: 10px; background-color: #f0f8ff; border-left: 3px solid #4a7ba7;">
+                            <h4 style="margin: 0 0 5px 0; font-size: 12px; color: #2c5aa0;">Supplier Instructions</h4>
+                            <p style="margin: 0; font-size: 12px; white-space: pre-wrap; color: #1a3a6e;">${po.supplierNote}</p>
+                          </div>` : ""}
+                      ` : ""}
                     </div>`).join("")}
                 </div>`;
               const el = document.createElement("div");
@@ -5490,6 +5492,37 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                           resize: "vertical"
                         }}
                         placeholder="Optional"
+                      />
+                    </div>
+                    
+                    {/* Supplier Notes section for this PO */}
+                    <div style={{ marginTop: 14, padding: 12, backgroundColor: "#f0f8ff", borderTop: "2px solid #4a7ba7", borderRadius: 4 }}>
+                      <label style={{ fontSize: 12, fontWeight: 600, color: "#2c5aa0", display: "block", marginBottom: 8 }}>
+                        Supplier Notes (Instructions to supplier)
+                      </label>
+                      <textarea
+                        value={po.id === editing.id ? supplierNote : (po.supplierNote || "")}
+                        onChange={(e) => {
+                          if (po.id === editing.id) {
+                            // Primary PO - update local state
+                            setSupplierNote(e.target.value);
+                          } else {
+                            // Member PO - save directly to Supabase
+                            savePOSupplierNote(po.id, e.target.value);
+                          }
+                        }}
+                        style={{ 
+                          width: "100%", 
+                          minHeight: 60, 
+                          padding: "8px", 
+                          fontSize: 12, 
+                          border: "1px solid #4a7ba7", 
+                          borderRadius: 4,
+                          fontFamily: "inherit",
+                          resize: "vertical",
+                          backgroundColor: "#fff"
+                        }}
+                        placeholder="Optional - Instructions or notes for the supplier"
                       />
                     </div>
                   </div>
