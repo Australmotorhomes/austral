@@ -5092,18 +5092,8 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
             )}
           </Panel>
 
-          {!isQuote && (
+          {!isQuote && !(!isNew && editing?.consolidatedMemberIds?.length > 0) && (
             <Panel>
-              <div className="grid2" style={{ marginBottom: 10 }}>
-                <Field label="Expected delivery date (ETA)">
-                  <input
-                    style={inputStyle}
-                    type="date"
-                    value={eta}
-                    onChange={(e) => setEta(e.target.value)}
-                  />
-                </Field>
-              </div>
               <div style={{ display: "flex", alignItems: "flex-end", gap: 10 }}>
                 <div style={{ flex: 1 }}>
                   <Field label="Freight Forward Fee (AUD, optional)">
@@ -5346,7 +5336,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
 
                     <div style={{ margin: "14px 0", padding: 12, background: "#f9f5f0", borderRadius: 4 }}>
                       <label style={{ fontSize: 12, fontWeight: 600, color: "#6b5240", display: "block", marginBottom: 8 }}>
-                        Consolidated Customs / Shipping Charges
+                        Freight Forward Fee (AUD)
                       </label>
                       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                         <span style={{ fontSize: 11, color: "#8a7a66" }}>$</span>
