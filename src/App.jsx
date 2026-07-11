@@ -5245,68 +5245,99 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
             const consolidatedPONumber = `PO${stripPO(editing.number)}/${members.map(m => stripPO(m.number)).join("/")}`;
 
             const generateConsolidatedPDF = () => {
-              console.log("📄 Generating PDF with POs:", allPOs.map(p => ({ number: p.number, supplierNote: p.supplierNote })));
-              const html = `
-                <div style="font-family: Arial, sans-serif; padding: 20px; color: #333;">
-                  ${allPOs.map((po, idx) => `
-                    <div style="${idx > 0 ? 'page-break-before: always; ' : ''}padding-top: 20px;">
-                      <h2 style="text-align: center; margin-bottom: 20px;">Purchase Order</h2>
-                      <h3 style="font-size: 16px; margin-bottom: 5px;">PO-${stripPO(po.number)}</h3>
-                      ${po.customer ? `<p style="margin: 0; font-size: 14px; color: #666;">Customer: ${po.customer}</p>` : ""}
-                      
-                      <h4 style="margin-top: 20px; margin-bottom: 10px; font-size: 13px;">Line Items</h4>
-                      <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
-                        <thead>
-                          <tr style="background-color: #f5f5f5; border-bottom: 2px solid #333;">
-                            <th style="text-align: left; padding: 8px; border: 1px solid #ddd; font-size: 12px;">Description</th>
-                            <th style="text-align: center; padding: 8px; border: 1px solid #ddd; font-size: 12px; width: 80px;">Qty</th>
-                            <th style="text-align: right; padding: 8px; border: 1px solid #ddd; font-size: 12px; width: 100px;">Unit Price</th>
-                            <th style="text-align: right; padding: 8px; border: 1px solid #ddd; font-size: 12px; width: 100px;">Amount</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          ${(po.lines || []).map(line => `
-                            <tr>
-                              <td style="padding: 8px; border: 1px solid #ddd; font-size: 12px;">${line.desc || line.description || ""}</td>
-                              <td style="padding: 8px; border: 1px solid #ddd; text-align: center; font-size: 12px;">${line.qty || line.quantity || 1}</td>
-                              <td style="padding: 8px; border: 1px solid #ddd; text-align: right; font-size: 12px;">$${(parseFloat(line.price || line.unitPrice || 0)).toLocaleString()}</td>
-                              <td style="padding: 8px; border: 1px solid #ddd; text-align: right; font-size: 12px;">$${((parseFloat(line.price || line.unitPrice || 0) * (line.qty || line.quantity || 1))).toLocaleString()}</td>
-                            </tr>`).join("")}
-                          <tr style="background-color: #f5f5f5; font-weight: bold;">
-                            <td colspan="3" style="padding: 8px; border: 1px solid #ddd; text-align: right; font-size: 12px;">Subtotal:</td>
-                            <td style="padding: 8px; border: 1px solid #ddd; text-align: right; font-size: 12px;">$${(poSubtotalVal(po) || 0).toLocaleString()}</td>
-                          </tr>
-                          ${poTotal(po) !== poSubtotalVal(po) ? `
-                            <tr style="font-weight: bold;">
-                              <td colspan="3" style="padding: 8px; border: 1px solid #ddd; text-align: right; font-size: 12px;">Total:</td>
-                              <td style="padding: 8px; border: 1px solid #ddd; text-align: right; font-size: 12px;">$${(Number(poTotal(po)) || 0).toLocaleString()}</td>
-                            </tr>` : ""}
-                        </tbody>
-                      </table>
-                      ${idx === allPOs.length - 1 ? `
-                        ${po.notes ? `
-                          <div style="margin-bottom: 20px; padding: 10px; background-color: #f9f5f0; border-left: 3px solid #d4a574;">
-                            <h4 style="margin: 0 0 5px 0; font-size: 12px;">Notes</h4>
-                            <p style="margin: 0; font-size: 12px; white-space: pre-wrap;">${po.notes}</p>
-                          </div>` : ""}
-                        
-                        ${po.supplierNote ? `
-                          <div style="margin-bottom: 20px; padding: 10px; background-color: #f0f8ff; border-left: 3px solid #4a7ba7;">
-                            <h4 style="margin: 0 0 5px 0; font-size: 12px; color: #2c5aa0;">Supplier Instructions</h4>
-                            <p style="margin: 0; font-size: 12px; white-space: pre-wrap; color: #1a3a6e;">${po.supplierNote}</p>
-                          </div>` : ""}
-                      ` : ""}
-                    </div>`).join("")}
-                </div>`;
-              const el = document.createElement("div");
-              el.innerHTML = html;
+              const fmtAUD = (v) => "$" + (Number(v) || 0).toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+              const poDate = (po) => po.date ? new Date(po.date).toLocaleDateString("en-AU", { day: "numeric", month: "long", year: "numeric" }) : "";
+              const poLines = (po) => po.id === editing.id ? lines : (po.lines || []);
+              const poNotes = (po) => po.id === editing.id ? notes : (po.notes || "");
+              const poSupplierNoteVal = (po) => po.id === editing.id ? supplierNote : (po.supplierNote || "");
+
+              const pageHtml = (po, idx) => {
+                const linesHtml = poLines(po).map(li => {
+                  const lineTotal = (Number(li.qty || li.quantity || 1)) * (Number(li.price || li.unitPrice || 0));
+                  const noteBullets = (li.lineNote || "").split("\n").map(b => b.trim()).filter(Boolean);
+                  return `<tr>
+                    <td style="padding:10px 8px;border-bottom:1px solid #e3d8c6;font-size:13px;vertical-align:top;">
+                      ${li.desc || li.description || ""}
+                      ${noteBullets.length ? `<ul style="margin:4px 0 0 16px;padding:0;font-size:11px;color:#6b5240;">${noteBullets.map(b => `<li>${b}</li>`).join("")}</ul>` : ""}
+                    </td>
+                    <td style="padding:10px 8px;border-bottom:1px solid #e3d8c6;text-align:right;font-size:13px;">${li.qty || li.quantity || 1}</td>
+                    <td style="padding:10px 8px;border-bottom:1px solid #e3d8c6;text-align:right;font-size:13px;">${fmtAUD(li.price || li.unitPrice || 0)}</td>
+                    <td style="padding:10px 8px;border-bottom:1px solid #e3d8c6;text-align:right;font-size:13px;">${fmtAUD(lineTotal)}</td>
+                  </tr>`;
+                }).join("");
+
+                const n = poNotes(po);
+                const sn = poSupplierNoteVal(po);
+
+                return `
+                  <div style="${idx > 0 ? "page-break-before:always;" : ""}padding-top:${idx > 0 ? "30px" : "0"}">
+                    <!-- Header -->
+                    <div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #b5552b;padding-bottom:20px;margin-bottom:20px;">
+                      <div>
+                        <div style="font-size:26px;font-weight:700;color:#2b2018;margin-bottom:6px;">Purchase Order</div>
+                        <div style="font-size:14px;font-weight:600;color:#6b5240;">PO-${stripPO(po.number)}</div>
+                        <div style="font-size:12px;color:#8a7a66;margin-top:2px;">${poDate(po)}</div>
+                      </div>
+                      <div style="text-align:right;">
+                        <div style="font-size:14px;font-weight:700;color:#4a3527;">Austral Motorhomes &amp; Platinum Pontoons</div>
+                        <div style="font-size:11px;color:#8a7a66;">Kunda Park, QLD</div>
+                      </div>
+                    </div>
+                    <!-- Meta -->
+                    <div style="font-size:13px;margin-bottom:20px;line-height:1.8;">
+                      ${party ? `<span><b>Supplier:</b> ${party}</span>&nbsp;&nbsp;` : ""}
+                      ${po.customer ? `<span><b>Customer:</b> ${po.customer}</span>&nbsp;&nbsp;` : ""}
+                      ${model ? `<span><b>Reference:</b> ${model}</span>&nbsp;&nbsp;` : ""}
+                      ${contact ? `<br><span><b>Contact:</b> ${contact}</span>&nbsp;&nbsp;` : ""}
+                      ${eta ? `<span><b>ETA:</b> ${eta}</span>` : ""}
+                    </div>
+                    <!-- Lines -->
+                    <table style="width:100%;border-collapse:collapse;margin-bottom:20px;">
+                      <thead>
+                        <tr style="border-bottom:2px solid #b5552b;">
+                          <th style="text-align:left;padding:10px 8px 10px 0;font-size:12px;font-weight:700;">DESCRIPTION</th>
+                          <th style="text-align:right;padding:10px 8px;font-size:12px;font-weight:700;width:50px;">QTY</th>
+                          <th style="text-align:right;padding:10px 8px;font-size:12px;font-weight:700;width:110px;">COST</th>
+                          <th style="text-align:right;padding:10px 0 10px 8px;font-size:12px;font-weight:700;width:110px;">LINE TOTAL</th>
+                        </tr>
+                      </thead>
+                      <tbody>${linesHtml}</tbody>
+                    </table>
+                    <!-- Totals -->
+                    <div style="border-top:2px solid #b5552b;padding-top:12px;">
+                      <div style="display:flex;justify-content:space-between;font-size:13px;padding:6px 0;">
+                        <span>Subtotal (incl. GST)</span><span>${fmtAUD(poSubtotalVal(po))}</span>
+                      </div>
+                      <div style="display:flex;justify-content:space-between;font-size:16px;font-weight:800;padding:12px 0 0;border-top:1px solid #e3d8c6;margin-top:6px;">
+                        <span>Total (incl. GST)</span><span>${fmtAUD(poTotal(po))}</span>
+                      </div>
+                    </div>
+                    <!-- Notes -->
+                    ${n ? `<div style="margin-top:24px;padding-top:16px;border-top:1px solid #e3d8c6;">
+                      <div style="font-size:12px;font-weight:700;color:#2b2018;margin-bottom:6px;">Notes</div>
+                      <div style="font-size:12px;color:#4a3527;white-space:pre-wrap;line-height:1.6;">${n}</div>
+                    </div>` : ""}
+                    <!-- Supplier Notes -->
+                    ${sn ? `<div style="margin-top:16px;padding:12px;background:#f0f8ff;border-left:3px solid #4a7ba7;border-radius:4px;">
+                      <div style="font-size:12px;font-weight:700;color:#2c5aa0;margin-bottom:6px;">Supplier Notes</div>
+                      <div style="font-size:12px;color:#1a3a6e;white-space:pre-wrap;line-height:1.6;">${sn}</div>
+                    </div>` : ""}
+                    <div style="margin-top:20px;font-size:10px;color:#8a7a66;">All prices include GST. &nbsp;${consolidatedPONumber}</div>
+                  </div>`;
+              };
+
+              const html = `<!DOCTYPE html><html><head><meta charset="UTF-8">
+                <style>* {margin:0;padding:0;box-sizing:border-box;} body {font-family:Georgia,serif;color:#2b2018;padding:40px;line-height:1.7;}</style>
+                </head><body>${allPOs.map((po, idx) => pageHtml(po, idx)).join("")}</body></html>`;
+
               html2pdf().set({
-                margin: 10,
+                margin: 12,
                 filename: `ConsolidatedPO-${stripPO(editing.number)}.pdf`,
                 image: { type: "jpeg", quality: 0.98 },
                 html2canvas: { scale: 2 },
                 jsPDF: { orientation: "portrait", unit: "mm", format: "a4" },
-              }).from(el).save();
+                pagebreak: { mode: ["css", "legacy"] },
+              }).from(html, "string").save();
             };
 
             // One tab per PO, plus a Summary tab
@@ -5467,6 +5498,25 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                     ) : (
                       <p style={{ fontSize: 12, color: "#8a7a66" }}>No line items on this PO.</p>
                     )}
+                    
+                    {/* Internal Notes for this PO — left panel only */}
+                    <div style={{ marginTop: 14, paddingTop: 14, borderTop: "2px solid #d4a574" }}>
+                      <label style={{ fontSize: 12, fontWeight: 600, color: "#6b5240", display: "block", marginBottom: 6 }}>
+                        Internal Notes
+                      </label>
+                      <textarea
+                        value={po.id === editing.id ? notes : (po.notes || "")}
+                        onChange={(e) => {
+                          if (po.id === editing.id) {
+                            setNotes(e.target.value);
+                          } else {
+                            savePONotes(po.id, e.target.value);
+                          }
+                        }}
+                        style={{ width: "100%", minHeight: 60, padding: "8px", fontSize: 12, border: "1px solid #d4a574", borderRadius: 4, fontFamily: "inherit", resize: "vertical" }}
+                        placeholder="Internal notes (not sent to supplier)"
+                      />
+                    </div>
                   </div>
                 ))}
               </Panel>
@@ -5667,25 +5717,27 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                       <span>{fmtMoney(previewTotal, "AUD")}</span>
                     </div>
 
-                    {/* Per-PO Notes and Supplier Notes in the right preview */}
+                    {/* Supplier Notes — editable on the right panel, per PO tab */}
                     {isConsolidated && (() => {
-                      const poNotes = activePo?.id === editing?.id ? notes : (activePo?.notes || "");
                       const poSupplierNote = activePo?.id === editing?.id ? supplierNote : (activePo?.supplierNote || "");
-                      if (!poNotes?.trim() && !poSupplierNote?.trim()) return null;
+                      const setPoSupplierNote = (val) => {
+                        if (activePo?.id === editing?.id) {
+                          setSupplierNote(val);
+                        } else {
+                          savePOSupplierNote(activePo?.id, val);
+                        }
+                      };
                       return (
-                        <div style={{ marginTop: 24, paddingTop: 16, borderTop: "1px solid #e3d8c6" }}>
-                          {poNotes?.trim() && (
-                            <div style={{ marginBottom: poSupplierNote?.trim() ? 16 : 0 }}>
-                              <div style={{ fontSize: 12, fontWeight: 700, color: "#4a3527", marginBottom: 6 }}>Notes</div>
-                              <div style={{ fontSize: 12, color: "#6b5240", whiteSpace: "pre-wrap", lineHeight: 1.6 }}>{poNotes}</div>
-                            </div>
-                          )}
-                          {poSupplierNote?.trim() && (
-                            <div style={{ padding: 10, background: "#f0f8ff", borderLeft: "3px solid #4a7ba7", borderRadius: 4 }}>
-                              <div style={{ fontSize: 12, fontWeight: 700, color: "#2c5aa0", marginBottom: 6 }}>Supplier Notes</div>
-                              <div style={{ fontSize: 12, color: "#1a3a6e", whiteSpace: "pre-wrap", lineHeight: 1.6 }}>{poSupplierNote}</div>
-                            </div>
-                          )}
+                        <div style={{ marginTop: 20, paddingTop: 16, borderTop: "1px solid #e3d8c6" }}>
+                          <label style={{ fontSize: 12, fontWeight: 600, color: "#2c5aa0", display: "block", marginBottom: 6 }}>
+                            Supplier Notes (Instructions to supplier)
+                          </label>
+                          <textarea
+                            value={poSupplierNote}
+                            onChange={(e) => setPoSupplierNote(e.target.value)}
+                            style={{ width: "100%", minHeight: 80, padding: "8px", fontSize: 12, border: "1px solid #4a7ba7", borderRadius: 4, fontFamily: "inherit", resize: "vertical", backgroundColor: "#f0f8ff" }}
+                            placeholder="Instructions or notes for the supplier"
+                          />
                         </div>
                       );
                     })()}
@@ -5818,12 +5870,67 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                 variant="ghost" 
                 onClick={() => {
                   try {
-                    // Clone the preview and explicitly remove every .no-print element
-                    // (gross profit, internal-only notes, etc.) from the clone before
-                    // building the HTML string. This is a certain fix, unlike relying
-                    // on the .no-print CSS rule alone — .remove() guarantees the node
-                    // is gone from the resulting HTML, with no dependency on whether
-                    // html2canvas's rendering pipeline honours display:none in every case.
+                    // Consolidated POs: use the custom per-page PDF builder
+                    if (!isQuote && !isNew && editing?.consolidatedMemberIds?.length > 0) {
+                      const memberPOs = (db.pos || []).filter(p => (editing.consolidatedMemberIds || []).includes(p.id));
+                      const allPOsForPDF = [editing, ...memberPOs];
+                      const stripPONum = (n) => String(n).replace(/^PO-?/i, "");
+                      const consolidatedPONum = `PO${stripPONum(editing.number)}/${memberPOs.map(m => stripPONum(m.number)).join("/")}`;
+                      const fmtAUD = (v) => "$" + (Number(v) || 0).toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                      const sumLns = (ls) => (ls || []).reduce((s, l) => { const q = Number(l.qty || l.quantity || 1); const p2 = Number(l.price || l.unitPrice || 0); return s + (Number(l.amount) || q * p2); }, 0);
+                      const pdfTotal = (po) => po.id === editing.id ? (total || editing.total || sumLns(lines)) : (po.total || sumLns(po.lines));
+                      const pdfSubtotal = (po) => po.id === editing.id ? (subtotal || editing.subtotal || sumLns(lines)) : (po.subtotal || sumLns(po.lines));
+                      const pdfNotes = (po) => po.id === editing.id ? notes : (po.notes || "");
+                      const pdfSupplierNote = (po) => po.id === editing.id ? supplierNote : (po.supplierNote || "");
+                      const pdfDate = (po) => po.date ? new Date(po.date).toLocaleDateString("en-AU", { day: "numeric", month: "long", year: "numeric" }) : "";
+
+                      const pageHtml = (po, idx) => {
+                        const poLns = po.id === editing.id ? lines : (po.lines || []);
+                        const linesHtml = poLns.map(li => {
+                          const lt = (Number(li.qty || li.quantity || 1)) * (Number(li.price || li.unitPrice || 0));
+                          const bullets = (li.lineNote || "").split("\n").map(b => b.trim()).filter(Boolean);
+                          return `<tr>
+                            <td style="padding:10px 8px;border-bottom:1px solid #e3d8c6;font-size:13px;vertical-align:top;">${li.desc || li.description || ""}${bullets.length ? `<ul style="margin:4px 0 0 16px;padding:0;font-size:11px;color:#6b5240;">${bullets.map(b => `<li>${b}</li>`).join("")}</ul>` : ""}</td>
+                            <td style="padding:10px 8px;border-bottom:1px solid #e3d8c6;text-align:right;font-size:13px;">${li.qty || li.quantity || 1}</td>
+                            <td style="padding:10px 8px;border-bottom:1px solid #e3d8c6;text-align:right;font-size:13px;">${fmtAUD(li.price || li.unitPrice || 0)}</td>
+                            <td style="padding:10px 0 10px 8px;border-bottom:1px solid #e3d8c6;text-align:right;font-size:13px;">${fmtAUD(lt)}</td>
+                          </tr>`;
+                        }).join("");
+                        const n = pdfNotes(po); const sn = pdfSupplierNote(po);
+                        return `<div style="${idx > 0 ? "page-break-before:always;padding-top:30px;" : ""}">
+                          <div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #b5552b;padding-bottom:20px;margin-bottom:20px;">
+                            <div><div style="font-size:26px;font-weight:700;color:#2b2018;margin-bottom:6px;">Purchase Order</div>
+                              <div style="font-size:14px;font-weight:600;color:#6b5240;">PO-${stripPONum(po.number)}</div>
+                              <div style="font-size:12px;color:#8a7a66;margin-top:2px;">${pdfDate(po)}</div>
+                            </div>
+                            <div style="text-align:right;"><div style="font-size:14px;font-weight:700;color:#4a3527;">Austral Motorhomes &amp; Platinum Pontoons</div><div style="font-size:11px;color:#8a7a66;">Kunda Park, QLD</div></div>
+                          </div>
+                          <div style="font-size:13px;margin-bottom:20px;line-height:1.8;">${party ? `<span><b>Supplier:</b> ${party}</span>&nbsp;&nbsp;` : ""}${po.customer ? `<span><b>Customer:</b> ${po.customer}</span>&nbsp;&nbsp;` : ""}${model ? `<span><b>Reference:</b> ${model}</span>&nbsp;&nbsp;` : ""}${contact ? `<br><span><b>Contact:</b> ${contact}</span>&nbsp;&nbsp;` : ""}${eta ? `<span><b>ETA:</b> ${eta}</span>` : ""}</div>
+                          <table style="width:100%;border-collapse:collapse;margin-bottom:20px;">
+                            <thead><tr style="border-bottom:2px solid #b5552b;">
+                              <th style="text-align:left;padding:10px 8px 10px 0;font-size:12px;font-weight:700;">DESCRIPTION</th>
+                              <th style="text-align:right;padding:10px 8px;font-size:12px;font-weight:700;width:50px;">QTY</th>
+                              <th style="text-align:right;padding:10px 8px;font-size:12px;font-weight:700;width:110px;">COST</th>
+                              <th style="text-align:right;padding:10px 0 10px 8px;font-size:12px;font-weight:700;width:110px;">LINE TOTAL</th>
+                            </tr></thead>
+                            <tbody>${linesHtml}</tbody>
+                          </table>
+                          <div style="border-top:2px solid #b5552b;padding-top:12px;">
+                            <div style="display:flex;justify-content:space-between;font-size:13px;padding:6px 0;"><span>Subtotal (incl. GST)</span><span>${fmtAUD(pdfSubtotal(po))}</span></div>
+                            <div style="display:flex;justify-content:space-between;font-size:16px;font-weight:800;padding:12px 0 0;border-top:1px solid #e3d8c6;margin-top:6px;"><span>Total (incl. GST)</span><span>${fmtAUD(pdfTotal(po))}</span></div>
+                          </div>
+                          ${n ? `<div style="margin-top:24px;padding-top:16px;border-top:1px solid #e3d8c6;"><div style="font-size:12px;font-weight:700;color:#2b2018;margin-bottom:6px;">Notes</div><div style="font-size:12px;color:#4a3527;white-space:pre-wrap;line-height:1.6;">${n}</div></div>` : ""}
+                          ${sn ? `<div style="margin-top:16px;padding:12px;background:#f0f8ff;border-left:3px solid #4a7ba7;border-radius:4px;"><div style="font-size:12px;font-weight:700;color:#2c5aa0;margin-bottom:6px;">Supplier Notes</div><div style="font-size:12px;color:#1a3a6e;white-space:pre-wrap;line-height:1.6;">${sn}</div></div>` : ""}
+                          <div style="margin-top:20px;font-size:10px;color:#8a7a66;">All prices include GST. ${consolidatedPONum}</div>
+                        </div>`;
+                      };
+
+                      const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>*{margin:0;padding:0;box-sizing:border-box;}body{font-family:Georgia,serif;color:#2b2018;padding:40px;line-height:1.7;}</style></head><body>${allPOsForPDF.map((po, idx) => pageHtml(po, idx)).join("")}</body></html>`;
+                      html2pdf().set({ margin: 12, filename: `ConsolidatedPO-${stripPONum(editing.number)}.pdf`, image: { type: "jpeg", quality: 0.98 }, html2canvas: { scale: 2 }, jsPDF: { orientation: "portrait", unit: "mm", format: "a4" }, pagebreak: { mode: ["css", "legacy"] } }).from(html, "string").save();
+                      return;
+                    }
+
+                    // Standard single PO / quote PDF — clone the preview panel
                     const clone = printRef.current ? printRef.current.cloneNode(true) : null;
                     if (clone) {
                       clone.querySelectorAll(".no-print").forEach((el) => el.remove());
