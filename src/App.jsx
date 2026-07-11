@@ -5467,67 +5467,6 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                     ) : (
                       <p style={{ fontSize: 12, color: "#8a7a66" }}>No line items on this PO.</p>
                     )}
-                    
-                    {/* Notes section for this PO */}
-                    <div style={{ marginTop: 14, paddingTop: 14, borderTop: "2px solid #d4a574" }}>
-                      <label style={{ fontSize: 12, fontWeight: 600, color: "#6b5240", display: "block", marginBottom: 8 }}>
-                        Notes (Delivery instructions, terms)
-                      </label>
-                      <textarea
-                        value={po.id === editing.id ? notes : (po.notes || "")}
-                        onChange={(e) => {
-                          if (po.id === editing.id) {
-                            // Primary PO - update local state
-                            setNotes(e.target.value);
-                          } else {
-                            // Member PO - save directly to Supabase
-                            savePONotes(po.id, e.target.value);
-                          }
-                        }}
-                        style={{ 
-                          width: "100%", 
-                          minHeight: 60, 
-                          padding: "8px", 
-                          fontSize: 12, 
-                          border: "1px solid #d4a574", 
-                          borderRadius: 4,
-                          fontFamily: "inherit",
-                          resize: "vertical"
-                        }}
-                        placeholder="Optional"
-                      />
-                    </div>
-                    
-                    {/* Supplier Notes section for this PO */}
-                    <div style={{ marginTop: 14, padding: 12, backgroundColor: "#f0f8ff", borderTop: "2px solid #4a7ba7", borderRadius: 4 }}>
-                      <label style={{ fontSize: 12, fontWeight: 600, color: "#2c5aa0", display: "block", marginBottom: 8 }}>
-                        Supplier Notes (Instructions to supplier)
-                      </label>
-                      <textarea
-                        value={po.id === editing.id ? supplierNote : (po.supplierNote || "")}
-                        onChange={(e) => {
-                          if (po.id === editing.id) {
-                            // Primary PO - update local state
-                            setSupplierNote(e.target.value);
-                          } else {
-                            // Member PO - save directly to Supabase
-                            savePOSupplierNote(po.id, e.target.value);
-                          }
-                        }}
-                        style={{ 
-                          width: "100%", 
-                          minHeight: 60, 
-                          padding: "8px", 
-                          fontSize: 12, 
-                          border: "1px solid #4a7ba7", 
-                          borderRadius: 4,
-                          fontFamily: "inherit",
-                          resize: "vertical",
-                          backgroundColor: "#fff"
-                        }}
-                        placeholder="Optional - Instructions or notes for the supplier"
-                      />
-                    </div>
                   </div>
                 ))}
               </Panel>
@@ -5727,6 +5666,29 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                       <span>Total (incl. GST)</span>
                       <span>{fmtMoney(previewTotal, "AUD")}</span>
                     </div>
+
+                    {/* Per-PO Notes and Supplier Notes in the right preview */}
+                    {isConsolidated && (() => {
+                      const poNotes = activePo?.id === editing?.id ? notes : (activePo?.notes || "");
+                      const poSupplierNote = activePo?.id === editing?.id ? supplierNote : (activePo?.supplierNote || "");
+                      if (!poNotes?.trim() && !poSupplierNote?.trim()) return null;
+                      return (
+                        <div style={{ marginTop: 24, paddingTop: 16, borderTop: "1px solid #e3d8c6" }}>
+                          {poNotes?.trim() && (
+                            <div style={{ marginBottom: poSupplierNote?.trim() ? 16 : 0 }}>
+                              <div style={{ fontSize: 12, fontWeight: 700, color: "#4a3527", marginBottom: 6 }}>Notes</div>
+                              <div style={{ fontSize: 12, color: "#6b5240", whiteSpace: "pre-wrap", lineHeight: 1.6 }}>{poNotes}</div>
+                            </div>
+                          )}
+                          {poSupplierNote?.trim() && (
+                            <div style={{ padding: 10, background: "#f0f8ff", borderLeft: "3px solid #4a7ba7", borderRadius: 4 }}>
+                              <div style={{ fontSize: 12, fontWeight: 700, color: "#2c5aa0", marginBottom: 6 }}>Supplier Notes</div>
+                              <div style={{ fontSize: 12, color: "#1a3a6e", whiteSpace: "pre-wrap", lineHeight: 1.6 }}>{poSupplierNote}</div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
 
                     {isQuote && (
                       <div className="no-print" style={{ borderTop: "1px solid #e3d8c6", marginTop: 20, paddingTop: 12, fontSize: 11, color: "#8a7a66" }}>
