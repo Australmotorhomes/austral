@@ -5332,7 +5332,11 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                         <input
                           type="number"
                           value={consolidatedCustoms}
-                          onChange={(e) => setConsolidatedCustoms(parseFloat(e.target.value) || 0)}
+                          onChange={(e) => {
+                            const value = parseFloat(e.target.value) || 0;
+                            setConsolidatedCustoms(value);
+                            setCustomsClearance(value);  // Sync to customsClearance for saving
+                          }}
                           style={{ flex: 1, padding: "6px 8px", fontSize: 12, border: "1px solid #d4a574", borderRadius: 3 }}
                         />
                       </div>
