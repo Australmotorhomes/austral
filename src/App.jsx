@@ -5301,7 +5301,6 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                   <h4 style={{ fontSize: 13, fontWeight: 700, color: "#4a3527", margin: 0 }}>
                     {consolidatedPONumber} — {allPOs.length} POs
                   </h4>
-                  <Btn variant="secondary" size="sm" onClick={generateConsolidatedPDF}>📥 Download PDF</Btn>
                 </div>
 
                 {/* Tab bar — works on mobile and desktop */}
