@@ -4533,12 +4533,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
     try {
       const update = toSupabaseFormat({ notes: newNotes, updatedAt: todayISO() }, "purchase_orders");
       await supabaseRESTWithSchemaFallback("PATCH", `purchase_orders?id=eq.${poId}`, update);
-      
-      // Update the db.pos array so the UI reflects the change immediately
-      const updatedPOs = db.pos.map(p => 
-        p.id === poId ? { ...p, notes: newNotes } : p
-      );
-      setDb({ ...db, pos: updatedPOs });
+      console.log(`✅ Saved notes for PO ${poId}`);
     } catch (err) {
       console.error("Error saving PO notes:", err);
     }
