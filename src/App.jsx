@@ -4528,6 +4528,22 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
     });
   }
 
+  async function savePONotes(poId, newNotes) {
+    // Save notes for a specific PO (used for member POs in consolidated view)
+    try {
+      const update = toSupabaseFormat({ notes: newNotes, updatedAt: todayISO() }, "purchase_orders");
+      await supabaseRESTWithSchemaFallback("PATCH", `purchase_orders?id=eq.${poId}`, update);
+      
+      // Update the db.pos array so the UI reflects the change immediately
+      const updatedPOs = db.pos.map(p => 
+        p.id === poId ? { ...p, notes: newNotes } : p
+      );
+      setDb({ ...db, pos: updatedPOs });
+    } catch (err) {
+      console.error("Error saving PO notes:", err);
+    }
+  }
+
   function handleSave() {
     const trimmedParty = party.trim();
     if (!trimmedParty) {
@@ -5429,22 +5445,54 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                     ) : (
                       <p style={{ fontSize: 12, color: "#8a7a66" }}>No line items on this PO.</p>
                     )}
+                    
+                    {/* Notes section for this PO */}
+                    <div style={{ marginTop: 14, paddingTop: 14, borderTop: "2px solid #d4a574" }}>
+                      <label style={{ fontSize: 12, fontWeight: 600, color: "#6b5240", display: "block", marginBottom: 8 }}>
+                        Notes (Delivery instructions, terms)
+                      </label>
+                      <textarea
+                        value={po.id === editing.id ? notes : (po.notes || "")}
+                        onChange={(e) => {
+                          if (po.id === editing.id) {
+                            // Primary PO - update local state
+                            setNotes(e.target.value);
+                          } else {
+                            // Member PO - save directly to Supabase
+                            savePONotes(po.id, e.target.value);
+                          }
+                        }}
+                        style={{ 
+                          width: "100%", 
+                          minHeight: 60, 
+                          padding: "8px", 
+                          fontSize: 12, 
+                          border: "1px solid #d4a574", 
+                          borderRadius: 4,
+                          fontFamily: "inherit",
+                          resize: "vertical"
+                        }}
+                        placeholder="Optional"
+                      />
+                    </div>
                   </div>
                 ))}
               </Panel>
             );
           })()}
 
-          <Panel>
-            <Field label={isQuote ? "Notes (terms, validity, inclusions)" : "Notes (delivery instructions, terms)"}>
-              <textarea
-                style={{ ...inputStyle, minHeight: 64, resize: "vertical" }}
-                placeholder="Optional"
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-              />
-            </Field>
-          </Panel>
+          {!(!isQuote && !isNew && editing?.consolidatedMemberIds?.length > 0) && (
+            <Panel>
+              <Field label={isQuote ? "Notes (terms, validity, inclusions)" : "Notes (delivery instructions, terms)"}>
+                <textarea
+                  style={{ ...inputStyle, minHeight: 64, resize: "vertical" }}
+                  placeholder="Optional"
+                  value={notes}
+                  onChange={(e) => setNotes(e.target.value)}
+                />
+              </Field>
+            </Panel>
+          )}
 
           {/* Attachments section */}
           <Panel style={{ marginTop: 16 }}>
