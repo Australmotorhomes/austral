@@ -358,6 +358,10 @@ function toSupabaseFormat(data, table) {
         copy.quote_id = copy.quoteId;
         delete copy.quoteId;
       }
+      if (copy.supplierNote !== undefined) {
+        copy.supplier_note = copy.supplierNote;
+        delete copy.supplierNote;
+      }
       if (copy.quoteNumber !== undefined) {
         copy.quote_number = copy.quoteNumber;
         delete copy.quoteNumber;
@@ -436,6 +440,7 @@ function fromSupabaseFormat(data, table) {
       if (copy.supplier_id !== undefined) { copy.supplierId = copy.supplier_id; delete copy.supplier_id; }
       if (copy.quote_id !== undefined) { copy.quoteId = copy.quote_id; delete copy.quote_id; }
       if (copy.quote_number !== undefined) { copy.quoteNumber = copy.quote_number; delete copy.quote_number; }
+      if (copy.supplier_note !== undefined) { copy.supplierNote = copy.supplier_note; delete copy.supplier_note; }
       copy.lines = Array.isArray(copy.lines) ? copy.lines : [];
       copy.paymentMilestones = Array.isArray(copy.paymentMilestones) ? copy.paymentMilestones : [];
       copy.attachments = Array.isArray(copy.attachments) ? copy.attachments : [];
@@ -4389,6 +4394,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
   const [date, setDate] = useState(editing ? editing.date : todayISO());
   const [contact, setContact] = useState(editing ? editing.contact || "" : "");
   const [notes, setNotes] = useState(editing ? editing.notes || "" : "");
+  const [supplierNote, setSupplierNote] = useState(editing ? editing.supplierNote || "" : "");
   const [discount, setDiscount] = useState(editing ? String(editing.discount || 0) : "0");
   const [lines, setLines] = useState(
     editing && editing.lines
@@ -4556,6 +4562,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
         date,
         contact: contact.trim(),
         notes: notes.trim(),
+        supplierNote: supplierNote.trim(),
         discount: discountNum,
         lines,
         subtotal,
@@ -4857,6 +4864,16 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                 {isQuote ? "Will be copied to POs created from this quote" : "Required for all purchase orders"}
               </p>
             </Field>
+            {!isQuote && (
+              <Field label="Supplier Notes (Instructions to supplier)">
+                <textarea
+                  style={{ ...inputStyle, minHeight: 60, resize: "vertical" }}
+                  placeholder="Optional - Instructions or notes for the supplier"
+                  value={supplierNote}
+                  onChange={(e) => setSupplierNote(e.target.value)}
+                />
+              </Field>
+            )}
           </Panel>
 
           <Panel>
@@ -5227,31 +5244,54 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
             const generateConsolidatedPDF = () => {
               const html = `
                 <div style="font-family: Arial, sans-serif; padding: 20px; color: #333;">
-                  <h2 style="text-align: center; margin-bottom: 30px;">Consolidated Purchase Order</h2>
-                  <h3 style="font-size: 18px; margin-bottom: 20px;">${consolidatedPONumber}</h3>
-                  <table style="width: 100%; border-collapse: collapse; margin-bottom: 30px;">
-                    <thead>
-                      <tr style="background-color: #f5f5f5; border-bottom: 2px solid #333;">
-                        <th style="text-align: left; padding: 10px; border: 1px solid #ddd;">PO #</th>
-                        <th style="text-align: left; padding: 10px; border: 1px solid #ddd;">Customer</th>
-                        <th style="text-align: left; padding: 10px; border: 1px solid #ddd;">Product</th>
-                        <th style="text-align: right; padding: 10px; border: 1px solid #ddd;">Total</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      ${allPOs.map(po => `
-                        <tr>
-                          <td style="padding: 10px; border: 1px solid #ddd;">PO-${stripPO(po.number)}</td>
-                          <td style="padding: 10px; border: 1px solid #ddd;">${po.customer || "—"}</td>
-                          <td style="padding: 10px; border: 1px solid #ddd;">${(po.lines || []).map(l => l.desc || l.description || "").filter(Boolean).join(", ") || "N/A"}</td>
-                          <td style="padding: 10px; border: 1px solid #ddd; text-align: right;">$${poTotal(po).toLocaleString()}</td>
-                        </tr>`).join("")}
-                      <tr style="background-color: #f5f5f5; font-weight: bold; border-top: 2px solid #333;">
-                        <td colspan="3" style="padding: 10px; border: 1px solid #ddd; text-align: right;">TOTAL:</td>
-                        <td style="padding: 10px; border: 1px solid #ddd; text-align: right;">$${(Number(groupTotal) || 0).toLocaleString()}</td>
-                      </tr>
-                    </tbody>
-                  </table>
+                  ${allPOs.map((po, idx) => `
+                    <div style="${idx > 0 ? 'page-break-before: always; ' : ''}padding-top: 20px;">
+                      <h2 style="text-align: center; margin-bottom: 20px;">Purchase Order</h2>
+                      <h3 style="font-size: 16px; margin-bottom: 5px;">PO-${stripPO(po.number)}</h3>
+                      ${po.customer ? `<p style="margin: 0; font-size: 14px; color: #666;">Customer: ${po.customer}</p>` : ""}
+                      
+                      <h4 style="margin-top: 20px; margin-bottom: 10px; font-size: 13px;">Line Items</h4>
+                      <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
+                        <thead>
+                          <tr style="background-color: #f5f5f5; border-bottom: 2px solid #333;">
+                            <th style="text-align: left; padding: 8px; border: 1px solid #ddd; font-size: 12px;">Description</th>
+                            <th style="text-align: center; padding: 8px; border: 1px solid #ddd; font-size: 12px; width: 80px;">Qty</th>
+                            <th style="text-align: right; padding: 8px; border: 1px solid #ddd; font-size: 12px; width: 100px;">Unit Price</th>
+                            <th style="text-align: right; padding: 8px; border: 1px solid #ddd; font-size: 12px; width: 100px;">Amount</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          ${(po.lines || []).map(line => `
+                            <tr>
+                              <td style="padding: 8px; border: 1px solid #ddd; font-size: 12px;">${line.desc || line.description || ""}</td>
+                              <td style="padding: 8px; border: 1px solid #ddd; text-align: center; font-size: 12px;">${line.qty || line.quantity || 1}</td>
+                              <td style="padding: 8px; border: 1px solid #ddd; text-align: right; font-size: 12px;">$${(parseFloat(line.price || line.unitPrice || 0)).toLocaleString()}</td>
+                              <td style="padding: 8px; border: 1px solid #ddd; text-align: right; font-size: 12px;">$${((parseFloat(line.price || line.unitPrice || 0) * (line.qty || line.quantity || 1))).toLocaleString()}</td>
+                            </tr>`).join("")}
+                          <tr style="background-color: #f5f5f5; font-weight: bold;">
+                            <td colspan="3" style="padding: 8px; border: 1px solid #ddd; text-align: right; font-size: 12px;">Subtotal:</td>
+                            <td style="padding: 8px; border: 1px solid #ddd; text-align: right; font-size: 12px;">$${(poSubtotalVal(po) || 0).toLocaleString()}</td>
+                          </tr>
+                          ${poTotal(po) !== poSubtotalVal(po) ? `
+                            <tr style="font-weight: bold;">
+                              <td colspan="3" style="padding: 8px; border: 1px solid #ddd; text-align: right; font-size: 12px;">Total:</td>
+                              <td style="padding: 8px; border: 1px solid #ddd; text-align: right; font-size: 12px;">$${(Number(poTotal(po)) || 0).toLocaleString()}</td>
+                            </tr>` : ""}
+                        </tbody>
+                      </table>
+                      
+                      ${po.notes ? `
+                        <div style="margin-bottom: 20px; padding: 10px; background-color: #f9f5f0; border-left: 3px solid #d4a574;">
+                          <h4 style="margin: 0 0 5px 0; font-size: 12px;">Notes</h4>
+                          <p style="margin: 0; font-size: 12px; white-space: pre-wrap;">${po.notes}</p>
+                        </div>` : ""}
+                      
+                      ${po.supplierNote ? `
+                        <div style="margin-bottom: 20px; padding: 10px; background-color: #f0f8ff; border-left: 3px solid #4a7ba7;">
+                          <h4 style="margin: 0 0 5px 0; font-size: 12px;">Supplier Instructions</h4>
+                          <p style="margin: 0; font-size: 12px; white-space: pre-wrap;">${po.supplierNote}</p>
+                        </div>` : ""}
+                    </div>`).join("")}
                 </div>`;
               const el = document.createElement("div");
               el.innerHTML = html;
