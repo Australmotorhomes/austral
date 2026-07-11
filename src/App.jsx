@@ -5392,12 +5392,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                 )}
 
                 {/* Per-PO tabs */}
-                {allPOs.map(po => {
-                  const isActive = activeTab === po.id;
-                  if (isActive) {
-                    console.log(`📍 Displaying PO-${stripPO(po.number)} with ${po.paymentMilestones?.filter(m => m.due || m.amount).length || 0} payment milestones`);
-                  }
-                  return isActive && (
+                {allPOs.map(po => activeTab === po.id && (
                   <div key={po.id}>
                     <div style={{ fontSize: 13, fontWeight: 700, color: "#4a3527", marginBottom: 12 }}>
                       PO-{stripPO(po.number)}{po.customer ? ` — ${po.customer}` : ""}
@@ -5430,39 +5425,12 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                             </span>
                           </div>
                         )}
-                        
-                        {/* Payment Schedule for this PO */}
-                        {po.paymentMilestones && po.paymentMilestones.filter(m => m.due || m.amount).length > 0 && (
-                          <div style={{ marginTop: 14, paddingTop: 14, borderTop: "2px solid #d4a574" }}>
-                            <h5 style={{ fontSize: 12, fontWeight: 600, color: "#6b5240", marginBottom: 10 }}>Payment Schedule</h5>
-                            {po.paymentMilestones.filter(m => m.due || m.amount).map((m, i) => (
-                              <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: "1px solid #f0e8d9", fontSize: 11 }}>
-                                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                                  {m.paid && <span style={{ background: "#d4edda", color: "#2d7a4f", borderRadius: 3, padding: "1px 6px", fontWeight: 600, fontSize: 10 }}>PAID</span>}
-                                  <span style={{ color: "#6b5240" }}>{m.due ? new Date(m.due).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" }) : "Date TBC"}</span>
-                                </div>
-                                <span style={{ fontWeight: 600, color: m.paid ? "#2d7a4f" : "#b5552b" }}>
-                                  {m.amount ? `$${parseFloat(m.amount).toLocaleString()}` : "Amount TBC"}
-                                </span>
-                              </div>
-                            ))}
-                            {po.paymentMilestones.filter(m => m.due || m.amount).length > 1 && (
-                              <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 0 2px", borderTop: "2px solid #b5552b", marginTop: 4 }}>
-                                <span style={{ fontWeight: 600, color: "#4a3527", fontSize: 12 }}>Total</span>
-                                <span style={{ fontWeight: 700, color: "#b5552b", fontSize: 12 }}>
-                                  ${po.paymentMilestones.filter(m => m.amount).reduce((s, m) => s + (parseFloat(m.amount) || 0), 0).toLocaleString()}
-                                </span>
-                              </div>
-                            )}
-                          </div>
-                        )}
                       </div>
                     ) : (
                       <p style={{ fontSize: 12, color: "#8a7a66" }}>No line items on this PO.</p>
                     )}
                   </div>
-                  );
-                })}
+                ))}
               </Panel>
             );
           })()}
