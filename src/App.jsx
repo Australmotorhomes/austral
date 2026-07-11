@@ -5752,13 +5752,6 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
               {isQuote && " Quote valid for 7 days."}
             </div>
             {notes && (
-              <div className="no-print">
-                <div style={{ height: 1, background: "#e3d8c6", margin: "18px 0" }} />
-                <div>
-                  <b style={{ fontSize: 12.5, color: "#6b5240" }}>Notes (internal use only)</b>
-                  <p style={{ fontSize: 13.5, margin: "6px 0 0" }}>{notes}</p>
-                </div>
-              </div>
             )}
           </div>
         </div>
