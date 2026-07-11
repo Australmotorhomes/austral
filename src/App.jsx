@@ -5133,17 +5133,6 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                     </Btn>
                   </div>
                 )}
-                {onReverseConsolidation && !isNew && editing?.consolidatedMemberIds?.length > 0 && (
-                  <div style={{ paddingBottom: 2 }}>
-                    <Btn
-                      variant="secondary"
-                      size="sm"
-                      onClick={() => onReverseConsolidation(editing)}
-                    >
-                      ⊖ Reverse Consolidation
-                    </Btn>
-                  </div>
-                )}
               </div>
             </Panel>
           )}
@@ -5883,6 +5872,11 @@ ${clone?.innerHTML || ""}
                 </Btn>
               )}
             </>
+          )}
+          {onReverseConsolidation && !isNew && editing?.consolidatedMemberIds?.length > 0 && (
+            <Btn variant="secondary" onClick={() => onReverseConsolidation(editing)}>
+              ⊖ Reverse Consolidation
+            </Btn>
           )}
           <Btn variant="ghost" onClick={onCancel}>
             {isNew ? "Cancel" : "Close"}
