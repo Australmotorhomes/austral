@@ -4547,8 +4547,10 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
 
   async function savePOSupplierNote(poId, newSupplierNote) {
     // Save supplier note for a specific PO
+    console.log(`💾 Saving supplier note for PO ${poId}:`, newSupplierNote);
     try {
       const update = toSupabaseFormat({ supplierNote: newSupplierNote, updatedAt: todayISO() }, "purchase_orders");
+      console.log("📤 Supabase update object:", update);
       await supabaseRESTWithSchemaFallback("PATCH", `purchase_orders?id=eq.${poId}`, update);
       console.log(`✅ Saved supplier note for PO ${poId}`);
     } catch (err) {
@@ -5243,6 +5245,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
             const consolidatedPONumber = `PO${stripPO(editing.number)}/${members.map(m => stripPO(m.number)).join("/")}`;
 
             const generateConsolidatedPDF = () => {
+              console.log("📄 Generating PDF with POs:", allPOs.map(p => ({ number: p.number, supplierNote: p.supplierNote })));
               const html = `
                 <div style="font-family: Arial, sans-serif; padding: 20px; color: #333;">
                   ${allPOs.map((po, idx) => `
