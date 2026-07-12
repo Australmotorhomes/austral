@@ -5248,7 +5248,6 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
               const fmtAUD = (v) => "$" + (Number(v) || 0).toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
               const poDate = (po) => po.date ? new Date(po.date).toLocaleDateString("en-AU", { day: "numeric", month: "long", year: "numeric" }) : "";
               const poLines = (po) => po.id === editing.id ? lines : (po.lines || []);
-              const poNotes = (po) => po.id === editing.id ? notes : (po.notes || "");
               const poSupplierNoteVal = (po) => po.id === editing.id ? supplierNote : (po.supplierNote || "");
 
               const pageHtml = (po, idx) => {
@@ -5266,7 +5265,6 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                   </tr>`;
                 }).join("");
 
-                const n = poNotes(po);
                 const sn = poSupplierNoteVal(po);
 
                 return `
@@ -5312,16 +5310,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                         <span>Total (incl. GST)</span><span>${fmtAUD(poTotal(po))}</span>
                       </div>
                     </div>
-                    <!-- Notes -->
-                    ${n ? `<div style="margin-top:24px;padding-top:16px;border-top:1px solid #e3d8c6;">
-                      <div style="font-size:12px;font-weight:700;color:#2b2018;margin-bottom:6px;">Notes</div>
-                      <div style="font-size:12px;color:#4a3527;white-space:pre-wrap;line-height:1.6;">${n}</div>
-                    </div>` : ""}
-                    <!-- Supplier Notes -->
-                    ${sn ? `<div style="margin-top:16px;padding:12px;background:#f0f8ff;border-left:3px solid #4a7ba7;border-radius:4px;">
-                      <div style="font-size:12px;font-weight:700;color:#2c5aa0;margin-bottom:6px;">Supplier Notes</div>
-                      <div style="font-size:12px;color:#1a3a6e;white-space:pre-wrap;line-height:1.6;">${sn}</div>
-                    </div>` : ""}
+                    ${sn && idx === allPOs.length - 1 ? `<div style="margin-top:16px;padding:12px;background:#f0f8ff;border-left:3px solid #4a7ba7;border-radius:4px;"><div style="font-size:12px;font-weight:700;color:#2c5aa0;margin-bottom:6px;">Supplier Notes</div><div style="font-size:12px;color:#1a3a6e;white-space:pre-wrap;line-height:1.6;">${sn}</div></div>` : ""}
                     <div style="margin-top:20px;font-size:10px;color:#8a7a66;">All prices include GST. &nbsp;${consolidatedPONumber}</div>
                   </div>`;
               };
@@ -5880,7 +5869,6 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                       const sumLns = (ls) => (ls || []).reduce((s, l) => { const q = Number(l.qty || l.quantity || 1); const p2 = Number(l.price || l.unitPrice || 0); return s + (Number(l.amount) || q * p2); }, 0);
                       const pdfTotal = (po) => po.id === editing.id ? (total || editing.total || sumLns(lines)) : (po.total || sumLns(po.lines));
                       const pdfSubtotal = (po) => po.id === editing.id ? (subtotal || editing.subtotal || sumLns(lines)) : (po.subtotal || sumLns(po.lines));
-                      const pdfNotes = (po) => po.id === editing.id ? notes : (po.notes || "");
                       const pdfSupplierNote = (po) => po.id === editing.id ? supplierNote : (po.supplierNote || "");
                       const pdfDate = (po) => po.date ? new Date(po.date).toLocaleDateString("en-AU", { day: "numeric", month: "long", year: "numeric" }) : "";
 
@@ -5896,7 +5884,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                             <td style="padding:10px 0 10px 8px;border-bottom:1px solid #e3d8c6;text-align:right;font-size:13px;">${fmtAUD(lt)}</td>
                           </tr>`;
                         }).join("");
-                        const n = pdfNotes(po); const sn = pdfSupplierNote(po);
+                        const sn = pdfSupplierNote(po);
                         return `<div style="${idx > 0 ? "page-break-before:always;padding-top:30px;" : ""}">
                           <div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #b5552b;padding-bottom:20px;margin-bottom:20px;">
                             <div><div style="font-size:26px;font-weight:700;color:#2b2018;margin-bottom:6px;">Purchase Order</div>
@@ -5919,8 +5907,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                             <div style="display:flex;justify-content:space-between;font-size:13px;padding:6px 0;"><span>Subtotal (incl. GST)</span><span>${fmtAUD(pdfSubtotal(po))}</span></div>
                             <div style="display:flex;justify-content:space-between;font-size:16px;font-weight:800;padding:12px 0 0;border-top:1px solid #e3d8c6;margin-top:6px;"><span>Total (incl. GST)</span><span>${fmtAUD(pdfTotal(po))}</span></div>
                           </div>
-                          ${n ? `<div style="margin-top:24px;padding-top:16px;border-top:1px solid #e3d8c6;"><div style="font-size:12px;font-weight:700;color:#2b2018;margin-bottom:6px;">Notes</div><div style="font-size:12px;color:#4a3527;white-space:pre-wrap;line-height:1.6;">${n}</div></div>` : ""}
-                          ${sn ? `<div style="margin-top:16px;padding:12px;background:#f0f8ff;border-left:3px solid #4a7ba7;border-radius:4px;"><div style="font-size:12px;font-weight:700;color:#2c5aa0;margin-bottom:6px;">Supplier Notes</div><div style="font-size:12px;color:#1a3a6e;white-space:pre-wrap;line-height:1.6;">${sn}</div></div>` : ""}
+                          ${sn && idx === allPOsForPDF.length - 1 ? `<div style="margin-top:16px;padding:12px;background:#f0f8ff;border-left:3px solid #4a7ba7;border-radius:4px;"><div style="font-size:12px;font-weight:700;color:#2c5aa0;margin-bottom:6px;">Supplier Notes</div><div style="font-size:12px;color:#1a3a6e;white-space:pre-wrap;line-height:1.6;">${sn}</div></div>` : ""}
                           <div style="margin-top:20px;font-size:10px;color:#8a7a66;">All prices include GST. ${consolidatedPONum}</div>
                         </div>`;
                       };
