@@ -5310,7 +5310,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                         <span>Total (incl. GST)</span><span>${fmtAUD(poTotal(po))}</span>
                       </div>
                     </div>
-                    ${sn && idx === allPOs.length - 1 ? `<div style="margin-top:16px;padding:12px;background:#f0f8ff;border-left:3px solid #4a7ba7;border-radius:4px;"><div style="font-size:12px;font-weight:700;color:#2c5aa0;margin-bottom:6px;">Supplier Notes</div><div style="font-size:12px;color:#1a3a6e;white-space:pre-wrap;line-height:1.6;">${sn}</div></div>` : ""}
+                    ${sn ? `<div style="margin-top:16px;padding:12px;background:#f0f8ff;border-left:3px solid #4a7ba7;border-radius:4px;"><div style="font-size:12px;font-weight:700;color:#2c5aa0;margin-bottom:6px;">Supplier Notes</div><div style="font-size:12px;color:#1a3a6e;white-space:pre-wrap;line-height:1.6;">${sn}</div></div>` : ""}
                     <div style="margin-top:20px;font-size:10px;color:#8a7a66;">All prices include GST. &nbsp;${consolidatedPONumber}</div>
                   </div>`;
               };
@@ -5907,7 +5907,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                             <div style="display:flex;justify-content:space-between;font-size:13px;padding:6px 0;"><span>Subtotal (incl. GST)</span><span>${fmtAUD(pdfSubtotal(po))}</span></div>
                             <div style="display:flex;justify-content:space-between;font-size:16px;font-weight:800;padding:12px 0 0;border-top:1px solid #e3d8c6;margin-top:6px;"><span>Total (incl. GST)</span><span>${fmtAUD(pdfTotal(po))}</span></div>
                           </div>
-                          ${sn && idx === allPOsForPDF.length - 1 ? `<div style="margin-top:16px;padding:12px;background:#f0f8ff;border-left:3px solid #4a7ba7;border-radius:4px;"><div style="font-size:12px;font-weight:700;color:#2c5aa0;margin-bottom:6px;">Supplier Notes</div><div style="font-size:12px;color:#1a3a6e;white-space:pre-wrap;line-height:1.6;">${sn}</div></div>` : ""}
+                          ${sn ? `<div style="margin-top:16px;padding:12px;background:#f0f8ff;border-left:3px solid #4a7ba7;border-radius:4px;"><div style="font-size:12px;font-weight:700;color:#2c5aa0;margin-bottom:6px;">Supplier Notes</div><div style="font-size:12px;color:#1a3a6e;white-space:pre-wrap;line-height:1.6;">${sn}</div></div>` : ""}
                           <div style="margin-top:20px;font-size:10px;color:#8a7a66;">All prices include GST. ${consolidatedPONum}</div>
                         </div>`;
                       };
@@ -9069,13 +9069,17 @@ function DashboardTab({ db, setTab, openRecord }) {
       <Panel style={{ marginTop: 24 }}>
         <h3 style={{ fontFamily: "Georgia,serif", fontSize: 16, color: "#4a3527", margin: "0 0 16px" }}>Shipments due</h3>
         {(() => {
-          // Filter: Only POs with customsClearance > 0, exclude consolidated members
-          const shipmentsWithCustoms = db.pos.filter((po) => !po.consolidatedGroupId && (po.customsClearance || 0) > 0);
-          
-          if (shipmentsWithCustoms.length === 0) {
-            return <p style={{ fontSize: 13, color: "#8a7a66", margin: 0 }}>No pending shipments with customs charges.</p>;
+          // Show all POs with an ETA or customs charge (both consolidated and standard).
+          // POs without an FF fee show as a single line; those with one get a second line.
+          const shipments = (db.pos || []).filter((po) =>
+            (po.eta || (po.customsClearance || 0) > 0) &&
+            po.status !== "Cancelled"
+          );
+
+          if (shipments.length === 0) {
+            return <p style={{ fontSize: 13, color: "#8a7a66", margin: 0 }}>No pending shipments.</p>;
           }
-          
+
           // Generate 6 months starting from current date
           const today = new Date();
           const months = [];
@@ -9083,9 +9087,9 @@ function DashboardTab({ db, setTab, openRecord }) {
             const d = new Date(today.getFullYear(), today.getMonth() + i, 1);
             months.push({ date: d, label: d.toLocaleDateString('en-AU', { month: 'short', year: '2-digit' }) });
           }
-          
+
           // Build payment data for each PO
-          const shipmentsData = shipmentsWithCustoms.map(po => {
+          const shipmentsData = shipments.map(po => {
             const monthPayments = months.map(m => {
               const monthPayment = (po.paymentMilestones || [])
                 .filter(pm => {
@@ -9096,32 +9100,24 @@ function DashboardTab({ db, setTab, openRecord }) {
                 .reduce((sum, pm) => sum + (parseFloat(pm.amount) || 0), 0);
               return monthPayment > 0 ? monthPayment : null;
             });
-            
             return { po, monthPayments, customs: po.customsClearance || 0 };
           });
-          
+
           const isMobile = window.innerWidth < 768;
-          
+
           if (isMobile) {
-            // MOBILE: Card layout with scroll
             return (
               <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                 {shipmentsData.slice(0, 5).map((item, idx) => (
-                  <div 
+                  <div
                     key={idx}
                     onClick={() => openRecord && openRecord("po", item.po.id)}
-                    style={{
-                      padding: 12,
-                      border: "1px solid #d4a574",
-                      borderRadius: 4,
-                      backgroundColor: "#faf7f2",
-                      cursor: openRecord ? "pointer" : "default"
-                    }}
+                    style={{ padding: 12, border: "1px solid #d4a574", borderRadius: 4, backgroundColor: "#faf7f2", cursor: openRecord ? "pointer" : "default" }}
                   >
                     <div style={{ fontWeight: 700, color: "#4a3527", marginBottom: 8 }}>
                       {item.po.party} · {item.po.model || "—"}
                     </div>
-                    <div style={{ fontSize: 12, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 8 }}>
+                    <div style={{ fontSize: 12, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: item.customs > 0 ? 8 : 0 }}>
                       {months.map((m, mi) => (
                         <div key={mi}>
                           <div style={{ fontSize: 11, color: "#8a7a66", fontWeight: 600 }}>{m.label}</div>
@@ -9131,23 +9127,24 @@ function DashboardTab({ db, setTab, openRecord }) {
                         </div>
                       ))}
                     </div>
-                    <div style={{ borderTop: "1px solid #d4a574", paddingTop: 8 }}>
-                      <div style={{ fontSize: 11, color: "#8a7a66", fontWeight: 600 }}>FF (Customs)</div>
-                      <div style={{ fontWeight: 700, color: "#b5552b" }}>
-                        ${item.customs.toLocaleString('en-AU')}
+                    {item.customs > 0 && (
+                      <div style={{ borderTop: "1px solid #d4a574", paddingTop: 8 }}>
+                        <div style={{ fontSize: 11, color: "#8a7a66", fontWeight: 600 }}>Freight Forwarding Fee</div>
+                        <div style={{ fontWeight: 700, color: "#b5552b" }}>
+                          ${item.customs.toLocaleString("en-AU")}
+                        </div>
                       </div>
-                    </div>
+                    )}
                   </div>
                 ))}
                 {shipmentsData.length > 5 && (
                   <div style={{ fontSize: 12, color: "#8a7a66", textAlign: "center" }}>
-                    + {shipmentsData.length - 5} more. <button onClick={() => setTab("shipments")} style={{ background: "none", border: "none", color: "#b5552b", cursor: "pointer", textDecoration: "underline" }}>View all</button>
+                    + {shipmentsData.length - 5} more.
                   </div>
                 )}
               </div>
             );
           } else {
-            // DESKTOP: Table layout with monthly columns
             return (
               <div style={{ overflowX: "auto" }}>
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
@@ -9160,41 +9157,65 @@ function DashboardTab({ db, setTab, openRecord }) {
                           {m.label}
                         </th>
                       ))}
-                      <th style={{ textAlign: "right", padding: "8px 6px", fontWeight: 700, minWidth: 80 }}>FF</th>
+                      <th style={{ textAlign: "right", padding: "8px 6px", fontWeight: 700, minWidth: 80 }}>FF Fee</th>
                     </tr>
                   </thead>
                   <tbody>
                     {shipmentsData.map((item, idx) => (
-                      <tr
-                        key={idx}
-                        onClick={() => openRecord && openRecord("po", item.po.id)}
-                        style={{
-                          borderBottom: "1px solid #e3d8c6",
-                          cursor: openRecord ? "pointer" : "default",
-                          backgroundColor: idx % 2 === 0 ? "#faf7f2" : "white"
-                        }}
-                      >
-                        <td style={{ padding: "8px 6px", color: "#4a3527", fontWeight: 600 }}>
-                          {item.po.party}
-                        </td>
-                        <td style={{ padding: "8px 6px", color: "#6b5240" }}>
-                          {item.po.model || "—"}
-                        </td>
-                        {item.monthPayments.map((amount, mi) => (
-                          <td key={mi} style={{ padding: "8px 6px", textAlign: "right", color: amount ? "#4a3527" : "#ccc", fontWeight: amount ? 600 : 400 }}>
-                            {amount ? `$${amount.toLocaleString()}` : "—"}
+                      <React.Fragment key={idx}>
+                        {/* Primary row */}
+                        <tr
+                          onClick={() => openRecord && openRecord("po", item.po.id)}
+                          style={{
+                            borderBottom: item.customs > 0 ? "none" : "1px solid #e3d8c6",
+                            cursor: openRecord ? "pointer" : "default",
+                            backgroundColor: idx % 2 === 0 ? "#faf7f2" : "white",
+                          }}
+                        >
+                          <td style={{ padding: "8px 6px", color: "#4a3527", fontWeight: 600 }}>
+                            {item.po.party}
                           </td>
-                        ))}
-                        <td style={{ padding: "8px 6px", textAlign: "right", fontWeight: 700, color: "#b5552b" }}>
-                          ${item.customs.toLocaleString('en-AU')}
-                        </td>
-                      </tr>
+                          <td style={{ padding: "8px 6px", color: "#6b5240" }}>
+                            {item.po.model || "—"}
+                          </td>
+                          {item.monthPayments.map((amount, mi) => (
+                            <td key={mi} style={{ padding: "8px 6px", textAlign: "right", color: amount ? "#4a3527" : "#ccc", fontWeight: amount ? 600 : 400 }}>
+                              {amount ? `$${amount.toLocaleString()}` : "—"}
+                            </td>
+                          ))}
+                          <td style={{ padding: "8px 6px", textAlign: "right", color: "#8a7a66" }}>
+                            {item.customs > 0 ? `$${item.customs.toLocaleString("en-AU")}` : "—"}
+                          </td>
+                        </tr>
+
+                        {/* Second row: Freight Forwarding fee — only when applicable */}
+                        {item.customs > 0 && (
+                          <tr
+                            onClick={() => openRecord && openRecord("po", item.po.id)}
+                            style={{
+                              borderBottom: "1px solid #e3d8c6",
+                              cursor: openRecord ? "pointer" : "default",
+                              backgroundColor: idx % 2 === 0 ? "#faf7f2" : "white",
+                            }}
+                          >
+                            <td colSpan={2} style={{ padding: "2px 6px 8px 20px", color: "#b5552b", fontSize: 11, fontStyle: "italic" }}>
+                              Freight Forwarding Fee
+                            </td>
+                            {months.map((_, mi) => (
+                              <td key={mi} style={{ padding: "2px 6px 8px", textAlign: "right", color: "#ccc" }}>—</td>
+                            ))}
+                            <td style={{ padding: "2px 6px 8px", textAlign: "right", fontWeight: 700, color: "#b5552b" }}>
+                              ${item.customs.toLocaleString("en-AU")}
+                            </td>
+                          </tr>
+                        )}
+                      </React.Fragment>
                     ))}
                   </tbody>
                 </table>
                 {shipmentsData.length > 10 && (
                   <div style={{ marginTop: 12, fontSize: 12, color: "#8a7a66", textAlign: "center" }}>
-                    Showing 10 of {shipmentsData.length}. <button onClick={() => setTab("shipments")} style={{ background: "none", border: "none", color: "#b5552b", cursor: "pointer", textDecoration: "underline" }}>View all in Shipments tab</button>
+                    Showing {shipmentsData.length} shipments.
                   </div>
                 )}
               </div>
