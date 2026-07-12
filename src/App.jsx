@@ -3266,7 +3266,22 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
     });
   }
   if (statusFilter) list = list.filter((d) => d.status === statusFilter);
-  list.sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || "") || String(b.number).localeCompare(String(a.number)));
+  
+  // For POs: filter out archived unless searching
+  if (!isQuote && !search) {
+    list = list.filter((d) => !d.archived);
+  }
+  
+  // Sort: POs by ETA (newest to oldest), Quotes by createdAt (newest to oldest)
+  if (!isQuote) {
+    list.sort((a, b) => {
+      const etaA = a.eta || "";
+      const etaB = b.eta || "";
+      return etaB.localeCompare(etaA) || String(b.number).localeCompare(String(a.number));
+    });
+  } else {
+    list.sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || "") || String(b.number).localeCompare(String(a.number)));
+  }
 
   function saveMilestones(doc, milestones) {
     (async () => {
@@ -3862,11 +3877,18 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
       try {
         const table = isQuote ? "quotes" : "purchase_orders";
         
-        // Update status in Supabase
-        await supabaseREST("PATCH", `${table}?id=eq.${doc.id}`, {
+        // For POs: auto-archive when status changes to "Received", unarchive when status changes away from "Received"
+        const updatePayload = {
           status,
           updated_at: todayISO(),
-        });
+        };
+        
+        if (!isQuote) {
+          updatePayload.archived = status === "Received" ? true : false;
+        }
+        
+        // Update status in Supabase
+        await supabaseREST("PATCH", `${table}?id=eq.${doc.id}`, updatePayload);
         
         // If quote accepted, also persist the linked customer's last-quote info,
         // and advance the linked prospect's sales-funnel stage to "Deposit" —
@@ -3895,6 +3917,11 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
           const coll = isQuote ? next.quotes : next.pos;
           const target = coll.find((d) => d.id === doc.id);
           target.status = status;
+          
+          // For POs: set archived status based on whether status is "Received"
+          if (!isQuote) {
+            target.archived = status === "Received" ? true : false;
+          }
           
           // If quote accepted, auto-update customer record with quote info
           if (isQuote && status === "Accepted" && matchedCustomer) {
@@ -4082,8 +4109,11 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
                 }}
               >
                 <div style={{ minWidth: 0 }}>
-                  <div style={{ fontSize: 14, fontWeight: 600, color: "#4a3527" }}>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: "#4a3527", display: "flex", alignItems: "center", gap: 8 }}>
                     #{d.number} · {d.party}
+                    {!isQuote && d.archived && (
+                      <span style={{ fontSize: 11, fontWeight: 700, color: "#a3442e", background: "#fbeae5", padding: "2px 6px", borderRadius: 3 }}>ARCHIVED</span>
+                    )}
                   </div>
                   <div style={{ fontSize: 12, color: "#8a7a66", marginTop: 2, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                     <Badge tone={d.status.toLowerCase()}>{d.status}</Badge>
@@ -4127,6 +4157,9 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
                   <tr key={d.id} onClick={() => setDocModal(d)} style={{ cursor: "pointer" }}>
                     <td>
                       <strong>{d.number}</strong>
+                      {!isQuote && d.archived && (
+                        <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 700, color: "#a3442e", background: "#fbeae5", padding: "2px 6px", borderRadius: 3 }}>ARCHIVED</span>
+                      )}
                     </td>
                     <td>{d.party}</td>
                     <td>{d.model ? <span className="muted">{d.model}</span> : <span className="muted">—</span>}</td>
