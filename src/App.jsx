@@ -302,6 +302,10 @@ function toSupabaseFormat(data, table) {
         copy.long_description = copy.itemDescription;
         delete copy.itemDescription;
       }
+      if (copy.productCode !== undefined) {
+        copy.product_code = copy.productCode;
+        delete copy.productCode;
+      }
       delete copy.createdAt;
       delete copy.updatedAt;
       if (!copy.number) copy.number = `ITEM-${Date.now()}`;
@@ -426,6 +430,7 @@ function fromSupabaseFormat(data, table) {
       copy.sellPrice = copy.sell_price != null ? parseFloat(copy.sell_price) : calcSellPrice(copy.cost);
       copy.notes = copy.notes || "";
       copy.itemDescription = copy.long_description || "";
+      if (copy.product_code !== undefined) { copy.productCode = copy.product_code; delete copy.product_code; }
       break;
 
     case "quotes":
@@ -2123,6 +2128,7 @@ function PriceBookTab({ db, update, showToast }) {
     items = items.filter(
       (i) =>
         i.name.toLowerCase().includes(s) ||
+        (i.productCode || "").toLowerCase().includes(s) ||
         (i.supplier || "").toLowerCase().includes(s) ||
         (i.category || "").toLowerCase().includes(s)
     );
@@ -2294,7 +2300,14 @@ function PriceBookTab({ db, update, showToast }) {
               style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "13px 16px", borderBottom: "1px solid #f0e8d9", cursor: "pointer" }}
             >
               <div>
-                <div style={{ fontSize: 14, fontWeight: 600, color: "#4a3527" }}>{item.model} — {item.name}</div>
+                <div style={{ fontSize: 14, fontWeight: 600, color: "#4a3527", display: "flex", alignItems: "center", gap: 8 }}>
+                  {item.model} — {item.name}
+                  {item.productCode && (
+                    <span style={{ fontSize: 11, fontWeight: 700, color: "#b5552b", fontFamily: "monospace", background: "#fef3ec", padding: "2px 6px", borderRadius: 3 }}>
+                      {item.productCode}
+                    </span>
+                  )}
+                </div>
                 <div style={{ fontSize: 12, color: "#8a7a66", marginTop: 2 }}>
                   {item.category}{item.supplier ? ` · ${item.supplier}` : ""}{item.sellPrice ? ` · $${item.sellPrice.toLocaleString()}` : ""}
                 </div>
@@ -2415,6 +2428,7 @@ function ItemsTable({ list, hideModelCol, onEdit, onDelete, fx }) {
       <thead>
         <tr>
           <th>Item</th>
+          <th>Code</th>
           {!hideModelCol && (
             <>
               <th>Model</th>
@@ -2437,6 +2451,9 @@ function ItemsTable({ list, hideModelCol, onEdit, onDelete, fx }) {
               <td>
                 <strong>{i.name}</strong>
                 {i.notes && <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>{i.notes}</div>}
+              </td>
+              <td>
+                <strong style={{ color: "#b5552b", fontFamily: "monospace", fontSize: 12 }}>{i.productCode || "—"}</strong>
               </td>
               {!hideModelCol && (
                 <>
@@ -2681,6 +2698,7 @@ function ItemModal({ editing, models, categories, suppliers, fx, onAddModel, onA
   const [supplier, setSupplier] = useState(editing ? editing.supplier || "" : "");
   const [notes, setNotes] = useState(editing ? editing.notes || "" : "");
   const [itemDescription, setItemDescription] = useState(editing ? editing.itemDescription || "" : "");
+  const [productCode, setProductCode] = useState(editing ? editing.productCode || "" : "");
   const [error, setError] = useState("");
   const [promptMode, setPromptMode] = useState(null); // null | "model" | "category"
 
@@ -2699,10 +2717,15 @@ function ItemModal({ editing, models, categories, suppliers, fx, onAddModel, onA
 
   function handleSave() {
     const trimmedName = name.trim();
+    const trimmedCode = productCode.trim();
     const parsedCost = parseFloat(cost);
     const parsedSell = parseFloat(sellPrice);
     if (!trimmedName) {
       setError("Please enter an item name.");
+      return;
+    }
+    if (!trimmedCode) {
+      setError("Please enter a product code (e.g., CAM21E).");
       return;
     }
     if (isNaN(parsedCost) || parsedCost < 0) {
@@ -2717,6 +2740,7 @@ function ItemModal({ editing, models, categories, suppliers, fx, onAddModel, onA
 
       {
         name: trimmedName,
+        productCode: trimmedCode,
         model,
         category,
         currency,
@@ -2740,15 +2764,26 @@ function ItemModal({ editing, models, categories, suppliers, fx, onAddModel, onA
       <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: "0 0 16px", fontSize: 19 }}>
         {editing ? "Edit price item" : "Add price item"}
       </h3>
-      <Field label="Item name">
-        <input
-          style={inputStyle}
-          type="text"
-          placeholder="e.g. Composite roof panel — 2.4m"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-        />
-      </Field>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 14 }}>
+        <Field label="Item name">
+          <input
+            style={inputStyle}
+            type="text"
+            placeholder="e.g. Composite roof panel"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+          />
+        </Field>
+        <Field label="Code">
+          <input
+            style={{ ...inputStyle, fontWeight: 600, textTransform: "uppercase" }}
+            type="text"
+            placeholder="e.g. CAM21E"
+            value={productCode}
+            onChange={(e) => setProductCode(e.target.value)}
+          />
+        </Field>
+      </div>
       <div className="grid2">
         <Field
           label="Model"
@@ -4949,7 +4984,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                     const displayPrice = isQuote ? (i.sellPrice != null ? i.sellPrice : calcSellPrice(i.cost)) : i.cost;
                     return (
                       <option key={i.id} value={i.id}>
-                        {i.model} · {i.name} — {fmtMoney(displayPrice, i.currency || "AUD")}
+                        {i.productCode ? `[${i.productCode}] ` : ""}{i.model} · {i.name} — {fmtMoney(displayPrice, i.currency || "AUD")}
                         {(i.currency || "AUD") === "USD" ? " (USD)" : ""}
                       </option>
                     );
