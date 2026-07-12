@@ -9069,9 +9069,9 @@ function DashboardTab({ db, setTab, openRecord }) {
       <Panel style={{ marginTop: 24 }}>
         <h3 style={{ fontFamily: "Georgia,serif", fontSize: 16, color: "#4a3527", margin: "0 0 16px" }}>Shipments due</h3>
         {(() => {
-          // Show POs with an ETA, a FF fee, or that are consolidated — all statuses except Cancelled.
+          // Show only POs with a Freight Forward fee — indicates containers arriving at port
           const shipments = (db.pos || []).filter((po) =>
-            (po.eta || (po.customsClearance || 0) > 0 || (po.consolidatedMemberIds || []).length > 0) &&
+            (po.customsClearance || 0) > 0 &&
             po.status !== "Cancelled"
           );
 
