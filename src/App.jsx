@@ -4377,26 +4377,44 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
             <Btn variant="ghost" onClick={() => setConversionWorkflow(null)}>
               Cancel
             </Btn>
-            <Btn variant="primary" onClick={() => {
+            <Btn variant="primary" onClick={async () => {
               const prospect = db.crm.find((p) => p.id === conversionWorkflow.prospectId);
               if (prospect) {
-                update((next) => {
-                  // Create customer
-                  next.customers.push({
-                    id: uid("cus"),
+                try {
+                  // Create customer in Supabase
+                  const newCustomer = {
                     name: prospect.name,
                     email: prospect.email || "",
                     phone: prospect.phone || "",
-                    address: { street: "", suburb: "", state: "QLD", postcode: "" },
+                    address_street: "",
+                    address_suburb: "",
+                    address_state: "QLD",
+                    address_postcode: "",
                     product: prospect.enquiryProduct || "",
                     notes: `Converted from prospect. Sales value: ${fmtMoney(prospect.salesValue || 0, "AUD")}`,
-                    createdAt: todayISO(),
+                  };
+                  const customerResult = await supabaseREST("POST", "customers", newCustomer);
+                  
+                  // Delete prospect from Supabase
+                  await supabaseREST("DELETE", `crm_prospects?id=eq.${prospect.id}`, {});
+                  
+                  // Update local state
+                  update((next) => {
+                    // Add customer
+                    next.customers.push({
+                      id: customerResult.id,
+                      ...newCustomer,
+                      createdAt: todayISO(),
+                    });
+                    // Remove prospect
+                    const idx = next.crm.findIndex((p) => p.id === conversionWorkflow.prospectId);
+                    if (idx >= 0) next.crm.splice(idx, 1);
                   });
-                  // Remove prospect
-                  const idx = next.crm.findIndex((p) => p.id === conversionWorkflow.prospectId);
-                  if (idx >= 0) next.crm.splice(idx, 1);
-                });
-                showToast(`${conversionWorkflow.prospectName} converted to customer`);
+                  showToast(`${conversionWorkflow.prospectName} converted to customer`);
+                } catch (err) {
+                  console.error("Error converting prospect to customer:", err);
+                  showToast("Error converting prospect to customer", "error");
+                }
               }
               setConversionWorkflow(null);
             }}>
@@ -4549,7 +4567,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
     const defaultPrice = isQuote ? (item.sellPrice != null ? item.sellPrice : calcSellPrice(item.cost)) : item.cost;
     setLines((prev) => [
       ...prev,
-      { desc: `${item.model} — ${item.name}`, qty: 1, price: defaultPrice, currency: item.currency || "AUD", itemId: item.id, cost: 0, lineNote: item.itemDescription || "" },
+      { desc: `${item.model} — ${item.name}`, qty: 1, price: defaultPrice, currency: item.currency || "AUD", itemId: item.id, cost: item.cost || 0, lineNote: item.itemDescription || "" },
     ]);
     setPickerValue("");
   }
@@ -4561,7 +4579,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
       const defaultPrice = isQuote ? (newItem.sellPrice != null ? newItem.sellPrice : calcSellPrice(newItem.cost)) : newItem.cost;
       setLines((prev) => [
         ...prev,
-        { desc: `${newItem.model} — ${newItem.name}`, qty: 1, price: defaultPrice, currency: newItem.currency || "AUD", itemId: newItem.id, cost: 0, lineNote: newItem.itemDescription || "" },
+        { desc: `${newItem.model} — ${newItem.name}`, qty: 1, price: defaultPrice, currency: newItem.currency || "AUD", itemId: newItem.id, cost: newItem.cost || 0, lineNote: newItem.itemDescription || "" },
       ]);
       setShowQuickAddItem(false);
     });
