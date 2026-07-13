@@ -1072,6 +1072,289 @@ function Empty({ icon, text }) {
 }
 
 /* ============================================================
+   AUTH SCREEN — Magic link / OTP via Supabase Auth
+   ============================================================ */
+
+function AuthScreen({ onAuth }) {
+  const [email, setEmail] = useState("");
+  const [stage, setStage] = useState("email"); // "email" | "otp"
+  const [otp, setOtp] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [info, setInfo] = useState("");
+
+  async function sendOTP() {
+    const trimmed = email.trim().toLowerCase();
+    if (!trimmed || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
+      setError("Please enter a valid email address.");
+      return;
+    }
+    setLoading(true);
+    setError("");
+    try {
+      const res = await fetch(`${SUPABASE_URL}/auth/v1/otp`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "apikey": SUPABASE_ANON_KEY },
+        body: JSON.stringify({ email: trimmed, create_user: false }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        // "Signups not allowed" means the email isn't in allowed list
+        if (data.msg?.includes("not allowed") || data.error_description?.includes("not allowed")) {
+          setError("This email is not authorised to access the app. Contact your administrator.");
+        } else {
+          setError(data.msg || data.error_description || "Failed to send code. Try again.");
+        }
+      } else {
+        setStage("otp");
+        setInfo(`A 6-digit code has been sent to ${trimmed}. Check your inbox (and spam folder).`);
+      }
+    } catch {
+      setError("Network error. Please check your connection and try again.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function verifyOTP() {
+    const trimmed = otp.replace(/\s/g, "");
+    if (trimmed.length !== 6) { setError("Please enter the 6-digit code from your email."); return; }
+    setLoading(true);
+    setError("");
+    try {
+      const res = await fetch(`${SUPABASE_URL}/auth/v1/verify`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "apikey": SUPABASE_ANON_KEY },
+        body: JSON.stringify({ type: "email", email: email.trim().toLowerCase(), token: trimmed }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.access_token) {
+        setError("Incorrect or expired code. Please try again or request a new one.");
+      } else {
+        // Check if this user already has a username in the profiles table
+        let existingUsername = null;
+        try {
+          const profRes = await fetch(`${SUPABASE_URL}/rest/v1/profiles?email=eq.${encodeURIComponent(data.user?.email)}&select=username`, {
+            headers: { "apikey": SUPABASE_ANON_KEY, "Authorization": `Bearer ${data.access_token}` },
+          });
+          const profData = await profRes.json();
+          existingUsername = profData?.[0]?.username || null;
+        } catch { /* if profiles table doesn't exist yet, ignore */ }
+        onAuth({ access_token: data.access_token, email: data.user?.email, expires_at: data.expires_at, username: existingUsername });
+      }
+    } catch {
+      setError("Network error. Please check your connection and try again.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const containerStyle = {
+    minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center",
+    background: "linear-gradient(135deg, #f6f1e7 0%, #fdf8f0 100%)", fontFamily: "Georgia, serif",
+  };
+  const cardStyle = {
+    background: "#fff", borderRadius: 12, boxShadow: "0 4px 32px rgba(74,53,39,0.12)",
+    padding: "48px 40px", width: "100%", maxWidth: 400, textAlign: "center",
+  };
+  const inputStyle = {
+    width: "100%", padding: "12px 14px", fontSize: 16, border: "1.5px solid #e3d8c6",
+    borderRadius: 8, outline: "none", boxSizing: "border-box", fontFamily: "inherit",
+    marginBottom: 12, letterSpacing: stage === "otp" ? 6 : 0, textAlign: stage === "otp" ? "center" : "left",
+  };
+  const btnStyle = {
+    width: "100%", padding: "13px", fontSize: 15, fontWeight: 700,
+    background: loading ? "#c9b99a" : "#b5552b", color: "#fff", border: "none",
+    borderRadius: 8, cursor: loading ? "not-allowed" : "pointer", fontFamily: "inherit",
+  };
+
+  return (
+    <div style={containerStyle}>
+      <div style={cardStyle}>
+        {/* Logo / brand */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 12, marginBottom: 28 }}>
+          <div style={{ width: 44, height: 44, borderRadius: 10, background: "#b5552b", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontWeight: 800, fontSize: 16, fontFamily: "Arial, sans-serif" }}>AM</div>
+          <div style={{ textAlign: "left" }}>
+            <div style={{ fontSize: 15, fontWeight: 700, color: "#4a3527" }}>Austral Motorhomes</div>
+            <div style={{ fontSize: 11, color: "#8a7a66" }}>Pricing & Order Manager</div>
+          </div>
+        </div>
+
+        {stage === "email" ? (
+          <>
+            <h2 style={{ fontSize: 20, color: "#4a3527", margin: "0 0 6px" }}>Sign in</h2>
+            <p style={{ fontSize: 13, color: "#8a7a66", margin: "0 0 24px" }}>Enter your email and we'll send you a sign-in code.</p>
+            <input
+              style={inputStyle}
+              type="email"
+              placeholder="you@example.com"
+              value={email}
+              onChange={(e) => { setEmail(e.target.value); setError(""); }}
+              onKeyDown={(e) => e.key === "Enter" && sendOTP()}
+              autoFocus
+            />
+            {error && <p style={{ color: "#b5552b", fontSize: 13, margin: "0 0 12px", textAlign: "left" }}>{error}</p>}
+            <button style={btnStyle} onClick={sendOTP} disabled={loading}>
+              {loading ? "Sending…" : "Send sign-in code →"}
+            </button>
+          </>
+        ) : (
+          <>
+            <h2 style={{ fontSize: 20, color: "#4a3527", margin: "0 0 6px" }}>Check your email</h2>
+            <p style={{ fontSize: 13, color: "#8a7a66", margin: "0 0 6px" }}>{info}</p>
+            <p style={{ fontSize: 12, color: "#a09080", margin: "0 0 24px" }}>The code expires in 60 minutes.</p>
+            <input
+              style={inputStyle}
+              type="text"
+              inputMode="numeric"
+              placeholder="000000"
+              maxLength={6}
+              value={otp}
+              onChange={(e) => { setOtp(e.target.value.replace(/\D/g, "")); setError(""); }}
+              onKeyDown={(e) => e.key === "Enter" && verifyOTP()}
+              autoFocus
+            />
+            {error && <p style={{ color: "#b5552b", fontSize: 13, margin: "0 0 12px", textAlign: "left" }}>{error}</p>}
+            <button style={btnStyle} onClick={verifyOTP} disabled={loading}>
+              {loading ? "Verifying…" : "Verify code →"}
+            </button>
+            <button
+              style={{ background: "none", border: "none", color: "#8a7a66", fontSize: 13, cursor: "pointer", marginTop: 16, textDecoration: "underline" }}
+              onClick={() => { setStage("email"); setOtp(""); setError(""); setInfo(""); }}
+            >
+              ← Use a different email
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
+   USERNAME SPLASH — Shown once for new users after first login
+   ============================================================ */
+
+function UsernameScreen({ session, onComplete }) {
+  const [username, setUsername] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  async function handleSubmit() {
+    const trimmed = username.trim();
+    if (!trimmed) { setError("Please enter a username."); return; }
+    if (trimmed.length < 2) { setError("Username must be at least 2 characters."); return; }
+    if (trimmed.length > 30) { setError("Username must be 30 characters or less."); return; }
+    if (!/^[a-zA-Z0-9_. -]+$/.test(trimmed)) { setError("Only letters, numbers, spaces, dots, hyphens and underscores allowed."); return; }
+
+    setLoading(true);
+    setError("");
+
+    try {
+      // Check uniqueness — look for existing profile with same username (case-insensitive)
+      const checkRes = await fetch(
+        `${SUPABASE_URL}/rest/v1/profiles?username=ilike.${encodeURIComponent(trimmed)}&select=username`,
+        { headers: { "apikey": SUPABASE_ANON_KEY, "Authorization": `Bearer ${session.access_token}` } }
+      );
+      const existing = await checkRes.json();
+      if (Array.isArray(existing) && existing.length > 0) {
+        setError(`"${trimmed}" is already taken. Please choose a different username.`);
+        setLoading(false);
+        return;
+      }
+
+      // Save profile to Supabase profiles table
+      await fetch(`${SUPABASE_URL}/rest/v1/profiles`, {
+        method: "POST",
+        headers: {
+          "apikey": SUPABASE_ANON_KEY,
+          "Authorization": `Bearer ${session.access_token}`,
+          "Content-Type": "application/json",
+          "Prefer": "return=minimal",
+        },
+        body: JSON.stringify({ email: session.email, username: trimmed }),
+      });
+
+      onComplete(trimmed);
+    } catch {
+      setError("Network error. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const containerStyle = {
+    minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center",
+    background: "linear-gradient(135deg, #f6f1e7 0%, #fdf8f0 100%)", fontFamily: "Georgia, serif",
+  };
+
+  return (
+    <div style={containerStyle}>
+      <div style={{ background: "#fff", borderRadius: 12, boxShadow: "0 4px 32px rgba(74,53,39,0.12)", padding: "48px 40px", width: "100%", maxWidth: 420, textAlign: "center" }}>
+
+        {/* Brand */}
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 12, marginBottom: 32 }}>
+          <div style={{ width: 44, height: 44, borderRadius: 10, background: "#b5552b", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontWeight: 800, fontSize: 16, fontFamily: "Arial, sans-serif" }}>AM</div>
+          <div style={{ textAlign: "left" }}>
+            <div style={{ fontSize: 15, fontWeight: 700, color: "#4a3527" }}>Austral Motorhomes</div>
+            <div style={{ fontSize: 11, color: "#8a7a66" }}>Pricing & Order Manager</div>
+          </div>
+        </div>
+
+        {/* Welcome illustration / icon */}
+        <div style={{ fontSize: 48, marginBottom: 12 }}>👋</div>
+        <h2 style={{ fontSize: 22, color: "#4a3527", margin: "0 0 8px" }}>Welcome!</h2>
+        <p style={{ fontSize: 13, color: "#8a7a66", margin: "0 0 6px" }}>
+          Signed in as <strong style={{ color: "#4a3527" }}>{session.email}</strong>
+        </p>
+        <p style={{ fontSize: 13, color: "#8a7a66", margin: "0 0 28px" }}>
+          Choose a username — this is how you'll appear in the app.
+        </p>
+
+        <input
+          style={{
+            width: "100%", padding: "12px 14px", fontSize: 15,
+            border: `1.5px solid ${error ? "#b5552b" : "#e3d8c6"}`,
+            borderRadius: 8, outline: "none", boxSizing: "border-box",
+            fontFamily: "inherit", marginBottom: 10,
+          }}
+          type="text"
+          placeholder="e.g. Duncan or D.Smith"
+          value={username}
+          maxLength={30}
+          onChange={(e) => { setUsername(e.target.value); setError(""); }}
+          onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
+          autoFocus
+        />
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 16 }}>
+          {error
+            ? <p style={{ color: "#b5552b", fontSize: 12, margin: 0, textAlign: "left" }}>{error}</p>
+            : <span />}
+          <span style={{ fontSize: 11, color: "#b0a090", marginLeft: "auto" }}>{username.trim().length}/30</span>
+        </div>
+
+        <button
+          onClick={handleSubmit}
+          disabled={loading}
+          style={{
+            width: "100%", padding: "13px", fontSize: 15, fontWeight: 700,
+            background: loading ? "#c9b99a" : "#b5552b", color: "#fff",
+            border: "none", borderRadius: 8, cursor: loading ? "not-allowed" : "pointer",
+            fontFamily: "inherit",
+          }}
+        >
+          {loading ? "Saving…" : "Get started →"}
+        </button>
+
+        <p style={{ fontSize: 11, color: "#b0a090", marginTop: 20 }}>
+          You can update your username later in settings.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+/* ============================================================
    MAIN APP
    ============================================================ */
 
@@ -1093,6 +1376,46 @@ export default function App() {
     setPendingOpen({ type, id });
   }, []);
   const clearPendingOpen = useCallback(() => setPendingOpen(null), []);
+
+  // ── Auth state ──
+  const [authSession, setAuthSession] = useState(() => {
+    try { return JSON.parse(localStorage.getItem("am_session") || "null"); } catch { return null; }
+  });
+  const [authUsername, setAuthUsername] = useState(() => {
+    try {
+      const s = JSON.parse(localStorage.getItem("am_session") || "null");
+      return s?.username || null;
+    } catch { return null; }
+  });
+
+  const handleSignOut = useCallback(() => {
+    localStorage.removeItem("am_session");
+    setAuthSession(null);
+    setAuthUsername(null);
+  }, []);
+
+  // Show auth screen if not logged in
+  if (!authSession) {
+    return <AuthScreen onAuth={(session) => {
+      localStorage.setItem("am_session", JSON.stringify(session));
+      setAuthSession(session);
+      setAuthUsername(session.username || null);
+    }} />;
+  }
+
+  // Show username splash if logged in but no username set yet
+  if (!authUsername) {
+    return <UsernameScreen
+      session={authSession}
+      onComplete={(username) => {
+        const updated = { ...authSession, username };
+        localStorage.setItem("am_session", JSON.stringify(updated));
+        setAuthSession(updated);
+        setAuthUsername(username);
+      }}
+    />;
+  }
+
   
   // Supabase REST API state
   const [supabaseConnected, setSupabaseConnected] = useState(false);
@@ -1500,6 +1823,9 @@ export default function App() {
             </button>
             <Btn variant="ghost" size="sm" onClick={exportData} style={{ whiteSpace: "nowrap" }}>
               Export backup
+            </Btn>
+            <Btn variant="ghost" size="sm" onClick={handleSignOut} style={{ whiteSpace: "nowrap", color: "#8a7a66" }}>
+              Sign out
             </Btn>
           </div>
         </header>
