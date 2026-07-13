@@ -1111,7 +1111,7 @@ function AuthScreen({ onAuth }) {
         }
       } else {
         setStage("otp");
-        setInfo(`A 6-digit code has been sent to ${trimmed}. Check your inbox (and spam folder).`);
+        setInfo(`An 8-digit code has been sent to ${trimmed}. Check your inbox (and spam folder).`);
       }
     } catch {
       setError("Network error. Please check your connection and try again.");
@@ -1122,7 +1122,7 @@ function AuthScreen({ onAuth }) {
 
   async function verifyOTP() {
     const trimmed = otp.replace(/\s/g, "");
-    if (trimmed.length !== 6) { setError("Please enter the 6-digit code from your email."); return; }
+    if (trimmed.length !== 8) { setError("Please enter the 8-digit code from your email."); return; }
     setLoading(true);
     setError("");
     try {
@@ -1212,7 +1212,7 @@ function AuthScreen({ onAuth }) {
               type="text"
               inputMode="numeric"
               placeholder="000000"
-              maxLength={6}
+              maxLength={8}
               value={otp}
               onChange={(e) => { setOtp(e.target.value.replace(/\D/g, "")); setError(""); }}
               onKeyDown={(e) => e.key === "Enter" && verifyOTP()}
