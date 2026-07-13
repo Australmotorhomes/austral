@@ -1102,8 +1102,12 @@ function AuthScreen({ onAuth }) {
         // "Signups not allowed" means the email isn't in allowed list
         if (data.msg?.includes("not allowed") || data.error_description?.includes("not allowed")) {
           setError("This email is not authorised to access the app. Contact your administrator.");
+        } else if (data.msg?.includes("Database error") || data.error?.includes("Database error")) {
+          setError("Authentication service error. Please try again in a moment.");
+          console.error("Supabase OTP error:", data);
         } else {
-          setError(data.msg || data.error_description || "Failed to send code. Try again.");
+          setError(data.msg || data.error_description || data.error || "Failed to send code. Try again.");
+          console.error("Supabase OTP error:", data);
         }
       } else {
         setStage("otp");
