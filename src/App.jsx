@@ -1394,30 +1394,7 @@ export default function App() {
     setAuthUsername(null);
   }, []);
 
-  // Show auth screen if not logged in
-  if (!authSession) {
-    return <AuthScreen onAuth={(session) => {
-      localStorage.setItem("am_session", JSON.stringify(session));
-      setAuthSession(session);
-      setAuthUsername(session.username || null);
-    }} />;
-  }
-
-  // Show username splash if logged in but no username set yet
-  if (!authUsername) {
-    return <UsernameScreen
-      session={authSession}
-      onComplete={(username) => {
-        const updated = { ...authSession, username };
-        localStorage.setItem("am_session", JSON.stringify(updated));
-        setAuthSession(updated);
-        setAuthUsername(username);
-      }}
-    />;
-  }
-
-  
-  // Supabase REST API state
+  // Supabase REST API state — must be declared before any early returns (Rules of Hooks)
   const [supabaseConnected, setSupabaseConnected] = useState(false);
   const pollingIntervalRef = useRef(null);
 
@@ -1707,6 +1684,27 @@ export default function App() {
 
   const [showFxModal, setShowFxModal] = useState(false);
   const [showSyncModal, setShowSyncModal] = useState(false);
+
+  // ── Auth gates — placed after ALL hooks to satisfy Rules of Hooks ──
+  if (!authSession) {
+    return <AuthScreen onAuth={(session) => {
+      localStorage.setItem("am_session", JSON.stringify(session));
+      setAuthSession(session);
+      setAuthUsername(session.username || null);
+    }} />;
+  }
+
+  if (!authUsername) {
+    return <UsernameScreen
+      session={authSession}
+      onComplete={(username) => {
+        const updated = { ...authSession, username };
+        localStorage.setItem("am_session", JSON.stringify(updated));
+        setAuthSession(updated);
+        setAuthUsername(username);
+      }}
+    />;
+  }
 
   if (db === null) {
     return (
