@@ -8748,6 +8748,7 @@ function DashboardTab({ db, setTab, openRecord }) {
   for (let y = EARLIEST_FY_END; y <= currentFYEnd; y++) defaultColumns.push(y);
   const [columns, setColumns] = React.useState(defaultColumns);
   const [drillDown, setDrillDown] = React.useState(null); // { key: "2026-06", label: "June FY25/26" }
+  const [salesTableCollapsed, setSalesTableCollapsed] = React.useState(true);
 
   const getFYRange = (fyEndYear) => ({
     start: `${fyEndYear - 1}-07-01`,
@@ -8933,61 +8934,74 @@ function DashboardTab({ db, setTab, openRecord }) {
           return (
             <>
               {/* ── Income / Sales table: rows = months, columns = FY years. Includes all non-Canceled statuses (Deposit + Paid + Delivered) ── */}
-              <h3 style={{ fontSize: 14, fontWeight: 700, color: "#6b5240", margin: "0 0 4px" }}>Income / Sales</h3>
-              <p style={{ fontSize: 11, color: "#8a7a66", margin: "0 0 10px" }}>Click any monthly total to see the individual transactions behind it.</p>
-              <div style={{ overflowX: "auto", marginBottom: 32 }}>
-                <table style={{ width: "100%", borderCollapse: "collapse", background: "#fff", borderRadius: 6, overflow: "hidden", border: "1px solid #e3d8c6" }}>
-                  <thead>
-                    <tr style={{ background: "#f0e8d9", borderBottom: "2px solid #b5552b" }}>
-                      <th style={{ ...thStyle, textAlign: "left", width: 70 }}>Month</th>
-                      {periodData.map((pd, i) => (
-                        <th key={i} style={{ ...thStyle, color: "#b5552b", borderLeft: "2px solid #e3d8c6" }}>{pd.label}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {monthNames.map((mn, mi) => {
-                      const monthNum = monthNumbers[mi];
-                      return (
-                        <tr key={mn} style={{ background: mi % 2 === 0 ? "#fff" : "#faf7f3", borderBottom: "1px solid #f0e8d9" }}>
-                          <td style={tdLeft}>{mn}</td>
-                          {periodData.map((pd, i) => {
-                            // figure out the actual YYYY-MM key for this FY column + month row
-                            const fyEndYear = columns[i];
-                            const calYear = monthNum >= 7 ? fyEndYear - 1 : fyEndYear;
-                            const key = `${calYear}-${String(monthNum).padStart(2, '0')}`;
-                            const val = pd.income.monthTotals[key];
-                            return (
-                              <td
-                                key={i}
-                                onClick={() => val && setDrillDown({ key, label: `${mn} ${pd.label}` })}
-                                style={{
-                                  ...tdStyle,
-                                  borderLeft: "2px solid #e3d8c6",
-                                  color: "#b5552b",
-                                  cursor: val ? "pointer" : "default",
-                                  textDecoration: val ? "underline" : "none",
-                                  textDecorationColor: "#e3c9b5",
-                                }}
-                              >
-                                {val ? `$${val.toLocaleString()}` : "—"}
-                              </td>
-                            );
-                          })}
-                        </tr>
-                      );
-                    })}
-                    <tr style={{ background: "#f0e8d9", borderTop: "2px solid #b5552b", fontWeight: 700 }}>
-                      <td style={{ ...tdLeft, fontWeight: 700 }}>Total</td>
-                      {periodData.map((pd, i) => (
-                        <td key={i} style={{ ...tdStyle, borderLeft: "2px solid #e3d8c6", color: "#b5552b", fontWeight: 700 }}>
-                          ${pd.income.periodTotal.toLocaleString()}
-                        </td>
-                      ))}
-                    </tr>
-                  </tbody>
-                </table>
+              <div
+                onClick={() => setSalesTableCollapsed(v => !v)}
+                style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", userSelect: "none", marginBottom: salesTableCollapsed ? 16 : 4 }}
+              >
+                <span style={{ fontSize: 16, color: "#b5552b", lineHeight: 1 }}>{salesTableCollapsed ? "▶" : "▼"}</span>
+                <h3 style={{ fontSize: 14, fontWeight: 700, color: "#6b5240", margin: 0 }}>Income / Sales</h3>
+                {salesTableCollapsed && (
+                  <span style={{ fontSize: 11, color: "#b5552b", marginLeft: 4 }}>click to expand</span>
+                )}
               </div>
+              {!salesTableCollapsed && (
+                <>
+                  <p style={{ fontSize: 11, color: "#8a7a66", margin: "0 0 10px" }}>Click any monthly total to see the individual transactions behind it.</p>
+                  <div style={{ overflowX: "auto", marginBottom: 32 }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", background: "#fff", borderRadius: 6, overflow: "hidden", border: "1px solid #e3d8c6" }}>
+                      <thead>
+                        <tr style={{ background: "#f0e8d9", borderBottom: "2px solid #b5552b" }}>
+                          <th style={{ ...thStyle, textAlign: "left", width: 70 }}>Month</th>
+                          {periodData.map((pd, i) => (
+                            <th key={i} style={{ ...thStyle, color: "#b5552b", borderLeft: "2px solid #e3d8c6" }}>{pd.label}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {monthNames.map((mn, mi) => {
+                          const monthNum = monthNumbers[mi];
+                          return (
+                            <tr key={mn} style={{ background: mi % 2 === 0 ? "#fff" : "#faf7f3", borderBottom: "1px solid #f0e8d9" }}>
+                              <td style={tdLeft}>{mn}</td>
+                              {periodData.map((pd, i) => {
+                                // figure out the actual YYYY-MM key for this FY column + month row
+                                const fyEndYear = columns[i];
+                                const calYear = monthNum >= 7 ? fyEndYear - 1 : fyEndYear;
+                                const key = `${calYear}-${String(monthNum).padStart(2, '0')}`;
+                                const val = pd.income.monthTotals[key];
+                                return (
+                                  <td
+                                    key={i}
+                                    onClick={() => val && setDrillDown({ key, label: `${mn} ${pd.label}` })}
+                                    style={{
+                                      ...tdStyle,
+                                      borderLeft: "2px solid #e3d8c6",
+                                      color: "#b5552b",
+                                      cursor: val ? "pointer" : "default",
+                                      textDecoration: val ? "underline" : "none",
+                                      textDecorationColor: "#e3c9b5",
+                                    }}
+                                  >
+                                    {val ? `$${val.toLocaleString()}` : "—"}
+                                  </td>
+                                );
+                              })}
+                            </tr>
+                          );
+                        })}
+                        <tr style={{ background: "#f0e8d9", borderTop: "2px solid #b5552b", fontWeight: 700 }}>
+                          <td style={{ ...tdLeft, fontWeight: 700 }}>Total</td>
+                          {periodData.map((pd, i) => (
+                            <td key={i} style={{ ...tdStyle, borderLeft: "2px solid #e3d8c6", color: "#b5552b", fontWeight: 700 }}>
+                              ${pd.income.periodTotal.toLocaleString()}
+                            </td>
+                          ))}
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
 
               {/* ── Deposits Received + Forecast table: rows = customer + product, columns = current month → forward ── */}
               <h3 style={{ fontSize: 14, fontWeight: 700, color: "#4a5f7f", margin: "0 0 4px" }}>Deposits Received & Forecast</h3>
