@@ -3602,7 +3602,7 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
 
   const collection = isQuote ? db.quotes : db.pos;
 
-  const statusOptions = isQuote ? ["Draft", "Sent", "Accepted", "Declined"] : ["Draft", "Sent", "Received", "Cancelled"];
+  const statusOptions = isQuote ? ["Draft", "Sent", "Accepted", "Declined"] : ["Draft", "Sent", "Accepted", "Paid", "Received", "Cancelled"];
 
   let list = collection.slice();
   // Hide individual POs that have been absorbed into a consolidated group
@@ -9078,6 +9078,8 @@ function DashboardTab({ db, setTab, openRecord }) {
   const [drillDown, setDrillDown] = React.useState(null); // { key: "2026-06", label: "June FY25/26" }
   const [salesTableCollapsed, setSalesTableCollapsed] = React.useState(true);
   const [depositsTableCollapsed, setDepositsTableCollapsed] = React.useState(true);
+  const [stockTableCollapsed, setStockTableCollapsed] = React.useState(false); // default open
+  const [stockFYEnd, setStockFYEnd] = React.useState(currentFYEnd);
 
   const getFYRange = (fyEndYear) => ({
     start: `${fyEndYear - 1}-07-01`,
@@ -9262,7 +9264,219 @@ function DashboardTab({ db, setTab, openRecord }) {
 
           return (
             <>
-              {/* ── Income / Sales table: rows = months, columns = FY years. Includes all non-Canceled statuses (Deposit + Paid + Delivered) ── */}
+              {/* ── Stock Table: IN / OUT / ON HAND / VALUE by product code for selected FY ── */}
+              {(() => {
+                const fyRange = getFYRange(stockFYEnd);
+
+                // ── Build IN: POs with status "Paid", within FY date range ──
+                const paidPOs = (db.pos || []).filter(po => {
+                  if (po.status !== "Paid") return false;
+                  const poDate = po.date || po.createdAt || "";
+                  return poDate >= fyRange.start && poDate <= fyRange.end;
+                });
+
+                // For each paid PO, calculate total PO value (all lines including non-coded)
+                // then split freight proportionally across product-coded lines
+                const stockIN = {}; // { productCode: { desc, qty, cost } }
+
+                paidPOs.forEach(po => {
+                  const lines = po.lines || [];
+                  const freight = parseFloat(po.customsClearance) || 0;
+
+                  // Total cost of ALL lines (including non-coded shipping lines)
+                  const totalLineCost = lines.reduce((sum, l) => {
+                    const qty = parseFloat(l.qty || l.quantity) || 1;
+                    const cost = parseFloat(l.cost || 0);
+                    return sum + qty * cost;
+                  }, 0);
+
+                  // Cost of product-coded lines only (for freight split denominator)
+                  const codedLineCost = lines
+                    .filter(l => l.itemId)
+                    .reduce((sum, l) => {
+                      const qty = parseFloat(l.qty || l.quantity) || 1;
+                      const cost = parseFloat(l.cost || 0);
+                      return sum + qty * cost;
+                    }, 0);
+
+                  lines.forEach(l => {
+                    if (!l.itemId) return; // skip non-coded lines
+                    // Find product code from price book
+                    const item = (db.items || []).find(i => i.id === l.itemId);
+                    const code = item?.productCode;
+                    if (!code) return;
+
+                    const qty = parseFloat(l.qty || l.quantity) || 1;
+                    const lineCost = parseFloat(l.cost || 0) * qty;
+
+                    // Proportional freight: this line's share of freight
+                    // based on its cost vs total PO line cost (all lines)
+                    const freightShare = totalLineCost > 0
+                      ? (lineCost / totalLineCost) * freight
+                      : codedLineCost > 0 ? freight / lines.filter(x => x.itemId).length : 0;
+
+                    if (!stockIN[code]) {
+                      stockIN[code] = {
+                        code,
+                        desc: item?.name || l.desc || code,
+                        qty: 0,
+                        value: 0,
+                      };
+                    }
+                    stockIN[code].qty += qty;
+                    stockIN[code].value += lineCost + freightShare;
+                  });
+                });
+
+                // ── Build OUT: Quotes where first milestone checkbox is ticked ──
+                const stockOUT = {}; // { productCode: qty }
+
+                (db.quotes || []).forEach(quote => {
+                  const milestones = quote.paymentMilestones || [];
+                  if (!milestones.length) return;
+                  // Check if first milestone is ticked/paid
+                  const firstMilestone = milestones[0];
+                  if (!firstMilestone?.paid && !firstMilestone?.checked && !firstMilestone?.complete) return;
+
+                  // Quote date within FY
+                  const qDate = quote.date || quote.createdAt || "";
+                  if (qDate < fyRange.start || qDate > fyRange.end) return;
+
+                  (quote.lines || []).forEach(l => {
+                    if (!l.itemId) return;
+                    const item = (db.items || []).find(i => i.id === l.itemId);
+                    const code = item?.productCode;
+                    if (!code) return;
+                    const qty = parseFloat(l.qty || l.quantity) || 1;
+                    stockOUT[code] = (stockOUT[code] || 0) + qty;
+                  });
+                });
+
+                // ── Merge IN + OUT into rows ──
+                const allCodes = [...new Set([...Object.keys(stockIN), ...Object.keys(stockOUT)])].sort();
+
+                if (allCodes.length === 0 && !stockTableCollapsed) {
+                  // show empty state inside the table
+                }
+
+                const totIN = allCodes.reduce((s, c) => s + (stockIN[c]?.qty || 0), 0);
+                const totOUT = allCodes.reduce((s, c) => s + (stockOUT[c] || 0), 0);
+                const totOH = totIN - totOUT;
+
+                // VALUE of ON HAND = total IN value minus proportional value of OUT units
+                const totalINValue = allCodes.reduce((s, c) => s + (stockIN[c]?.value || 0), 0);
+                const totalOUTValue = allCodes.reduce((s, c) => {
+                  const inQty = stockIN[c]?.qty || 0;
+                  const outQty = stockOUT[c] || 0;
+                  const inVal = stockIN[c]?.value || 0;
+                  if (inQty === 0) return s;
+                  return s + (outQty / inQty) * inVal;
+                }, 0);
+                const totValue = totalINValue - totalOUTValue;
+
+                const thS = { padding: "8px 10px", fontSize: 11, fontWeight: 700, textAlign: "right", whiteSpace: "nowrap" };
+                const tdS = { padding: "7px 10px", fontSize: 12, textAlign: "right", borderBottom: "1px solid #eee" };
+                const tdL = { padding: "7px 10px", fontSize: 12, textAlign: "left", borderBottom: "1px solid #eee" };
+
+                // Build FY selector options
+                const fyOptions = [];
+                for (let y = EARLIEST_FY_END; y <= currentFYEnd + 1; y++) fyOptions.push(y);
+
+                return (
+                  <>
+                    <div
+                      onClick={() => setStockTableCollapsed(v => !v)}
+                      style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", userSelect: "none", marginBottom: stockTableCollapsed ? 16 : 4 }}
+                    >
+                      <span style={{ fontSize: 16, color: "#3a7a4a", lineHeight: 1 }}>{stockTableCollapsed ? "▶" : "▼"}</span>
+                      <h3 style={{ fontSize: 14, fontWeight: 700, color: "#2d5a38", margin: 0 }}>Stock Movement</h3>
+                      {stockTableCollapsed && <span style={{ fontSize: 11, color: "#3a7a4a", marginLeft: 4 }}>click to expand</span>}
+                    </div>
+
+                    {!stockTableCollapsed && (
+                      <>
+                        {/* FY Selector */}
+                        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+                          <label style={{ fontSize: 12, color: "#5a7a62", fontWeight: 600 }}>Financial Year:</label>
+                          <select
+                            value={stockFYEnd}
+                            onChange={e => setStockFYEnd(Number(e.target.value))}
+                            style={{ fontSize: 12, padding: "4px 8px", border: "1px solid #b0d0b8", borderRadius: 4, color: "#2d5a38" }}
+                          >
+                            {fyOptions.map(y => (
+                              <option key={y} value={y}>{getFYRange(y).label}</option>
+                            ))}
+                          </select>
+                          <span style={{ fontSize: 11, color: "#8a9a8c" }}>
+                            {fyRange.start.slice(0, 10)} – {fyRange.end.slice(0, 10)}
+                          </span>
+                        </div>
+
+                        <div style={{ overflowX: "auto", marginBottom: 24 }}>
+                          <table style={{ width: "100%", borderCollapse: "collapse", background: "#fff", borderRadius: 6, overflow: "hidden", border: "1px solid #c0d8c8", fontSize: 12 }}>
+                            <thead>
+                              <tr style={{ background: "#e8f5ec", borderBottom: "2px solid #3a7a4a" }}>
+                                <th style={{ ...thS, textAlign: "left", width: 80 }}>Code</th>
+                                <th style={{ ...thS, textAlign: "left", width: 160 }}>Description</th>
+                                <th style={{ ...thS, color: "#3a7a4a" }}>IN</th>
+                                <th style={{ ...thS, color: "#b5552b" }}>OUT</th>
+                                <th style={{ ...thS, color: "#4a5f7f" }}>ON HAND</th>
+                                <th style={{ ...thS, color: "#2d5a38" }}>VALUE (ON HAND)</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {allCodes.length === 0 ? (
+                                <tr>
+                                  <td colSpan={6} style={{ padding: 16, textAlign: "center", color: "#aaa", fontSize: 12 }}>
+                                    No stock data for {getFYRange(stockFYEnd).label}. Stock is counted when a PO status is set to "Paid".
+                                  </td>
+                                </tr>
+                              ) : allCodes.map((code, ri) => {
+                                const inQty = stockIN[code]?.qty || 0;
+                                const outQty = stockOUT[code] || 0;
+                                const onHand = inQty - outQty;
+                                const inVal = stockIN[code]?.value || 0;
+                                const outVal = inQty > 0 ? (outQty / inQty) * inVal : 0;
+                                const onHandVal = inVal - outVal;
+                                return (
+                                  <tr key={code} style={{ background: ri % 2 === 0 ? "#fff" : "#f4faf6" }}>
+                                    <td style={{ ...tdL, fontFamily: "monospace", fontWeight: 700, color: "#b5552b", fontSize: 11 }}>
+                                      {code}
+                                    </td>
+                                    <td style={{ ...tdL, color: "#4a3527", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                                      {(stockIN[code]?.desc || "").slice(0, 40)}
+                                    </td>
+                                    <td style={{ ...tdS, color: "#3a7a4a", fontWeight: 600 }}>{inQty}</td>
+                                    <td style={{ ...tdS, color: "#b5552b", fontWeight: 600 }}>{outQty || "—"}</td>
+                                    <td style={{ ...tdS, color: "#4a5f7f", fontWeight: 700 }}>{onHand}</td>
+                                    <td style={{ ...tdS, color: "#2d5a38", fontWeight: 700 }}>
+                                      {onHandVal > 0 ? `$${Math.round(onHandVal).toLocaleString()}` : "—"}
+                                    </td>
+                                  </tr>
+                                );
+                              })}
+                              {/* Totals row */}
+                              {allCodes.length > 0 && (
+                                <tr style={{ background: "#e8f5ec", borderTop: "2px solid #3a7a4a", fontWeight: 700 }}>
+                                  <td style={{ ...tdL, fontWeight: 700, color: "#2d5a38" }} colSpan={2}>Total</td>
+                                  <td style={{ ...tdS, color: "#3a7a4a", fontWeight: 700 }}>{totIN}</td>
+                                  <td style={{ ...tdS, color: "#b5552b", fontWeight: 700 }}>{totOUT || "—"}</td>
+                                  <td style={{ ...tdS, color: "#4a5f7f", fontWeight: 700 }}>{totOH}</td>
+                                  <td style={{ ...tdS, color: "#2d5a38", fontWeight: 700 }}>
+                                    ${Math.round(totValue).toLocaleString()}
+                                  </td>
+                                </tr>
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                      </>
+                    )}
+                  </>
+                );
+              })()}
+
+              {/* ── Income / Sales table ── */}
               <div
                 onClick={() => setSalesTableCollapsed(v => !v)}
                 style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", userSelect: "none", marginBottom: salesTableCollapsed ? 16 : 4 }}
