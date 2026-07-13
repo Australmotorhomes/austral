@@ -8749,6 +8749,7 @@ function DashboardTab({ db, setTab, openRecord }) {
   const [columns, setColumns] = React.useState(defaultColumns);
   const [drillDown, setDrillDown] = React.useState(null); // { key: "2026-06", label: "June FY25/26" }
   const [salesTableCollapsed, setSalesTableCollapsed] = React.useState(true);
+  const [depositsTableCollapsed, setDepositsTableCollapsed] = React.useState(true);
 
   const getFYRange = (fyEndYear) => ({
     start: `${fyEndYear - 1}-07-01`,
@@ -9004,65 +9005,78 @@ function DashboardTab({ db, setTab, openRecord }) {
               )}
 
               {/* ── Deposits Received + Forecast table: rows = customer + product, columns = current month → forward ── */}
-              <h3 style={{ fontSize: 14, fontWeight: 700, color: "#4a5f7f", margin: "0 0 4px" }}>Deposits Received & Forecast</h3>
-              <p style={{ fontSize: 11, color: "#8a7a66", margin: "0 0 10px" }}>First column is this month's payments received; remaining columns are scheduled/forecast. Click any monthly total to see individual transactions.</p>
-              <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse", background: "#fff", borderRadius: 6, overflow: "hidden", border: "1px solid #c8d8e8", fontSize: 11 }}>
-                  <thead>
-                    <tr style={{ background: "#e8eef5", borderBottom: "2px solid #6b8fc4" }}>
-                      <th style={{ ...thStyle, textAlign: "left", color: "#4a5f7f" }}>Customer</th>
-                      <th style={{ ...thStyle, textAlign: "left", color: "#4a5f7f" }}>Product</th>
-                      {depositColumnsTrimmed.map(col => (
-                        <th key={col.key} style={{ ...thStyle, color: "#4a5f7f", borderLeft: "1px solid #c8d8e8" }}>{col.label}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {depositRowsRaw.length === 0 && (
-                      <tr><td colSpan={2 + depositColumnsTrimmed.length} style={{ padding: 12, textAlign: "center", color: "#aaa" }}>No upcoming deposits.</td></tr>
-                    )}
-                    {depositRowsRaw.map((r, ri) => (
-                      <tr key={ri} style={{ background: ri % 2 === 0 ? "#fff" : "#f7fafc", borderBottom: "1px solid #e8eef5" }}>
-                        <td style={{ ...tdLeft, color: "#4a5f7f" }}>{r.customer}</td>
-                        <td style={{ ...tdLeft, color: "#4a5f7f" }}>{r.product}</td>
-                        {depositColumnsTrimmed.map(col => (
-                          <td
-                            key={col.key}
-                            onClick={() => r.byKey[col.key] && openRecord && openRecord("customer", r.customerId)}
-                            style={{
-                              ...tdStyle, color: "#6b8fc4", borderLeft: "1px solid #e8eef5",
-                              cursor: r.byKey[col.key] ? "pointer" : "default",
-                              textDecoration: r.byKey[col.key] ? "underline" : "none",
-                              textDecorationColor: "#a8c4e8",
-                            }}
-                          >
-                            {r.byKey[col.key] ? `$${r.byKey[col.key].toLocaleString()}` : "—"}
-                          </td>
-                        ))}
-                      </tr>
-                    ))}
-                    {depositRowsRaw.length > 0 && (
-                      <tr style={{ background: "#e8eef5", borderTop: "2px solid #6b8fc4", fontWeight: 700 }}>
-                        <td style={{ ...tdLeft, fontWeight: 700, color: "#4a5f7f" }} colSpan={2}>Total (${depositGrandTotal.toLocaleString()})</td>
-                        {depositColumnsTrimmed.map(col => (
-                          <td
-                            key={col.key}
-                            onClick={() => depositMonthTotals[col.key] && setDrillDown({ key: col.key, label: col.label })}
-                            style={{
-                              ...tdStyle, color: "#4a5f7f", borderLeft: "1px solid #c8d8e8", fontWeight: 700,
-                              cursor: depositMonthTotals[col.key] ? "pointer" : "default",
-                              textDecoration: depositMonthTotals[col.key] ? "underline" : "none",
-                              textDecorationColor: "#a8c4e8",
-                            }}
-                          >
-                            {depositMonthTotals[col.key] ? `$${depositMonthTotals[col.key].toLocaleString()}` : "—"}
-                          </td>
-                        ))}
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
+              <div
+                onClick={() => setDepositsTableCollapsed(v => !v)}
+                style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", userSelect: "none", marginBottom: depositsTableCollapsed ? 16 : 4 }}
+              >
+                <span style={{ fontSize: 16, color: "#4a5f7f", lineHeight: 1 }}>{depositsTableCollapsed ? "▶" : "▼"}</span>
+                <h3 style={{ fontSize: 14, fontWeight: 700, color: "#4a5f7f", margin: 0 }}>Deposits Received & Forecast</h3>
+                {depositsTableCollapsed && (
+                  <span style={{ fontSize: 11, color: "#4a5f7f", marginLeft: 4 }}>click to expand</span>
+                )}
               </div>
+              {!depositsTableCollapsed && (
+                <>
+                  <p style={{ fontSize: 11, color: "#8a7a66", margin: "0 0 10px" }}>First column is this month's payments received; remaining columns are scheduled/forecast. Click any monthly total to see individual transactions.</p>
+                  <div style={{ overflowX: "auto" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", background: "#fff", borderRadius: 6, overflow: "hidden", border: "1px solid #c8d8e8", fontSize: 11 }}>
+                      <thead>
+                        <tr style={{ background: "#e8eef5", borderBottom: "2px solid #6b8fc4" }}>
+                          <th style={{ ...thStyle, textAlign: "left", color: "#4a5f7f" }}>Customer</th>
+                          <th style={{ ...thStyle, textAlign: "left", color: "#4a5f7f" }}>Product</th>
+                          {depositColumnsTrimmed.map(col => (
+                            <th key={col.key} style={{ ...thStyle, color: "#4a5f7f", borderLeft: "1px solid #c8d8e8" }}>{col.label}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {depositRowsRaw.length === 0 && (
+                          <tr><td colSpan={2 + depositColumnsTrimmed.length} style={{ padding: 12, textAlign: "center", color: "#aaa" }}>No upcoming deposits.</td></tr>
+                        )}
+                        {depositRowsRaw.map((r, ri) => (
+                          <tr key={ri} style={{ background: ri % 2 === 0 ? "#fff" : "#f7fafc", borderBottom: "1px solid #e8eef5" }}>
+                            <td style={{ ...tdLeft, color: "#4a5f7f" }}>{r.customer}</td>
+                            <td style={{ ...tdLeft, color: "#4a5f7f" }}>{r.product}</td>
+                            {depositColumnsTrimmed.map(col => (
+                              <td
+                                key={col.key}
+                                onClick={() => r.byKey[col.key] && openRecord && openRecord("customer", r.customerId)}
+                                style={{
+                                  ...tdStyle, color: "#6b8fc4", borderLeft: "1px solid #e8eef5",
+                                  cursor: r.byKey[col.key] ? "pointer" : "default",
+                                  textDecoration: r.byKey[col.key] ? "underline" : "none",
+                                  textDecorationColor: "#a8c4e8",
+                                }}
+                              >
+                                {r.byKey[col.key] ? `$${r.byKey[col.key].toLocaleString()}` : "—"}
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                        {depositRowsRaw.length > 0 && (
+                          <tr style={{ background: "#e8eef5", borderTop: "2px solid #6b8fc4", fontWeight: 700 }}>
+                            <td style={{ ...tdLeft, fontWeight: 700, color: "#4a5f7f" }} colSpan={2}>Total (${depositGrandTotal.toLocaleString()})</td>
+                            {depositColumnsTrimmed.map(col => (
+                              <td
+                                key={col.key}
+                                onClick={() => depositMonthTotals[col.key] && setDrillDown({ key: col.key, label: col.label })}
+                                style={{
+                                  ...tdStyle, color: "#4a5f7f", borderLeft: "1px solid #c8d8e8", fontWeight: 700,
+                                  cursor: depositMonthTotals[col.key] ? "pointer" : "default",
+                                  textDecoration: depositMonthTotals[col.key] ? "underline" : "none",
+                                  textDecorationColor: "#a8c4e8",
+                                }}
+                              >
+                                {depositMonthTotals[col.key] ? `$${depositMonthTotals[col.key].toLocaleString()}` : "—"}
+                              </td>
+                            ))}
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
             </>
           );
         })()}
