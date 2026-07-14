@@ -3602,7 +3602,7 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
 
   const collection = isQuote ? db.quotes : db.pos;
 
-  const statusOptions = isQuote ? ["Draft", "Sent", "Accepted", "Declined"] : ["Draft", "Sent", "Accepted", "Paid", "Received", "Cancelled"];
+  const statusOptions = isQuote ? ["Draft", "Sent", "Accepted", "Declined", "Delivered"] : ["Draft", "Sent", "Accepted", "Paid", "Received", "Cancelled"];
 
   let list = collection.slice();
   // Hide individual POs that have been absorbed into a consolidated group
@@ -3630,8 +3630,8 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
   }
   if (statusFilter) list = list.filter((d) => d.status === statusFilter);
   
-  // For POs: filter out archived unless searching
-  if (!isQuote && !search) {
+  // Filter out archived unless searching — applies to both POs and Quotes
+  if (!search) {
     list = list.filter((d) => !d.archived);
   }
   
@@ -4249,6 +4249,9 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
         if (!isQuote) {
           updatePayload.archived = status === "Received" ? true : false;
         }
+        if (isQuote) {
+          updatePayload.archived = (status === "Delivered" || status === "Declined") ? true : false;
+        }
         
         // Update status in Supabase
         await supabaseREST("PATCH", `${table}?id=eq.${doc.id}`, updatePayload);
@@ -4284,6 +4287,9 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
           // For POs: set archived status based on whether status is "Received"
           if (!isQuote) {
             target.archived = status === "Received" ? true : false;
+          }
+          if (isQuote) {
+            target.archived = (status === "Delivered" || status === "Declined") ? true : false;
           }
           
           // If quote accepted, auto-update customer record with quote info
@@ -4474,7 +4480,7 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
                 <div style={{ minWidth: 0 }}>
                   <div style={{ fontSize: 14, fontWeight: 600, color: "#4a3527", display: "flex", alignItems: "center", gap: 8 }}>
                     #{d.number} · {d.party}
-                    {!isQuote && d.archived && (
+                    {d.archived && (
                       <span style={{ fontSize: 11, fontWeight: 700, color: "#a3442e", background: "#fbeae5", padding: "2px 6px", borderRadius: 3 }}>ARCHIVED</span>
                     )}
                   </div>
@@ -4520,7 +4526,7 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
                   <tr key={d.id} onClick={() => setDocModal(d)} style={{ cursor: "pointer" }}>
                     <td>
                       <strong>{d.number}</strong>
-                      {!isQuote && d.archived && (
+                      {d.archived && (
                         <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 700, color: "#a3442e", background: "#fbeae5", padding: "2px 6px", borderRadius: 3 }}>ARCHIVED</span>
                       )}
                     </td>
@@ -6957,28 +6963,18 @@ function ContactsTab({ kind, db, update, showToast, nextNumber, pendingOpen, cle
     (async () => {
       try {
         const table = isSupplier ? "suppliers" : "customers";
-
+        
         if (editing) {
-          // Guard: if editing.id is somehow missing, try to recover it from
-          // the current db state by matching on name before attempting the PATCH.
-          const contactId = editing.id
-            || ((isSupplier ? db.suppliers : db.customers) || []).find(c => c.name === editing.name)?.id;
-
-          if (!contactId) {
-            showToast("Cannot save: customer ID is missing. Please refresh the page and try again.");
-            console.error("saveContact: editing.id is undefined", editing);
-            return;
-          }
-
-          // Convert to Supabase format and PATCH
+          // Convert to Supabase format and PATCH (WITHOUT updatedAt since column doesn't exist)
           const updatePayload = toSupabaseFormat(payload, table);
-          const result = await supabaseREST("PATCH", `${table}?id=eq.${contactId}`, updatePayload);
+          const result = await supabaseREST("PATCH", `${table}?id=eq.${editing.id}`, updatePayload);
           // Use the full returned row to update local state so JSONB fields
           // like `activities` that aren't part of the form payload are preserved.
           const savedRow = Array.isArray(result) && result[0] ? result[0] : null;
+          // Update local state (keep original payload structure)
           update((next) => {
             const coll = isSupplier ? next.suppliers : next.customers;
-            const target = coll.find((c) => c.id === contactId);
+            const target = coll.find((c) => c.id === editing.id);
             if (target) {
               if (savedRow) {
                 Object.assign(target, fromSupabaseFormat(savedRow, table));
@@ -6991,26 +6987,14 @@ function ContactsTab({ kind, db, update, showToast, nextNumber, pendingOpen, cle
           showToast("Contact updated");
         } else {
           // Create new contact in Supabase — let Postgres generate the real UUID.
+          // (id column is uuid type; a client-generated string like "sup_xxxxx" is rejected.)
           const createPayload = toSupabaseFormat(payload, table);
           delete createPayload.id;
           const result = await supabaseREST("POST", table, createPayload);
-          let savedRow = Array.isArray(result) ? result[0] : result;
-
-          // If POST didn't return the row (e.g. 204 or empty array), do a follow-up
-          // GET to retrieve the Supabase-assigned UUID so local state always has it.
-          if (!savedRow?.id) {
-            const name = encodeURIComponent(payload.name.trim());
-            const fetched = await supabaseREST("GET", `${table}?name=eq.${name}&order=created_at.desc&limit=1`);
-            savedRow = Array.isArray(fetched) ? fetched[0] : fetched;
-          }
-
-          if (!savedRow?.id) {
-            showToast("Contact created but ID not returned — please refresh to continue editing.");
-            setEditingContact(undefined);
-            return;
-          }
-
+          const savedRow = Array.isArray(result) ? result[0] : result;
           const newContact = { ...payload, ...fromSupabaseFormat(savedRow, table), id: savedRow.id };
+
+          // Update local state with the Supabase-generated id
           update((next) => {
             const coll = isSupplier ? next.suppliers : next.customers;
             coll.push(newContact);
