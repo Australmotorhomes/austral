@@ -307,7 +307,12 @@ function toSupabaseFormat(data, table) {
         delete copy.productCode;
       }
       delete copy.createdAt;
-      delete copy.updatedAt;
+      if (copy.updatedAt !== undefined) {
+        copy.updated_at = copy.updatedAt;
+        delete copy.updatedAt;
+      } else {
+        copy.updated_at = new Date().toISOString().slice(0, 10);
+      }
       if (!copy.number) copy.number = `ITEM-${Date.now()}`;
       break;
 
@@ -431,6 +436,8 @@ function fromSupabaseFormat(data, table) {
       copy.notes = copy.notes || "";
       copy.itemDescription = copy.long_description || "";
       if (copy.product_code !== undefined) { copy.productCode = copy.product_code; delete copy.product_code; }
+      if (copy.updated_at !== undefined) { copy.updatedAt = copy.updated_at; delete copy.updated_at; }
+      if (copy.created_at !== undefined) { copy.createdAt = copy.created_at; delete copy.created_at; }
       break;
 
     case "quotes":
@@ -9068,10 +9075,11 @@ function countProductsSold(customers, startDate, endDate, status) {
 function StockMovementTable({ db, collapsed, setCollapsed, fyEnd, setFyEnd, currentFYEnd, getFYRange, EARLIEST_FY_END }) {
   const fyRange = getFYRange(fyEnd);
 
-  // ── IN: POs with status "Paid" within FY ──
+  // ── IN: POs with status "Paid" or "Received" within FY ──
+  // "Received" comes after "Paid" in the workflow, so stock remains counted IN
   const stockIN = {};
   (db.pos || []).filter(po => {
-    if (po.status !== "Paid") return false;
+    if (!["Paid", "Received"].includes(po.status)) return false;
     const d = po.date || po.createdAt || "";
     return d >= fyRange.start && d <= fyRange.end;
   }).forEach(po => {
