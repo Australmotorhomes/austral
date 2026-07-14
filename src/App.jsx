@@ -1808,8 +1808,8 @@ export default function App() {
               }}
               title="Click to view or update the USD → AUD rate"
             >
-              <span style={{ opacity: 0.7 }}>USD→AUD</span>
-              <span>{db.fx.usdAudRate.toFixed(4)}</span>
+              <span style={{ opacity: 0.7 }}>AUD/USD</span>
+              <span>{(1 / db.fx.usdAudRate).toFixed(4)}</span>
               <span
                 style={{
                   fontSize: 10,
@@ -3602,7 +3602,7 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
 
   const collection = isQuote ? db.quotes : db.pos;
 
-  const statusOptions = isQuote ? ["Draft", "Sent", "Accepted", "Declined"] : ["Draft", "Sent", "Accepted", "Paid", "Received", "Cancelled"];
+  const statusOptions = isQuote ? ["Draft", "Sent", "Accepted", "Declined", "Delivered"] : ["Draft", "Sent", "Accepted", "Paid", "Received", "Cancelled"];
 
   let list = collection.slice();
   // Hide individual POs that have been absorbed into a consolidated group
@@ -3630,8 +3630,8 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
   }
   if (statusFilter) list = list.filter((d) => d.status === statusFilter);
   
-  // For POs: filter out archived unless searching
-  if (!isQuote && !search) {
+  // Filter out archived unless searching — applies to both POs and Quotes
+  if (!search) {
     list = list.filter((d) => !d.archived);
   }
   
@@ -4249,6 +4249,9 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
         if (!isQuote) {
           updatePayload.archived = status === "Received" ? true : false;
         }
+        if (isQuote) {
+          updatePayload.archived = (status === "Delivered" || status === "Declined") ? true : false;
+        }
         
         // Update status in Supabase
         await supabaseREST("PATCH", `${table}?id=eq.${doc.id}`, updatePayload);
@@ -4284,6 +4287,9 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
           // For POs: set archived status based on whether status is "Received"
           if (!isQuote) {
             target.archived = status === "Received" ? true : false;
+          }
+          if (isQuote) {
+            target.archived = (status === "Delivered" || status === "Declined") ? true : false;
           }
           
           // If quote accepted, auto-update customer record with quote info
@@ -4474,7 +4480,7 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
                 <div style={{ minWidth: 0 }}>
                   <div style={{ fontSize: 14, fontWeight: 600, color: "#4a3527", display: "flex", alignItems: "center", gap: 8 }}>
                     #{d.number} · {d.party}
-                    {!isQuote && d.archived && (
+                    {d.archived && (
                       <span style={{ fontSize: 11, fontWeight: 700, color: "#a3442e", background: "#fbeae5", padding: "2px 6px", borderRadius: 3 }}>ARCHIVED</span>
                     )}
                   </div>
@@ -4520,7 +4526,7 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
                   <tr key={d.id} onClick={() => setDocModal(d)} style={{ cursor: "pointer" }}>
                     <td>
                       <strong>{d.number}</strong>
-                      {!isQuote && d.archived && (
+                      {d.archived && (
                         <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 700, color: "#a3442e", background: "#fbeae5", padding: "2px 6px", borderRadius: 3 }}>ARCHIVED</span>
                       )}
                     </td>
@@ -5302,11 +5308,9 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                 <option value="">— choose an item —</option>
                 {sortedItems
                   .filter((i) => {
-                    // For quotes: show all items
-                    if (isQuote) return true;
-                    // For POs: show items from selected supplier, or items with no supplier assigned
-                    if (!party) return true;  // No supplier selected, show all
-                    return !i.supplier || i.supplier === party;  // Show items with matching supplier OR no supplier
+                    // Show all items regardless of supplier — the supplier on the item
+                    // is informational only and should not restrict the PO picker
+                    return true;
                   })
                   .map((i) => {
                     const displayPrice = isQuote ? (i.sellPrice != null ? i.sellPrice : calcSellPrice(i.cost)) : i.cost;
@@ -9082,7 +9086,7 @@ function StockMovementTable({ db, collapsed, setCollapsed, fyEnd, setFyEnd, curr
       const qty = parseFloat(l.qty || l.quantity) || 1;
       const lineCost = parseFloat(l.cost || 0) * qty;
       const freightShare = totalLineCost > 0 ? (lineCost / totalLineCost) * freight : 0;
-      if (!stockIN[code]) stockIN[code] = { code, desc: item?.name || l.desc || code, qty: 0, value: 0 };
+      if (!stockIN[code]) stockIN[code] = { code, desc: item?.name || item?.description || l.desc || l.description || code, qty: 0, value: 0 };
       stockIN[code].qty += qty;
       stockIN[code].value += lineCost + freightShare;
     });
@@ -9180,7 +9184,7 @@ function StockMovementTable({ db, collapsed, setCollapsed, fyEnd, setFyEnd, curr
                   return (
                     <tr key={code} style={{ background: ri % 2 === 0 ? "#fff" : "#f4faf6" }}>
                       <td style={{ ...tdL, fontFamily: "monospace", fontWeight: 700, color: "#b5552b", fontSize: 11 }}>{code}</td>
-                      <td style={{ ...tdL, color: "#4a3527" }}>{(stockIN[code]?.desc || "").slice(0, 40)}</td>
+                      <td style={{ ...tdL, color: "#4a3527" }}>{(stockIN[code]?.desc || "").slice(0, 12)}</td>
                       <td style={{ ...tdS, color: "#3a7a4a", fontWeight: 600 }}>{inQty}</td>
                       <td style={{ ...tdS, color: "#b5552b", fontWeight: 600 }}>{outQty || "—"}</td>
                       <td style={{ ...tdS, color: "#4a5f7f", fontWeight: 700 }}>{onHand}</td>
@@ -9368,44 +9372,31 @@ function DashboardTab({ db, setTab, openRecord }) {
           const tdLeft  = { padding: "6px 10px", fontSize: 12, textAlign: "left", color: "#6b5240" };
 
           // ---- Build "Deposits Received + Forecast" table data ----
-          // Rows = every customer (any non-Canceled status) who has a payment
-          // dated this month or later — status doesn't gate this table; it's
-          // purely about cash already in this month plus what's still expected.
-          // Columns = current month, then forward.
+          // Source: Quote payment schedules (milestones with a due date and amount)
+          // Rows = one per accepted/active quote, Columns = month of each milestone
           const cutoff = (() => {
             const d = new Date();
             return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
           })();
-          const forecastCustomers = (db.customers || []).filter(
-            (c) => (c.status || "").toLowerCase().trim() !== "canceled"
-          );
-          const depositRowsRaw = forecastCustomers
-            .map((c) => {
+
+          const depositRowsRaw = (db.quotes || [])
+            .filter(q => !["Declined", "Draft"].includes(q.status) && !q.archived)
+            .map(q => {
               const byKey = {};
-              // Primary: read from invoices JSONB array
-              (c.invoices || []).forEach((inv) => {
-                if (!inv || !inv.invoiceMonth) return;
-                const key = inv.invoiceMonth.slice(0, 7);
-                byKey[key] = (byKey[key] || 0) + (parseFloat(inv.amount) || 0);
+              (q.paymentMilestones || []).forEach(m => {
+                if (!m.due || !m.amount) return;
+                const key = String(m.due).slice(0, 7); // YYYY-MM
+                byKey[key] = (byKey[key] || 0) + (parseFloat(m.amount) || 0);
               });
-              // Fallback: read from flat columns if JSONB array is empty
-              if (Object.keys(byKey).length === 0) {
-                [
-                  { month: c.invoice_month_1st || c.invoiceMonth1st, amount: c.invoice_amount_1st || c.invoiceAmount1st },
-                  { month: c.invoice_month_2nd || c.invoiceMonth2nd, amount: c.invoice_amount_2nd || c.invoiceAmount2nd },
-                  { month: c.invoice_month_3rd || c.invoiceMonth3rd, amount: c.invoice_amount_3rd || c.invoiceAmount3rd },
-                ].forEach(({ month, amount }) => {
-                  if (month && amount) {
-                    const key = String(month).slice(0, 7);
-                    byKey[key] = (byKey[key] || 0) + (parseFloat(amount) || 0);
-                  }
-                });
-              }
-              return { customer: c.name, product: c.product || "—", customerId: c.id, byKey };
+              return {
+                customer: q.party || q.customer || "—",
+                product: q.model || (q.lines?.[0]?.desc || "—").slice(0, 20),
+                customerId: q.id, // used for click navigation — opens quote
+                quoteId: q.id,
+                byKey,
+              };
             })
-            // Only keep customers who actually have a payment this month or later —
-            // this is what excludes customers whose payments are all in the past.
-            .filter((r) => Object.keys(r.byKey).some((k) => k >= cutoff));
+            .filter(r => Object.keys(r.byKey).some(k => k >= cutoff));
 
           const allDepositMonthKeys = [...new Set(depositRowsRaw.flatMap(r => Object.keys(r.byKey)))]
             .filter(k => k >= cutoff)
@@ -9529,7 +9520,7 @@ function DashboardTab({ db, setTab, openRecord }) {
                             {depositColumnsTrimmed.map(col => (
                               <td
                                 key={col.key}
-                                onClick={() => r.byKey[col.key] && openRecord && openRecord("customer", r.customerId)}
+                                onClick={() => r.byKey[col.key] && openRecord && openRecord("quote", r.quoteId)}
                                 style={{
                                   ...tdStyle, color: "#6b8fc4", borderLeft: "1px solid #e8eef5",
                                   cursor: r.byKey[col.key] ? "pointer" : "default",
