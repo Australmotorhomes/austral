@@ -9077,6 +9077,7 @@ function StockMovementTable({ db, collapsed, setCollapsed, fyEnd, setFyEnd, curr
 
   // ── IN: POs with status "Paid" or "Received" within FY ──
   // "Received" comes after "Paid" in the workflow, so stock remains counted IN
+  // For POs: l.price = the actual amount paid to supplier (not l.cost which is a quote concept)
   const stockIN = {};
   (db.pos || []).filter(po => {
     if (!["Paid", "Received"].includes(po.status)) return false;
@@ -9085,18 +9086,29 @@ function StockMovementTable({ db, collapsed, setCollapsed, fyEnd, setFyEnd, curr
   }).forEach(po => {
     const lines = po.lines || [];
     const freight = parseFloat(po.customsClearance) || 0;
-    const totalLineCost = lines.reduce((s, l) => s + (parseFloat(l.cost || 0) * (parseFloat(l.qty || l.quantity) || 1)), 0);
+
+    // Total value of ALL lines (including non-coded lines like shipping)
+    // using l.price as the actual amount paid on the PO
+    const totalLineValue = lines.reduce((s, l) => {
+      const qty = parseFloat(l.qty || l.quantity) || 1;
+      const price = parseFloat(l.price || l.unitPrice || l.cost || 0);
+      return s + price * qty;
+    }, 0);
+
     lines.forEach(l => {
       if (!l.itemId) return;
       const item = (db.items || []).find(i => i.id === l.itemId);
       const code = item?.productCode;
       if (!code) return;
       const qty = parseFloat(l.qty || l.quantity) || 1;
-      const lineCost = parseFloat(l.cost || 0) * qty;
-      const freightShare = totalLineCost > 0 ? (lineCost / totalLineCost) * freight : 0;
+      // Use l.price as the actual amount paid — this is what appears on the PO
+      const linePrice = parseFloat(l.price || l.unitPrice || l.cost || 0);
+      const lineValue = linePrice * qty;
+      // Freight split proportional to this line's share of total PO value
+      const freightShare = totalLineValue > 0 ? (lineValue / totalLineValue) * freight : 0;
       if (!stockIN[code]) stockIN[code] = { code, desc: item?.name || item?.description || l.desc || l.description || code, qty: 0, value: 0 };
       stockIN[code].qty += qty;
-      stockIN[code].value += lineCost + freightShare;
+      stockIN[code].value += lineValue + freightShare;
     });
   });
 
