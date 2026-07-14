@@ -3635,7 +3635,8 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
       return haystack.includes(s);
     });
   }
-  if (statusFilter) list = list.filter((d) => d.status === statusFilter);
+  // Status filter — skip when searching so archived records aren't excluded
+  if (statusFilter && !search) list = list.filter((d) => d.status === statusFilter);
   
   // Filter out archived unless searching — applies to both POs and Quotes
   if (!search) {
