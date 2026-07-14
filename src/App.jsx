@@ -436,7 +436,7 @@ function fromSupabaseFormat(data, table) {
       copy.notes = copy.notes || "";
       copy.itemDescription = copy.long_description || "";
       if (copy.product_code !== undefined) { copy.productCode = copy.product_code; delete copy.product_code; }
-      if (copy.updated_at !== undefined) { copy.updatedAt = copy.updated_at; delete copy.updated_at; }
+      if (copy.updated_at !== undefined) { copy.updatedAt = copy.updated_at || copy.created_at || null; delete copy.updated_at; }
       if (copy.created_at !== undefined) { copy.createdAt = copy.created_at; delete copy.created_at; }
       break;
 
@@ -2815,7 +2815,7 @@ function ItemsTable({ list, hideModelCol, onEdit, onDelete, fx }) {
                   </div>
                 )}
               </td>
-              <td className="muted">{fmtDate(i.updatedAt)}</td>
+              <td className="muted">{fmtDate(i.updatedAt || i.createdAt)}</td>
               <td style={{ whiteSpace: "nowrap" }}>
                 <Btn variant="text" size="sm" onClick={() => onEdit(i)}>
                   Edit
