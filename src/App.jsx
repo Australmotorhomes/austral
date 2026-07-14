@@ -9079,13 +9079,6 @@ function StockMovementTable({ db, collapsed, setCollapsed, fyEnd, setFyEnd, curr
   // "Received" comes after "Paid" in the workflow, so stock remains counted IN
   // For POs: l.price = the actual amount paid to supplier (not l.cost which is a quote concept)
   const stockIN = {};
-  const allPOsForStock = (db.pos || []);
-  console.log("🔍 Stock filter - Total POs:", allPOsForStock.length);
-  console.log("🔍 FY Range:", fyRange.start, "to", fyRange.end);
-  allPOsForStock.forEach(po => {
-    const d = (po.date || po.createdAt || "").slice(0, 10);
-    console.log(`  PO ${po.number}: status=${po.status} date=${d} inRange=${d >= fyRange.start && d <= fyRange.end}`);
-  });
   (db.pos || []).filter(po => {
     if (!["Paid", "Received"].includes(po.status)) return false;
     const d = (po.date || po.createdAt || "").slice(0, 10); // normalise to YYYY-MM-DD
@@ -9102,8 +9095,15 @@ function StockMovementTable({ db, collapsed, setCollapsed, fyEnd, setFyEnd, curr
     }, 0);
 
     lines.forEach(l => {
-      if (!l.itemId) return;
-      const item = (db.items || []).find(i => i.id === l.itemId);
+      // Primary: match by itemId linked to price book
+      // Fallback: match by product code appearing in line description
+      let item = l.itemId ? (db.items || []).find(i => i.id === l.itemId) : null;
+      if (!item) {
+        // Try matching product code from line description (e.g. "SAV42U — Savanna 4.2m")
+        item = (db.items || []).find(i =>
+          i.productCode && (l.desc || l.description || "").toUpperCase().includes(i.productCode.toUpperCase())
+        );
+      }
       const code = item?.productCode;
       if (!code) return;
       const qty = parseFloat(l.qty || l.quantity) || 1;
@@ -9116,27 +9116,24 @@ function StockMovementTable({ db, collapsed, setCollapsed, fyEnd, setFyEnd, curr
     });
   });
 
-  // ── OUT: Quotes where first milestone is ticked within FY ──
+  // ── OUT: Quotes where first milestone is ticked ──
+  // Use milestone paidDate for FY filtering (not quote date) — the deposit
+  // was paid in a specific month regardless of when the quote was created
   const stockOUT = {};
-  console.log("🔍 Stock OUT - checking quotes:", (db.quotes || []).length);
   (db.quotes || []).forEach(quote => {
     const milestones = quote.paymentMilestones || [];
     if (!milestones.length) return;
     const first = milestones[0];
-    const isTicked = !!(first?.paid || first?.checked || first?.complete);
-    if (!isTicked) return;
-    const d = (quote.date || quote.createdAt || "").slice(0, 10);
-    const inRange = d >= fyRange.start && d <= fyRange.end;
-    console.log(`  Quote ${quote.number} party=${quote.party} date=${d} inRange=${inRange} firstMilestone:`, JSON.stringify(first));
-    if (!inRange) return;
+    if (!first?.paid) return;
+    // Use the paidDate of the first milestone for FY range check
+    const paidDate = (first.paidDate || first.due || "").slice(0, 10);
+    if (!paidDate || paidDate < fyRange.start || paidDate > fyRange.end) return;
     (quote.lines || []).forEach(l => {
       if (!l.itemId) return;
       const item = (db.items || []).find(i => i.id === l.itemId);
       const code = item?.productCode;
       if (!code) return;
-      const qty = parseFloat(l.qty || l.quantity) || 1;
-      console.log(`    → OUT code=${code} qty=${qty}`);
-      stockOUT[code] = (stockOUT[code] || 0) + qty;
+      stockOUT[code] = (stockOUT[code] || 0) + (parseFloat(l.qty || l.quantity) || 1);
     });
   });
 
@@ -9319,7 +9316,8 @@ function DashboardTab({ db, setTab, openRecord }) {
   const [drillDown, setDrillDown] = React.useState(null); // { key: "2026-06", label: "June FY25/26" }
   const [salesTableCollapsed, setSalesTableCollapsed] = React.useState(true);
   const [depositsTableCollapsed, setDepositsTableCollapsed] = React.useState(true);
-  const [stockTableCollapsed, setStockTableCollapsed] = React.useState(false); // default open
+  const [stockTableCollapsed, setStockTableCollapsed] = React.useState(false);
+  // Default to current FY — July 2026 is in FY26/27
   const [stockFYEnd, setStockFYEnd] = React.useState(currentFYEnd);
 
   const getFYRange = (fyEndYear) => ({
