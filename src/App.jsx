@@ -9087,6 +9087,16 @@ function StockMovementTable({ db, collapsed, setCollapsed, fyEnd, setFyEnd, curr
     const lines = po.lines || [];
     const freight = parseFloat(po.customsClearance) || 0;
 
+    // Debug: log every qualifying PO
+    console.log(`📦 Stock PO ${po.number} status=${po.status} lines=${lines.length} freight=${freight}`);
+    lines.forEach((l, idx) => {
+      console.log(`  Line ${idx}: itemId=${l.itemId} price=${l.price} qty=${l.qty} desc=${l.desc}`);
+      if (l.itemId) {
+        const item = (db.items || []).find(i => i.id === l.itemId);
+        console.log(`  → item found: ${item?.name} code=${item?.productCode}`);
+      }
+    });
+
     // Total value of ALL lines (including non-coded lines like shipping)
     // using l.price as the actual amount paid on the PO
     const totalLineValue = lines.reduce((s, l) => {
@@ -9101,14 +9111,13 @@ function StockMovementTable({ db, collapsed, setCollapsed, fyEnd, setFyEnd, curr
       const code = item?.productCode;
       if (!code) return;
       const qty = parseFloat(l.qty || l.quantity) || 1;
-      // Use l.price as the actual amount paid — this is what appears on the PO
       const linePrice = parseFloat(l.price || l.unitPrice || l.cost || 0);
       const lineValue = linePrice * qty;
-      // Freight split proportional to this line's share of total PO value
       const freightShare = totalLineValue > 0 ? (lineValue / totalLineValue) * freight : 0;
       if (!stockIN[code]) stockIN[code] = { code, desc: item?.name || item?.description || l.desc || l.description || code, qty: 0, value: 0 };
       stockIN[code].qty += qty;
       stockIN[code].value += lineValue + freightShare;
+      console.log(`  ✅ ${code}: qty=${qty} lineValue=${lineValue} freightShare=${freightShare.toFixed(2)} running total=${stockIN[code].value.toFixed(2)}`);
     });
   });
 
