@@ -6957,18 +6957,28 @@ function ContactsTab({ kind, db, update, showToast, nextNumber, pendingOpen, cle
     (async () => {
       try {
         const table = isSupplier ? "suppliers" : "customers";
-        
+
         if (editing) {
-          // Convert to Supabase format and PATCH (WITHOUT updatedAt since column doesn't exist)
+          // Guard: if editing.id is somehow missing, try to recover it from
+          // the current db state by matching on name before attempting the PATCH.
+          const contactId = editing.id
+            || ((isSupplier ? db.suppliers : db.customers) || []).find(c => c.name === editing.name)?.id;
+
+          if (!contactId) {
+            showToast("Cannot save: customer ID is missing. Please refresh the page and try again.");
+            console.error("saveContact: editing.id is undefined", editing);
+            return;
+          }
+
+          // Convert to Supabase format and PATCH
           const updatePayload = toSupabaseFormat(payload, table);
-          const result = await supabaseREST("PATCH", `${table}?id=eq.${editing.id}`, updatePayload);
+          const result = await supabaseREST("PATCH", `${table}?id=eq.${contactId}`, updatePayload);
           // Use the full returned row to update local state so JSONB fields
           // like `activities` that aren't part of the form payload are preserved.
           const savedRow = Array.isArray(result) && result[0] ? result[0] : null;
-          // Update local state (keep original payload structure)
           update((next) => {
             const coll = isSupplier ? next.suppliers : next.customers;
-            const target = coll.find((c) => c.id === editing.id);
+            const target = coll.find((c) => c.id === contactId);
             if (target) {
               if (savedRow) {
                 Object.assign(target, fromSupabaseFormat(savedRow, table));
@@ -6981,14 +6991,26 @@ function ContactsTab({ kind, db, update, showToast, nextNumber, pendingOpen, cle
           showToast("Contact updated");
         } else {
           // Create new contact in Supabase — let Postgres generate the real UUID.
-          // (id column is uuid type; a client-generated string like "sup_xxxxx" is rejected.)
           const createPayload = toSupabaseFormat(payload, table);
           delete createPayload.id;
           const result = await supabaseREST("POST", table, createPayload);
-          const savedRow = Array.isArray(result) ? result[0] : result;
-          const newContact = { ...payload, ...fromSupabaseFormat(savedRow, table), id: savedRow.id };
+          let savedRow = Array.isArray(result) ? result[0] : result;
 
-          // Update local state with the Supabase-generated id
+          // If POST didn't return the row (e.g. 204 or empty array), do a follow-up
+          // GET to retrieve the Supabase-assigned UUID so local state always has it.
+          if (!savedRow?.id) {
+            const name = encodeURIComponent(payload.name.trim());
+            const fetched = await supabaseREST("GET", `${table}?name=eq.${name}&order=created_at.desc&limit=1`);
+            savedRow = Array.isArray(fetched) ? fetched[0] : fetched;
+          }
+
+          if (!savedRow?.id) {
+            showToast("Contact created but ID not returned — please refresh to continue editing.");
+            setEditingContact(undefined);
+            return;
+          }
+
+          const newContact = { ...payload, ...fromSupabaseFormat(savedRow, table), id: savedRow.id };
           update((next) => {
             const coll = isSupplier ? next.suppliers : next.customers;
             coll.push(newContact);
