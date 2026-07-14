@@ -9081,24 +9081,13 @@ function StockMovementTable({ db, collapsed, setCollapsed, fyEnd, setFyEnd, curr
   const stockIN = {};
   (db.pos || []).filter(po => {
     if (!["Paid", "Received"].includes(po.status)) return false;
-    const d = po.date || po.createdAt || "";
+    const d = (po.date || po.createdAt || "").slice(0, 10); // normalise to YYYY-MM-DD
     return d >= fyRange.start && d <= fyRange.end;
   }).forEach(po => {
     const lines = po.lines || [];
     const freight = parseFloat(po.customsClearance) || 0;
 
-    // Debug: log every qualifying PO
-    console.log(`📦 Stock PO ${po.number} status=${po.status} lines=${lines.length} freight=${freight}`);
-    lines.forEach((l, idx) => {
-      console.log(`  Line ${idx}: itemId=${l.itemId} price=${l.price} qty=${l.qty} desc=${l.desc}`);
-      if (l.itemId) {
-        const item = (db.items || []).find(i => i.id === l.itemId);
-        console.log(`  → item found: ${item?.name} code=${item?.productCode}`);
-      }
-    });
-
     // Total value of ALL lines (including non-coded lines like shipping)
-    // using l.price as the actual amount paid on the PO
     const totalLineValue = lines.reduce((s, l) => {
       const qty = parseFloat(l.qty || l.quantity) || 1;
       const price = parseFloat(l.price || l.unitPrice || l.cost || 0);
@@ -9117,7 +9106,6 @@ function StockMovementTable({ db, collapsed, setCollapsed, fyEnd, setFyEnd, curr
       if (!stockIN[code]) stockIN[code] = { code, desc: item?.name || item?.description || l.desc || l.description || code, qty: 0, value: 0 };
       stockIN[code].qty += qty;
       stockIN[code].value += lineValue + freightShare;
-      console.log(`  ✅ ${code}: qty=${qty} lineValue=${lineValue} freightShare=${freightShare.toFixed(2)} running total=${stockIN[code].value.toFixed(2)}`);
     });
   });
 
@@ -9128,7 +9116,7 @@ function StockMovementTable({ db, collapsed, setCollapsed, fyEnd, setFyEnd, curr
     if (!milestones.length) return;
     const first = milestones[0];
     if (!first?.paid && !first?.checked && !first?.complete) return;
-    const d = quote.date || quote.createdAt || "";
+    const d = (quote.date || quote.createdAt || "").slice(0, 10);
     if (d < fyRange.start || d > fyRange.end) return;
     (quote.lines || []).forEach(l => {
       if (!l.itemId) return;
@@ -9155,6 +9143,8 @@ function StockMovementTable({ db, collapsed, setCollapsed, fyEnd, setFyEnd, curr
   const fyOptions = [];
   for (let y = EARLIEST_FY_END; y <= currentFYEnd + 1; y++) fyOptions.push(y);
 
+  const isMobileStock = window.innerWidth < 600;
+
   const thS = { padding: "8px 10px", fontSize: 11, fontWeight: 700, textAlign: "right", whiteSpace: "nowrap" };
   const tdS = { padding: "7px 10px", fontSize: 12, textAlign: "right", borderBottom: "1px solid #ddeee4" };
   const tdL = { padding: "7px 10px", fontSize: 12, textAlign: "left", borderBottom: "1px solid #ddeee4" };
@@ -9172,7 +9162,8 @@ function StockMovementTable({ db, collapsed, setCollapsed, fyEnd, setFyEnd, curr
 
       {!collapsed && (
         <>
-          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
+          {/* FY Selector */}
+          <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
             <label style={{ fontSize: 12, color: "#5a7a62", fontWeight: 600 }}>Financial Year:</label>
             <select
               value={fyEnd}
@@ -9181,58 +9172,117 @@ function StockMovementTable({ db, collapsed, setCollapsed, fyEnd, setFyEnd, curr
             >
               {fyOptions.map(y => <option key={y} value={y}>{getFYRange(y).label}</option>)}
             </select>
-            <span style={{ fontSize: 11, color: "#8a9a8c" }}>{fyRange.start.slice(0,10)} – {fyRange.end.slice(0,10)}</span>
+            <span style={{ fontSize: 11, color: "#8a9a8c" }}>{fyRange.start} – {fyRange.end}</span>
           </div>
 
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", background: "#fff", borderRadius: 6, overflow: "hidden", border: "1px solid #c0d8c8", fontSize: 12 }}>
-              <thead>
-                <tr style={{ background: "#e8f5ec", borderBottom: "2px solid #3a7a4a" }}>
-                  <th style={{ ...thS, textAlign: "left", width: 90 }}>Code</th>
-                  <th style={{ ...thS, textAlign: "left" }}>Description</th>
-                  <th style={{ ...thS, color: "#3a7a4a" }}>IN</th>
-                  <th style={{ ...thS, color: "#b5552b" }}>OUT</th>
-                  <th style={{ ...thS, color: "#4a5f7f" }}>ON HAND</th>
-                  <th style={{ ...thS, color: "#2d5a38" }}>VALUE (ON HAND)</th>
-                </tr>
-              </thead>
-              <tbody>
-                {allCodes.length === 0 ? (
-                  <tr>
-                    <td colSpan={6} style={{ padding: 16, textAlign: "center", color: "#aaa", fontSize: 12 }}>
-                      No stock data for {getFYRange(fyEnd).label}. Set a PO status to "Paid" to count stock IN.
-                    </td>
+          {/* Mobile card view */}
+          {isMobileStock ? (
+            <div>
+              {allCodes.length === 0 ? (
+                <p style={{ fontSize: 12, color: "#aaa", textAlign: "center", padding: 16 }}>
+                  No stock data for {getFYRange(fyEnd).label}. Set a PO status to "Paid" to count stock IN.
+                </p>
+              ) : allCodes.map((code) => {
+                const inQty = stockIN[code]?.qty || 0;
+                const outQty = stockOUT[code] || 0;
+                const onHand = inQty - outQty;
+                const inVal = stockIN[code]?.value || 0;
+                const outVal = inQty > 0 ? (outQty / inQty) * inVal : 0;
+                const onHandVal = inVal - outVal;
+                return (
+                  <div key={code} style={{ background: "#fff", border: "1px solid #c0d8c8", borderRadius: 6, padding: 12, marginBottom: 8 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                      <span style={{ fontFamily: "monospace", fontWeight: 700, color: "#b5552b", fontSize: 13 }}>{code}</span>
+                      <span style={{ fontSize: 12, color: "#4a3527" }}>{(stockIN[code]?.desc || "").slice(0, 12)}</span>
+                    </div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 4 }}>
+                      {[
+                        { label: "IN", value: inQty, color: "#3a7a4a" },
+                        { label: "OUT", value: outQty || "—", color: "#b5552b" },
+                        { label: "ON HAND", value: onHand, color: "#4a5f7f" },
+                        { label: "VALUE", value: onHandVal > 0 ? `$${Math.round(onHandVal).toLocaleString()}` : "—", color: "#2d5a38" },
+                      ].map(({ label, value, color }) => (
+                        <div key={label} style={{ textAlign: "center", background: "#f4faf6", borderRadius: 4, padding: "6px 4px" }}>
+                          <div style={{ fontSize: 10, color: "#8a9a8c", marginBottom: 2 }}>{label}</div>
+                          <div style={{ fontSize: 13, fontWeight: 700, color }}>{value}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+              {/* Mobile totals */}
+              {allCodes.length > 0 && (
+                <div style={{ background: "#e8f5ec", border: "2px solid #3a7a4a", borderRadius: 6, padding: 12, marginTop: 4 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: "#2d5a38", marginBottom: 8 }}>Total</div>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 4 }}>
+                    {[
+                      { label: "IN", value: totIN, color: "#3a7a4a" },
+                      { label: "OUT", value: totOUT || "—", color: "#b5552b" },
+                      { label: "ON HAND", value: totOH, color: "#4a5f7f" },
+                      { label: "VALUE", value: `$${Math.round(totValue).toLocaleString()}`, color: "#2d5a38" },
+                    ].map(({ label, value, color }) => (
+                      <div key={label} style={{ textAlign: "center", background: "#fff", borderRadius: 4, padding: "6px 4px" }}>
+                        <div style={{ fontSize: 10, color: "#8a9a8c", marginBottom: 2 }}>{label}</div>
+                        <div style={{ fontSize: 13, fontWeight: 700, color }}>{value}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            /* Desktop table view */
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", background: "#fff", borderRadius: 6, overflow: "hidden", border: "1px solid #c0d8c8", fontSize: 12 }}>
+                <thead>
+                  <tr style={{ background: "#e8f5ec", borderBottom: "2px solid #3a7a4a" }}>
+                    <th style={{ ...thS, textAlign: "left", width: 90 }}>Code</th>
+                    <th style={{ ...thS, textAlign: "left" }}>Description</th>
+                    <th style={{ ...thS, color: "#3a7a4a" }}>IN</th>
+                    <th style={{ ...thS, color: "#b5552b" }}>OUT</th>
+                    <th style={{ ...thS, color: "#4a5f7f" }}>ON HAND</th>
+                    <th style={{ ...thS, color: "#2d5a38" }}>VALUE (ON HAND)</th>
                   </tr>
-                ) : allCodes.map((code, ri) => {
-                  const inQty = stockIN[code]?.qty || 0;
-                  const outQty = stockOUT[code] || 0;
-                  const onHand = inQty - outQty;
-                  const inVal = stockIN[code]?.value || 0;
-                  const outVal = inQty > 0 ? (outQty / inQty) * inVal : 0;
-                  const onHandVal = inVal - outVal;
-                  return (
-                    <tr key={code} style={{ background: ri % 2 === 0 ? "#fff" : "#f4faf6" }}>
-                      <td style={{ ...tdL, fontFamily: "monospace", fontWeight: 700, color: "#b5552b", fontSize: 11 }}>{code}</td>
-                      <td style={{ ...tdL, color: "#4a3527" }}>{(stockIN[code]?.desc || "").slice(0, 12)}</td>
-                      <td style={{ ...tdS, color: "#3a7a4a", fontWeight: 600 }}>{inQty}</td>
-                      <td style={{ ...tdS, color: "#b5552b", fontWeight: 600 }}>{outQty || "—"}</td>
-                      <td style={{ ...tdS, color: "#4a5f7f", fontWeight: 700 }}>{onHand}</td>
-                      <td style={{ ...tdS, color: "#2d5a38", fontWeight: 700 }}>{onHandVal > 0 ? `$${Math.round(onHandVal).toLocaleString()}` : "—"}</td>
+                </thead>
+                <tbody>
+                  {allCodes.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} style={{ padding: 16, textAlign: "center", color: "#aaa", fontSize: 12 }}>
+                        No stock data for {getFYRange(fyEnd).label}. Set a PO status to "Paid" to count stock IN.
+                      </td>
                     </tr>
-                  );
-                })}
-                {allCodes.length > 0 && (
-                  <tr style={{ background: "#e8f5ec", borderTop: "2px solid #3a7a4a", fontWeight: 700 }}>
-                    <td style={{ ...tdL, fontWeight: 700, color: "#2d5a38" }} colSpan={2}>Total</td>
-                    <td style={{ ...tdS, color: "#3a7a4a", fontWeight: 700 }}>{totIN}</td>
-                    <td style={{ ...tdS, color: "#b5552b", fontWeight: 700 }}>{totOUT || "—"}</td>
-                    <td style={{ ...tdS, color: "#4a5f7f", fontWeight: 700 }}>{totOH}</td>
-                    <td style={{ ...tdS, color: "#2d5a38", fontWeight: 700 }}>${Math.round(totValue).toLocaleString()}</td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
+                  ) : allCodes.map((code, ri) => {
+                    const inQty = stockIN[code]?.qty || 0;
+                    const outQty = stockOUT[code] || 0;
+                    const onHand = inQty - outQty;
+                    const inVal = stockIN[code]?.value || 0;
+                    const outVal = inQty > 0 ? (outQty / inQty) * inVal : 0;
+                    const onHandVal = inVal - outVal;
+                    return (
+                      <tr key={code} style={{ background: ri % 2 === 0 ? "#fff" : "#f4faf6" }}>
+                        <td style={{ ...tdL, fontFamily: "monospace", fontWeight: 700, color: "#b5552b", fontSize: 11 }}>{code}</td>
+                        <td style={{ ...tdL, color: "#4a3527" }}>{(stockIN[code]?.desc || "").slice(0, 12)}</td>
+                        <td style={{ ...tdS, color: "#3a7a4a", fontWeight: 600 }}>{inQty}</td>
+                        <td style={{ ...tdS, color: "#b5552b", fontWeight: 600 }}>{outQty || "—"}</td>
+                        <td style={{ ...tdS, color: "#4a5f7f", fontWeight: 700 }}>{onHand}</td>
+                        <td style={{ ...tdS, color: "#2d5a38", fontWeight: 700 }}>{onHandVal > 0 ? `$${Math.round(onHandVal).toLocaleString()}` : "—"}</td>
+                      </tr>
+                    );
+                  })}
+                  {allCodes.length > 0 && (
+                    <tr style={{ background: "#e8f5ec", borderTop: "2px solid #3a7a4a", fontWeight: 700 }}>
+                      <td style={{ ...tdL, fontWeight: 700, color: "#2d5a38" }} colSpan={2}>Total</td>
+                      <td style={{ ...tdS, color: "#3a7a4a", fontWeight: 700 }}>{totIN}</td>
+                      <td style={{ ...tdS, color: "#b5552b", fontWeight: 700 }}>{totOUT || "—"}</td>
+                      <td style={{ ...tdS, color: "#4a5f7f", fontWeight: 700 }}>{totOH}</td>
+                      <td style={{ ...tdS, color: "#2d5a38", fontWeight: 700 }}>${Math.round(totValue).toLocaleString()}</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
         </>
       )}
     </>
