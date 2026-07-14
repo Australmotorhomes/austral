@@ -9079,6 +9079,13 @@ function StockMovementTable({ db, collapsed, setCollapsed, fyEnd, setFyEnd, curr
   // "Received" comes after "Paid" in the workflow, so stock remains counted IN
   // For POs: l.price = the actual amount paid to supplier (not l.cost which is a quote concept)
   const stockIN = {};
+  const allPOsForStock = (db.pos || []);
+  console.log("🔍 Stock filter - Total POs:", allPOsForStock.length);
+  console.log("🔍 FY Range:", fyRange.start, "to", fyRange.end);
+  allPOsForStock.forEach(po => {
+    const d = (po.date || po.createdAt || "").slice(0, 10);
+    console.log(`  PO ${po.number}: status=${po.status} date=${d} inRange=${d >= fyRange.start && d <= fyRange.end}`);
+  });
   (db.pos || []).filter(po => {
     if (!["Paid", "Received"].includes(po.status)) return false;
     const d = (po.date || po.createdAt || "").slice(0, 10); // normalise to YYYY-MM-DD
@@ -9111,19 +9118,25 @@ function StockMovementTable({ db, collapsed, setCollapsed, fyEnd, setFyEnd, curr
 
   // ── OUT: Quotes where first milestone is ticked within FY ──
   const stockOUT = {};
+  console.log("🔍 Stock OUT - checking quotes:", (db.quotes || []).length);
   (db.quotes || []).forEach(quote => {
     const milestones = quote.paymentMilestones || [];
     if (!milestones.length) return;
     const first = milestones[0];
-    if (!first?.paid && !first?.checked && !first?.complete) return;
+    const isTicked = !!(first?.paid || first?.checked || first?.complete);
+    if (!isTicked) return;
     const d = (quote.date || quote.createdAt || "").slice(0, 10);
-    if (d < fyRange.start || d > fyRange.end) return;
+    const inRange = d >= fyRange.start && d <= fyRange.end;
+    console.log(`  Quote ${quote.number} party=${quote.party} date=${d} inRange=${inRange} firstMilestone:`, JSON.stringify(first));
+    if (!inRange) return;
     (quote.lines || []).forEach(l => {
       if (!l.itemId) return;
       const item = (db.items || []).find(i => i.id === l.itemId);
       const code = item?.productCode;
       if (!code) return;
-      stockOUT[code] = (stockOUT[code] || 0) + (parseFloat(l.qty || l.quantity) || 1);
+      const qty = parseFloat(l.qty || l.quantity) || 1;
+      console.log(`    → OUT code=${code} qty=${qty}`);
+      stockOUT[code] = (stockOUT[code] || 0) + qty;
     });
   });
 
