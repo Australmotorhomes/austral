@@ -9320,6 +9320,8 @@ function DashboardTab({ db, setTab, openRecord }) {
   const [stockTableCollapsed, setStockTableCollapsed] = React.useState(false);
   // Default to current FY — July 2026 is in FY26/27
   const [stockFYEnd, setStockFYEnd] = React.useState(currentFYEnd);
+  const [mobilePage, setMobilePage] = React.useState(0);
+  const touchStartX = React.useRef(0);
 
   const getFYRange = (fyEndYear) => ({
     start: `${fyEndYear - 1}-07-01`,
@@ -9401,6 +9403,219 @@ function DashboardTab({ db, setTab, openRecord }) {
     background: "#f0e8d9",
     borderColor: "#b5552b",
   };
+
+  // ── MOBILE SWIPE DASHBOARD ────────────────────────────────────────────────
+  if (isMobile) {
+    const mobileShipments = (db.pos || []).filter((po) =>
+      (po.eta || (po.customsClearance || 0) > 0 || (po.consolidatedMemberIds || []).length > 0) &&
+      po.status !== "Cancelled"
+    );
+
+    // Pre-compute deposit rows for Page 2
+    const depositRows = (() => {
+      const today2 = new Date();
+      const mths = [];
+      for (let i = 0; i < 6; i++) {
+        const d = new Date(today2.getFullYear(), today2.getMonth() + i, 1);
+        mths.push({ date: d, label: d.toLocaleDateString("en-AU", { month: "short", year: "2-digit" }) });
+      }
+      const rows = [];
+      (db.quotes || []).filter(q => q.status === "Accepted").forEach(q => {
+        (q.paymentMilestones || []).forEach(pm => {
+          if (!pm.due || !pm.amount) return;
+          const pmDate = new Date(pm.due);
+          const mi = mths.findIndex(m => m.date.getFullYear() === pmDate.getFullYear() && m.date.getMonth() === pmDate.getMonth());
+          if (mi < 0) return;
+          rows.push({ name: q.party || "—", product: q.model || "—", month: mths[mi].label, amount: parseFloat(pm.amount) || 0, paid: !!pm.paid, quoteId: q.id });
+        });
+      });
+      return rows;
+    })();
+
+    const totalPages = 4 + mobileShipments.length;
+    const pageTitles = ["Sales Performance", "Deposits", "Stock", "Sales Funnel",
+      ...mobileShipments.map((_, i) => `Shipment ${i + 1}`)];
+
+    const handleTouchStart = (e) => { touchStartX.current = e.touches[0].clientX; };
+    const handleTouchEnd = (e) => {
+      const diff = touchStartX.current - e.changedTouches[0].clientX;
+      if (diff > 50) setMobilePage(p => Math.min(p + 1, totalPages - 1));
+      if (diff < -50) setMobilePage(p => Math.max(p - 1, 0));
+    };
+
+    const card = { background: "#f9f5f0", border: "1px solid #e3d8c6", borderRadius: 10, padding: 16, marginBottom: 12 };
+    const row = { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 0", borderBottom: "1px solid #f0e8d9", fontSize: 13 };
+    const page = { minWidth: "100%", boxSizing: "border-box", padding: "4px 2px 24px" };
+    const fmtD = (d) => d ? new Date(d).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" }) : "—";
+    const stripPO = (n) => String(n).replace(/^PO-?/i, "");
+
+    return (
+      <div style={{ overflow: "hidden", userSelect: "none" }}>
+        {/* Title + counter */}
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0 2px 10px" }}>
+          <span style={{ fontFamily: "Georgia,serif", fontSize: 17, fontWeight: 700, color: "#4a3527" }}>
+            {pageTitles[mobilePage]}
+          </span>
+          <span style={{ fontSize: 12, color: "#8a7a66" }}>{mobilePage + 1} / {totalPages}</span>
+        </div>
+
+        {/* Dot indicators */}
+        <div style={{ display: "flex", justifyContent: "center", gap: 6, marginBottom: 14, flexWrap: "wrap" }}>
+          {Array.from({ length: totalPages }).map((_, i) => (
+            <button key={i} onClick={() => setMobilePage(i)} style={{
+              width: i === mobilePage ? 20 : 8, height: 8, borderRadius: 4,
+              background: i === mobilePage ? "#b5552b" : "#d4c4b0",
+              border: "none", padding: 0, cursor: "pointer", transition: "all 0.2s",
+            }} />
+          ))}
+        </div>
+
+        {/* Swipeable strip */}
+        <div
+          style={{ display: "flex", transition: "transform 0.32s cubic-bezier(.4,0,.2,1)", transform: `translateX(-${mobilePage * 100}%)`, willChange: "transform" }}
+          onTouchStart={handleTouchStart}
+          onTouchEnd={handleTouchEnd}
+        >
+          {/* PAGE 1 — Sales Performance */}
+          <div style={page}>
+            <div style={{ display: "flex", gap: 10, overflowX: "auto", paddingBottom: 8 }}>
+              {columns.map(fyEnd => {
+                const { start, end, label } = getFYRange(fyEnd);
+                const fyQ = (db.quotes || []).filter(q => q.date >= start && q.date <= end);
+                const acc = fyQ.filter(q => q.status === "Accepted");
+                return (
+                  <div key={fyEnd} style={{ ...card, minWidth: 155, flex: "0 0 auto", marginBottom: 0 }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: "#b5552b", marginBottom: 8 }}>{label}</div>
+                    <div style={{ fontSize: 10, color: "#8a7a66", marginBottom: 2 }}>Revenue (accepted)</div>
+                    <div style={{ fontSize: 17, fontWeight: 700, color: "#4a3527", marginBottom: 10 }}>{fmtMoney(acc.reduce((s, q) => s + (q.total || 0), 0), "AUD")}</div>
+                    <div style={{ fontSize: 10, color: "#8a7a66", marginBottom: 2 }}>Orders</div>
+                    <div style={{ fontSize: 20, fontWeight: 700, color: "#4a3527" }}>{acc.length}</div>
+                  </div>
+                );
+              })}
+            </div>
+            <div style={{ ...card, marginTop: 12 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: "#6b5240", marginBottom: 8 }}>Funnel snapshot</div>
+              {[["Call / Email", funnelStats.call], ["Quote sent", funnelStats.quote], ["Deposit", funnelStats.deposit], ["Delivered", funnelStats.delivered]].map(([l, v]) => (
+                <div key={l} style={row}><span style={{ color: "#6b5240" }}>{l}</span><strong>{v}</strong></div>
+              ))}
+            </div>
+          </div>
+
+          {/* PAGE 2 — Deposits */}
+          <div style={page}>
+            {depositRows.length === 0
+              ? <p style={{ fontSize: 13, color: "#8a7a66" }}>No deposits scheduled.</p>
+              : depositRows.map((r, i) => (
+                <div key={i} onClick={() => openRecord && openRecord("quote", r.quoteId)}
+                  style={{ ...card, display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }}>
+                  <div>
+                    <div style={{ fontSize: 13, fontWeight: 700, color: "#4a3527" }}>{r.name}</div>
+                    <div style={{ fontSize: 11, color: "#8a7a66", marginTop: 2 }}>{r.product}</div>
+                    <div style={{ fontSize: 11, color: "#8a7a66" }}>{r.month}</div>
+                  </div>
+                  <div style={{ textAlign: "right" }}>
+                    <div style={{ fontSize: 15, fontWeight: 700, color: r.paid ? "#5c7a4f" : "#b5552b" }}>{fmtMoney(r.amount, "AUD")}</div>
+                    {r.paid && <div style={{ fontSize: 10, color: "#5c7a4f", fontWeight: 700 }}>PAID ✓</div>}
+                  </div>
+                </div>
+              ))
+            }
+          </div>
+
+          {/* PAGE 3 — Stock */}
+          <div style={page}>
+            <div style={{ background: "#f4faf6", borderRadius: 8, border: "1px solid #c0d8c8", padding: 12 }}>
+              <StockMovementTable db={db} collapsed={stockTableCollapsed} setCollapsed={setStockTableCollapsed}
+                fyEnd={stockFYEnd} setFyEnd={setStockFYEnd} currentFYEnd={currentFYEnd}
+                getFYRange={getFYRange} EARLIEST_FY_END={EARLIEST_FY_END} />
+            </div>
+          </div>
+
+          {/* PAGE 4 — Sales Funnel */}
+          <div style={page}>
+            {[
+              { label: "Call / Email", value: funnelStats.call, color: "#8a7a66" },
+              { label: "Quote sent", value: funnelStats.quote, color: "#4a7ba7" },
+              { label: "Deposit received", value: funnelStats.deposit, color: "#b5552b" },
+              { label: "Delivered", value: funnelStats.delivered, color: "#5c7a4f" },
+            ].map(r => (
+              <div key={r.label} onClick={() => setTab("crm")}
+                style={{ ...card, display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }}>
+                <span style={{ fontSize: 14, color: "#4a3527", fontWeight: 600 }}>{r.label}</span>
+                <span style={{ fontSize: 30, fontWeight: 800, color: r.color }}>{r.value}</span>
+              </div>
+            ))}
+            <p style={{ fontSize: 11, color: "#8a7a66", textAlign: "center", marginTop: 4 }}>Tap any row to open Prospects</p>
+          </div>
+
+          {/* PAGES 5+ — One per shipment */}
+          {mobileShipments.map((po) => {
+            const members = (po.consolidatedMemberIds || []).length > 0
+              ? (db.pos || []).filter(p => (po.consolidatedMemberIds || []).includes(p.id)) : [];
+            const allPOs = members.length ? [po, ...members] : [po];
+            const poLabel = `PO-${stripPO(po.number)}${members.length ? `/${members.map(m => stripPO(m.number)).join("/")}` : ""}`;
+            return (
+              <div key={po.id} style={page}>
+                {/* Shipment header card */}
+                <div onClick={() => openRecord && openRecord("po", po.id)}
+                  style={{ ...card, cursor: "pointer", borderLeft: "4px solid #b5552b" }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: "#b5552b", marginBottom: 4 }}>{poLabel}</div>
+                  <div style={{ fontSize: 15, fontWeight: 700, color: "#4a3527", marginBottom: 4 }}>{po.party}</div>
+                  {po.eta && <div style={{ fontSize: 12, color: "#8a7a66" }}>ETA: {fmtD(po.eta)}</div>}
+                  {(po.customsClearance || 0) > 0 && (
+                    <div style={{ marginTop: 8, padding: "6px 10px", background: "#fbeae5", borderRadius: 6 }}>
+                      <span style={{ fontSize: 12, color: "#a3442e", fontWeight: 600 }}>Freight: {fmtMoney(po.customsClearance, "AUD")}</span>
+                    </div>
+                  )}
+                  <div style={{ fontSize: 11, color: "#8a7a66", marginTop: 8 }}>Tap to open PO →</div>
+                </div>
+
+                {/* Payment milestones per PO in the group */}
+                {allPOs.map(p => {
+                  const milestones = (p.paymentMilestones || []).filter(m => m.due || m.amount);
+                  if (!milestones.length) return null;
+                  return (
+                    <div key={p.id} style={card}>
+                      {members.length > 0 && (
+                        <div style={{ fontSize: 11, fontWeight: 700, color: "#b5552b", marginBottom: 8 }}>PO-{stripPO(p.number)}</div>
+                      )}
+                      <div style={{ fontSize: 12, fontWeight: 700, color: "#6b5240", marginBottom: 8 }}>Payment Schedule</div>
+                      {milestones.map((m, mi) => (
+                        <div key={mi} onClick={() => openRecord && openRecord("po", p.id)}
+                          style={{ ...row, cursor: "pointer" }}>
+                          <div>
+                            <div style={{ fontSize: 13, color: m.paid ? "#5c7a4f" : "#4a3527" }}>{m.due ? fmtD(m.due) : "TBC"}</div>
+                            {m.paid && <div style={{ fontSize: 10, color: "#5c7a4f", fontWeight: 700 }}>PAID ✓</div>}
+                          </div>
+                          <strong style={{ color: m.paid ? "#5c7a4f" : "#b5552b", fontSize: 14 }}>
+                            {m.amount ? fmtMoney(parseFloat(m.amount), "AUD") : "TBC"}
+                          </strong>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Prev / Next */}
+        <div style={{ display: "flex", justifyContent: "space-between", padding: "14px 2px 0" }}>
+          <button onClick={() => setMobilePage(p => Math.max(p - 1, 0))} disabled={mobilePage === 0}
+            style={{ background: mobilePage === 0 ? "#e3d8c6" : "#b5552b", color: mobilePage === 0 ? "#a09080" : "#fff", border: "none", borderRadius: 8, padding: "10px 24px", fontSize: 13, fontWeight: 600, cursor: mobilePage === 0 ? "default" : "pointer" }}>
+            ← Prev
+          </button>
+          <button onClick={() => setMobilePage(p => Math.min(p + 1, totalPages - 1))} disabled={mobilePage === totalPages - 1}
+            style={{ background: mobilePage === totalPages - 1 ? "#e3d8c6" : "#b5552b", color: mobilePage === totalPages - 1 ? "#a09080" : "#fff", border: "none", borderRadius: 8, padding: "10px 24px", fontSize: 13, fontWeight: 600, cursor: mobilePage === totalPages - 1 ? "default" : "pointer" }}>
+            Next →
+          </button>
+        </div>
+      </div>
+    );
+  }
+  // ── END MOBILE DASHBOARD ──────────────────────────────────────────────────
 
   return (
     <>
