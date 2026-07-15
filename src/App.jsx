@@ -9406,10 +9406,26 @@ function DashboardTab({ db, setTab, openRecord }) {
 
   // ── MOBILE SWIPE DASHBOARD ────────────────────────────────────────────────
   if (isMobile) {
-    const mobileShipments = (db.pos || []).filter((po) =>
-      (po.eta || (po.customsClearance || 0) > 0 || (po.consolidatedMemberIds || []).length > 0) &&
-      po.status !== "Cancelled"
-    );
+    const mobileShipments = (() => {
+      const pos = (db.pos || []).filter((po) =>
+        (po.eta || (po.customsClearance || 0) > 0 || (po.consolidatedMemberIds || []).length > 0) &&
+        po.status !== "Cancelled"
+      );
+      // Sort by soonest ETA or earliest milestone due date
+      const earliestDue = (po) => {
+        const dates = [po.eta, ...(po.paymentMilestones || []).map(m => m.due)].filter(Boolean).sort();
+        return dates[0] || "9999";
+      };
+      pos.sort((a, b) => earliestDue(a).localeCompare(earliestDue(b)));
+      // Group by supplier
+      const grouped = {};
+      pos.forEach(po => {
+        const supplier = po.party || "Unknown Supplier";
+        if (!grouped[supplier]) grouped[supplier] = [];
+        grouped[supplier].push(po);
+      });
+      return Object.entries(grouped).map(([supplier, pos]) => ({ supplier, pos }));
+    })();
 
     // Pre-compute deposit rows for Page 2
     const depositRows = (() => {
@@ -9434,7 +9450,7 @@ function DashboardTab({ db, setTab, openRecord }) {
 
     const totalPages = 4 + mobileShipments.length;
     const pageTitles = ["Sales Performance", "Deposits", "Stock", "Sales Funnel",
-      ...mobileShipments.map((_, i) => `Shipment ${i + 1}`)];
+      ...mobileShipments.map(g => g.supplier)];
 
     const handleTouchStart = (e) => { touchStartX.current = e.touches[0].clientX; };
     const handleTouchEnd = (e) => {
@@ -9549,50 +9565,77 @@ function DashboardTab({ db, setTab, openRecord }) {
             <p style={{ fontSize: 11, color: "#8a7a66", textAlign: "center", marginTop: 4 }}>Tap any row to open Prospects</p>
           </div>
 
-          {/* PAGES 5+ — One per shipment */}
-          {mobileShipments.map((po) => {
-            const members = (po.consolidatedMemberIds || []).length > 0
-              ? (db.pos || []).filter(p => (po.consolidatedMemberIds || []).includes(p.id)) : [];
-            const allPOs = members.length ? [po, ...members] : [po];
-            const poLabel = `PO-${stripPO(po.number)}${members.length ? `/${members.map(m => stripPO(m.number)).join("/")}` : ""}`;
+          {/* PAGES 5+ — One page per supplier, all their POs scrollable */}
+          {mobileShipments.map(({ supplier, pos: supplierPOs }) => {
+            const fmtD = (d) => d ? new Date(d).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" }) : "—";
+            const stripPO = (n) => String(n).replace(/^PO-?/i, "");
+            // Sort each supplier's POs by soonest milestone/ETA
+            const sorted = [...supplierPOs].sort((a, b) => {
+              const da = [a.eta, ...(a.paymentMilestones||[]).map(m=>m.due)].filter(Boolean).sort()[0] || "9999";
+              const db2 = [b.eta, ...(b.paymentMilestones||[]).map(m=>m.due)].filter(Boolean).sort()[0] || "9999";
+              return da.localeCompare(db2);
+            });
             return (
-              <div key={po.id} style={page}>
-                {/* Shipment header card */}
-                <div onClick={() => openRecord && openRecord("po", po.id)}
-                  style={{ ...card, cursor: "pointer", borderLeft: "4px solid #b5552b" }}>
-                  <div style={{ fontSize: 12, fontWeight: 700, color: "#b5552b", marginBottom: 4 }}>{poLabel}</div>
-                  <div style={{ fontSize: 15, fontWeight: 700, color: "#4a3527", marginBottom: 4 }}>{po.party}</div>
-                  {po.eta && <div style={{ fontSize: 12, color: "#8a7a66" }}>ETA: {fmtD(po.eta)}</div>}
-                  {(po.customsClearance || 0) > 0 && (
-                    <div style={{ marginTop: 8, padding: "6px 10px", background: "#fbeae5", borderRadius: 6 }}>
-                      <span style={{ fontSize: 12, color: "#a3442e", fontWeight: 600 }}>Freight: {fmtMoney(po.customsClearance, "AUD")}</span>
-                    </div>
-                  )}
-                  <div style={{ fontSize: 11, color: "#8a7a66", marginTop: 8 }}>Tap to open PO →</div>
-                </div>
+              <div key={supplier} style={{ ...page, overflowY: "auto", maxHeight: "70vh" }}>
+                {sorted.map((po) => {
+                  const members = (po.consolidatedMemberIds || []).length > 0
+                    ? (db.pos || []).filter(p => (po.consolidatedMemberIds || []).includes(p.id)) : [];
+                  const allPOs = members.length ? [po, ...members] : [po];
+                  const poLabel = `PO-${stripPO(po.number)}${members.length ? `/${members.map(m => stripPO(m.number)).join("/")}` : ""}`;
+                  // Product name: first line desc or model
+                  const productName = po.model || (po.lines && po.lines[0] ? (po.lines[0].desc || po.lines[0].description) : null) || "—";
 
-                {/* Payment milestones per PO in the group */}
-                {allPOs.map(p => {
-                  const milestones = (p.paymentMilestones || []).filter(m => m.due || m.amount);
-                  if (!milestones.length) return null;
                   return (
-                    <div key={p.id} style={card}>
-                      {members.length > 0 && (
-                        <div style={{ fontSize: 11, fontWeight: 700, color: "#b5552b", marginBottom: 8 }}>PO-{stripPO(p.number)}</div>
-                      )}
-                      <div style={{ fontSize: 12, fontWeight: 700, color: "#6b5240", marginBottom: 8 }}>Payment Schedule</div>
-                      {milestones.map((m, mi) => (
-                        <div key={mi} onClick={() => openRecord && openRecord("po", p.id)}
-                          style={{ ...row, cursor: "pointer" }}>
+                    <div key={po.id} style={{ ...card, borderLeft: "4px solid #b5552b" }}>
+                      {/* PO header - tappable */}
+                      <div onClick={() => openRecord && openRecord("po", po.id)} style={{ cursor: "pointer", marginBottom: 10 }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
                           <div>
-                            <div style={{ fontSize: 13, color: m.paid ? "#5c7a4f" : "#4a3527" }}>{m.due ? fmtD(m.due) : "TBC"}</div>
-                            {m.paid && <div style={{ fontSize: 10, color: "#5c7a4f", fontWeight: 700 }}>PAID ✓</div>}
+                            <div style={{ fontSize: 12, fontWeight: 700, color: "#b5552b" }}>{poLabel}</div>
+                            <div style={{ fontSize: 13, fontWeight: 700, color: "#4a3527", marginTop: 2 }}>{productName}</div>
                           </div>
-                          <strong style={{ color: m.paid ? "#5c7a4f" : "#b5552b", fontSize: 14 }}>
-                            {m.amount ? fmtMoney(parseFloat(m.amount), "AUD") : "TBC"}
-                          </strong>
+                          {po.eta && (
+                            <div style={{ textAlign: "right", fontSize: 11, color: "#8a7a66" }}>
+                              <div style={{ fontWeight: 600 }}>ETA</div>
+                              <div>{fmtD(po.eta)}</div>
+                            </div>
+                          )}
                         </div>
-                      ))}
+                        {(po.customsClearance || 0) > 0 && (
+                          <div style={{ marginTop: 6, padding: "4px 8px", background: "#fbeae5", borderRadius: 5, display: "inline-block" }}>
+                            <span style={{ fontSize: 11, color: "#a3442e", fontWeight: 600 }}>Freight: {fmtMoney(po.customsClearance, "AUD")}</span>
+                          </div>
+                        )}
+                        <div style={{ fontSize: 10, color: "#8a7a66", marginTop: 6 }}>Tap to open PO →</div>
+                      </div>
+
+                      {/* Payment milestones for each PO in group, sorted soonest first */}
+                      {allPOs.map(p => {
+                        const milestones = (p.paymentMilestones || [])
+                          .filter(m => m.due || m.amount)
+                          .slice()
+                          .sort((a, b) => (a.due || "9999").localeCompare(b.due || "9999"));
+                        if (!milestones.length) return null;
+                        return (
+                          <div key={p.id} style={{ borderTop: "1px solid #e3d8c6", paddingTop: 8, marginTop: 4 }}>
+                            {members.length > 0 && (
+                              <div style={{ fontSize: 10, fontWeight: 700, color: "#b5552b", marginBottom: 4 }}>PO-{stripPO(p.number)}</div>
+                            )}
+                            {milestones.map((m, mi) => (
+                              <div key={mi} onClick={() => openRecord && openRecord("po", p.id)}
+                                style={{ ...row, cursor: "pointer" }}>
+                                <div>
+                                  <div style={{ fontSize: 12, color: m.paid ? "#5c7a4f" : "#4a3527" }}>{m.due ? fmtD(m.due) : "TBC"}</div>
+                                  {m.paid && <div style={{ fontSize: 10, color: "#5c7a4f", fontWeight: 700 }}>PAID ✓</div>}
+                                </div>
+                                <strong style={{ color: m.paid ? "#5c7a4f" : "#b5552b", fontSize: 13 }}>
+                                  {m.amount ? fmtMoney(parseFloat(m.amount), "AUD") : "TBC"}
+                                </strong>
+                              </div>
+                            ))}
+                          </div>
+                        );
+                      })}
                     </div>
                   );
                 })}
@@ -9987,8 +10030,17 @@ function DashboardTab({ db, setTab, openRecord }) {
             months.push({ date: d, label: d.toLocaleDateString('en-AU', { month: 'short', year: '2-digit' }) });
           }
 
+          // Sort by soonest ETA / earliest milestone
+          const earliestDue = (po) => {
+            const dates = [po.eta, ...(po.paymentMilestones || []).map(m => m.due)].filter(Boolean).sort();
+            return dates[0] || "9999";
+          };
+
           // Build payment data for each PO
-          const shipmentsData = shipments.map(po => {
+          const shipmentsData = shipments
+            .slice()
+            .sort((a, b) => earliestDue(a).localeCompare(earliestDue(b)))
+            .map(po => {
             const monthPayments = months.map(m => {
               const monthPayment = (po.paymentMilestones || [])
                 .filter(pm => {
@@ -10049,6 +10101,7 @@ function DashboardTab({ db, setTab, openRecord }) {
                 <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
                   <thead>
                     <tr style={{ background: "#f9f7f2", borderBottom: "2px solid #b5552b" }}>
+                      <th style={{ textAlign: "left", padding: "8px 6px", fontWeight: 700, minWidth: 90 }}>PO #</th>
                       <th style={{ textAlign: "left", padding: "8px 6px", fontWeight: 700, minWidth: 100 }}>Supplier</th>
                       <th style={{ textAlign: "left", padding: "8px 6px", fontWeight: 700, minWidth: 120 }}>Reference</th>
                       {months.map((m, idx) => (
@@ -10071,6 +10124,9 @@ function DashboardTab({ db, setTab, openRecord }) {
                             backgroundColor: idx % 2 === 0 ? "#faf7f2" : "white",
                           }}
                         >
+                          <td style={{ padding: "8px 6px", color: "#b5552b", fontWeight: 700, fontSize: 11 }}>
+                            {String(item.po.number || "").replace(/^PO-?/i, "PO-")}
+                          </td>
                           <td style={{ padding: "8px 6px", color: "#4a3527", fontWeight: 600 }}>
                             {item.po.party}
                           </td>
@@ -10097,7 +10153,7 @@ function DashboardTab({ db, setTab, openRecord }) {
                               backgroundColor: idx % 2 === 0 ? "#faf7f2" : "white",
                             }}
                           >
-                            <td colSpan={2} style={{ padding: "2px 6px 8px 20px", color: "#b5552b", fontSize: 11, fontStyle: "italic" }}>
+                            <td colSpan={3} style={{ padding: "2px 6px 8px 20px", color: "#b5552b", fontSize: 11, fontStyle: "italic" }}>
                               Freight Forwarding Fee
                             </td>
                             {months.map((_, mi) => (
