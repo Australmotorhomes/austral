@@ -3636,15 +3636,10 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
     });
   }
   // Status filter — skip when searching so archived records aren't excluded
-  if (statusFilter === "archived") {
-    // Show only archived records regardless of search
-    list = list.filter((d) => d.archived);
-  } else if (statusFilter && !search) {
-    list = list.filter((d) => d.status === statusFilter);
-  }
-
-  // Filter out archived unless searching or viewing archived filter
-  if (!search && statusFilter !== "archived") {
+  if (statusFilter && !search) list = list.filter((d) => d.status === statusFilter);
+  
+  // Filter out archived unless searching — applies to both POs and Quotes
+  if (!search) {
     list = list.filter((d) => !d.archived);
   }
   
@@ -4454,9 +4449,10 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
             <select style={inputStyle} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
               <option value="">All statuses</option>
               {statusOptions.map((s) => (
-                <option key={s} value={s}>{s}</option>
+                <option key={s} value={s}>
+                  {s}
+                </option>
               ))}
-              <option value="archived">Archived</option>
             </select>
           </Field>
         </div>
@@ -7735,7 +7731,33 @@ function ContactModal({ kind, editing, onCancel, onSave, onCreateQuote, onArchiv
         </div>
       )}
 
-      {/* Quote tracking hidden — auto-updated internally when quote is accepted */}
+      {!isSupplier && (
+        <div style={{ borderTop: "1px solid #e3d8c6", paddingTop: 14, marginTop: 14 }}>
+          <h4 style={{ fontSize: 13, fontWeight: 600, color: "#6b5240", margin: "0 0 10px" }}>Quote tracking</h4>
+          <p style={{ fontSize: 12, color: "#8a7a66", margin: "0 0 10px" }}>Last accepted quote information (auto-updated when quote is accepted)</p>
+          <div className="grid2">
+            <Field label="Last quote #">
+              <input
+                style={inputStyle}
+                type="text"
+                placeholder="e.g. Q-2"
+                value={lastQuoteNumber}
+                onChange={(e) => setLastQuoteNumber(e.target.value)}
+              />
+            </Field>
+            <Field label="Quote value (AUD)">
+              <input
+                style={inputStyle}
+                type="number"
+                step="0.01"
+                min="0"
+                value={lastQuoteValue}
+                onChange={(e) => setLastQuoteValue(e.target.value)}
+              />
+            </Field>
+          </div>
+        </div>
+      )}
 
       <div style={{ borderTop: "1px solid #e3d8c6", paddingTop: 14, marginTop: 14 }}>
         <h4 style={{ fontSize: 13, fontWeight: 600, color: "#6b5240", margin: "0 0 10px" }}>Address</h4>
