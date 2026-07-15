@@ -5465,15 +5465,16 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                 {/* Compact table — one row per milestone */}
                 <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
                   {/* Header row */}
-                  <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr auto" : "1fr 1fr 80px auto", gap: 8, padding: "4px 0 8px", borderBottom: "1px solid #d3c9b8" }}>
+                  <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr auto" : (isQuote ? "1fr 1fr 80px auto" : "1fr 1fr 1fr 80px auto"), gap: 8, padding: "4px 0 8px", borderBottom: "1px solid #d3c9b8" }}>
                     <span style={{ fontSize: 11, fontWeight: 600, color: "#8a7a66" }}>DUE DATE</span>
                     <span style={{ fontSize: 11, fontWeight: 600, color: "#8a7a66" }}>AMOUNT (AUD)</span>
+                    {!isMobile && !isQuote && <span style={{ fontSize: 11, fontWeight: 600, color: "#8a7a66" }}>SUPPLIER INV</span>}
                     {!isMobile && <span style={{ fontSize: 11, fontWeight: 600, color: "#8a7a66" }}>PAID</span>}
                     <span></span>
                   </div>
 
                   {paymentMilestones.map((milestone, idx) => (
-                    <div key={idx} style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr auto" : "1fr 1fr 80px auto", gap: 8, padding: "8px 0", borderBottom: "1px solid #f0e8d9", alignItems: "center" }}>
+                    <div key={idx} style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr auto" : (isQuote ? "1fr 1fr 80px auto" : "1fr 1fr 1fr 80px auto"), gap: 8, padding: "8px 0", borderBottom: "1px solid #f0e8d9", alignItems: "center" }}>
                       <input
                         type="date"
                         value={milestone.due || ""}
@@ -5496,6 +5497,19 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                         }}
                         style={{ ...inputStyle, margin: 0, width: "100%" }}
                       />
+                      {!isMobile && !isQuote && (
+                        <input
+                          type="text"
+                          placeholder="e.g. INV-001"
+                          value={milestone.invoice || ""}
+                          onChange={(e) => {
+                            const updated = [...paymentMilestones];
+                            updated[idx] = { ...updated[idx], invoice: e.target.value };
+                            setPaymentMilestones(updated);
+                          }}
+                          style={{ ...inputStyle, margin: 0, width: "100%", fontSize: 12 }}
+                        />
+                      )}
                       {!isMobile && (
                         <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 12 }}>
                           <input
@@ -10030,13 +10044,13 @@ function DashboardTab({ db, setTab, openRecord }) {
             months.push({ date: d, label: d.toLocaleDateString('en-AU', { month: 'short', year: '2-digit' }) });
           }
 
-          // Sort by soonest ETA / earliest milestone
+          // Sort by ETA soonest first, fallback to earliest milestone due date
           const earliestDue = (po) => {
             const dates = [po.eta, ...(po.paymentMilestones || []).map(m => m.due)].filter(Boolean).sort();
             return dates[0] || "9999";
           };
 
-          // Build payment data for each PO
+          // Build payment data — both desktop and mobile sorted by ETA soonest first
           const shipmentsData = shipments
             .slice()
             .sort((a, b) => earliestDue(a).localeCompare(earliestDue(b)))
@@ -10054,12 +10068,15 @@ function DashboardTab({ db, setTab, openRecord }) {
             return { po, monthPayments, customs: po.customsClearance || 0 };
           });
 
+          // Mobile: only show shipments WITH a FF fee (customs > 0)
+          const mobileShipmentsData = shipmentsData.filter(item => item.customs > 0);
+
           const isMobile = window.innerWidth < 768;
 
           if (isMobile) {
             return (
               <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                {shipmentsData.slice(0, 5).map((item, idx) => (
+                {mobileShipmentsData.slice(0, 5).map((item, idx) => (
                   <div
                     key={idx}
                     onClick={() => openRecord && openRecord("po", item.po.id)}
@@ -10088,9 +10105,9 @@ function DashboardTab({ db, setTab, openRecord }) {
                     )}
                   </div>
                 ))}
-                {shipmentsData.length > 5 && (
+                {mobileShipmentsData.length > 5 && (
                   <div style={{ fontSize: 12, color: "#8a7a66", textAlign: "center" }}>
-                    + {shipmentsData.length - 5} more.
+                    + {mobileShipmentsData.length - 5} more.
                   </div>
                 )}
               </div>
