@@ -4869,11 +4869,13 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
   const [mNotes, setMNotes] = useState("");
   const [mDirty, setMDirty] = useState(false);
 
-  // When consolidatedTab changes to a member PO, load that PO's fields into member edit state
+  // When the active preview tab changes to a member PO, load that PO's fields
+  // into the member edit state so the left panel switches to editing it.
   useEffect(() => {
     if (!editing?.consolidatedMemberIds?.length) return;
     const members = (db.pos || []).filter(p => (editing.consolidatedMemberIds || []).includes(p.id));
-    const activeMember = members.find(m => m.id === consolidatedTab);
+    // Use previewPoId as the source of truth — it's set by both left and right panel tabs
+    const activeMember = members.find(m => m.id === previewPoId);
     if (activeMember && activeMember.id !== memberEditId) {
       setMemberEditId(activeMember.id);
       setMParty(activeMember.party || "");
@@ -4886,7 +4888,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
     } else if (!activeMember) {
       setMemberEditId(null);
     }
-  }, [consolidatedTab]);
+  }, [previewPoId]);
 
   const sortedItems = items.slice().sort((a, b) => (a.model || "").localeCompare(b.model || "") || (a.name || "").localeCompare(b.name || ""));
 
@@ -5212,7 +5214,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
         })()}
 
         {/* Normal left panel — shown for primary PO tab, non-consolidated POs, or when Summary tab active */}
-        {(isQuote || isNew || !editing?.consolidatedMemberIds?.length || consolidatedTab === "summary" || !(db.pos || []).filter(p => (editing?.consolidatedMemberIds || []).includes(p.id)).find(m => m.id === consolidatedTab)) && (
+        {(isQuote || isNew || !editing?.consolidatedMemberIds?.length || !memberEditId || !(db.pos || []).filter(p => (editing?.consolidatedMemberIds || []).includes(p.id)).find(m => m.id === previewPoId)) && (
         <fieldset disabled={viewOnly} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
           <Panel>
             <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: "0 0 14px", fontSize: 16 }}>
@@ -5925,7 +5927,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                   {tabList.map(tab => (
                     <button
                       key={tab.id}
-                      onClick={() => setConsolidatedTab(tab.id)}
+                      onClick={() => { setConsolidatedTab(tab.id); if (tab.id === "summary") setPreviewPoId(editing?.id || null); }}
                       style={{
                         padding: isMobile ? "7px 10px" : "8px 14px",
                         fontSize: isMobile ? 11 : 12,
@@ -6163,7 +6165,13 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                             return (
                               <button
                                 key={po.id}
-                                onClick={() => setPreviewPoId(po.id)}
+                                onClick={() => {
+                                  setPreviewPoId(po.id);
+                                  // Sync left panel — if this is a member PO, switch
+                                  // the member edit panel to this PO too
+                                  const isMember = (editing?.consolidatedMemberIds || []).includes(po.id);
+                                  setConsolidatedTab(isMember ? po.id : "summary");
+                                }}
                                 style={{
                                   padding: isMobile ? "5px 9px" : "6px 13px",
                                   fontSize: isMobile ? 11 : 12,
