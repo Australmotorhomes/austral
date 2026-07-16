@@ -4690,6 +4690,8 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
           onReverseConsolidation={!isQuote ? reverseConsolidation : null}
           onSplitCustoms={!isQuote ? splitCustomsClearance : null}
           openRecord={openRecord}
+          showToast={showToast}
+          update={update}
         />
       )}
 
@@ -4807,7 +4809,7 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
   );
 }
 
-function DocModal({ kind, editing, db, items, models, categories, fx, statusOptions, onCancel, onSave, onSaveMilestones, onAddItem, onAddModel, onAddCategory, onStatusChange, onDelete, onGeneratePOs, onCreateCustomsPO, onConsolidatePOs, onReverseConsolidation, onSplitCustoms, openRecord }) {
+function DocModal({ kind, editing, db, items, models, categories, fx, statusOptions, onCancel, onSave, onSaveMilestones, onAddItem, onAddModel, onAddCategory, onStatusChange, onDelete, onGeneratePOs, onCreateCustomsPO, onConsolidatePOs, onReverseConsolidation, onSplitCustoms, openRecord, showToast, update }) {
   const isQuote = kind === "quote";
   const isMobile = useIsMobile();
   const rate = fx ? fx.usdAudRate : FALLBACK_USD_AUD_RATE;
