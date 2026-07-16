@@ -4857,6 +4857,35 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
     editing?.eta ? editing.eta : ""
   );
 
+  // Member PO editing state — used when a member PO tab is active in consolidated view
+  const [memberEditId, setMemberEditId] = useState(null);
+  const [mParty, setMParty] = useState("");
+  const [mContact, setMContact] = useState("");
+  const [mEta, setMEta] = useState("");
+  const [mStatus, setMStatus] = useState("Draft");
+  const [mMilestones, setMMilestones] = useState([]);
+  const [mNotes, setMNotes] = useState("");
+  const [mDirty, setMDirty] = useState(false);
+
+  // When consolidatedTab changes to a member PO, load that PO's fields into member edit state
+  useEffect(() => {
+    if (!editing?.consolidatedMemberIds?.length) return;
+    const members = (db.pos || []).filter(p => (editing.consolidatedMemberIds || []).includes(p.id));
+    const activeMember = members.find(m => m.id === consolidatedTab);
+    if (activeMember && activeMember.id !== memberEditId) {
+      setMemberEditId(activeMember.id);
+      setMParty(activeMember.party || "");
+      setMContact(activeMember.contact || "");
+      setMEta(activeMember.eta || "");
+      setMStatus(activeMember.status || "Draft");
+      setMMilestones(activeMember.paymentMilestones || []);
+      setMNotes(activeMember.notes || "");
+      setMDirty(false);
+    } else if (!activeMember) {
+      setMemberEditId(null);
+    }
+  }, [consolidatedTab]);
+
   const sortedItems = items.slice().sort((a, b) => (a.model || "").localeCompare(b.model || "") || (a.name || "").localeCompare(b.name || ""));
 
   // Every line total and the cost-side total are converted to AUD, regardless of source currency.
@@ -4970,22 +4999,29 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
     try {
       const update = toSupabaseFormat({ notes: newNotes, updatedAt: todayISO() }, "purchase_orders");
       await supabaseRESTWithSchemaFallback("PATCH", `purchase_orders?id=eq.${poId}`, update);
-      console.log(`✅ Saved notes for PO ${poId}`);
     } catch (err) {
       console.error("Error saving PO notes:", err);
     }
   }
 
   async function savePOSupplierNote(poId, newSupplierNote) {
-    // Save supplier note for a specific PO
-    console.log(`💾 Saving supplier note for PO ${poId}:`, newSupplierNote);
     try {
       const update = toSupabaseFormat({ supplierNote: newSupplierNote, updatedAt: todayISO() }, "purchase_orders");
-      console.log("📤 Supabase update object:", update);
       await supabaseRESTWithSchemaFallback("PATCH", `purchase_orders?id=eq.${poId}`, update);
-      console.log(`✅ Saved supplier note for PO ${poId}`);
     } catch (err) {
       console.error("Error saving PO supplier note:", err);
+    }
+  }
+
+  async function saveMemberPOField(poId, fields) {
+    // Save any fields for a member PO directly to Supabase and update local db state
+    try {
+      const payload = toSupabaseFormat({ ...fields, updatedAt: todayISO() }, "purchase_orders");
+      await supabaseRESTWithSchemaFallback("PATCH", `purchase_orders?id=eq.${poId}`, payload);
+      showToast("Saved");
+    } catch (err) {
+      showToast("Save failed");
+      console.error("Error saving member PO:", err);
     }
   }
 
@@ -5083,6 +5119,98 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
 
       <div className="doc-split-grid">
         {/* ---------------- EDIT SIDE ---------------- */}
+        {/* For consolidated POs: when a member PO tab is active, show that member's editable fields */}
+        {!isQuote && !isNew && editing?.consolidatedMemberIds?.length > 0 && memberEditId && (() => {
+          const activeMember = (db.pos || []).find(p => p.id === memberEditId);
+          if (!activeMember) return null;
+
+          async function saveMember() {
+            try {
+              const payload = toSupabaseFormat({
+                party: mParty, contact: mContact, eta: mEta, status: mStatus,
+                paymentMilestones: mMilestones, notes: mNotes, updatedAt: todayISO(),
+              }, "purchase_orders");
+              await supabaseRESTWithSchemaFallback("PATCH", `purchase_orders?id=eq.${activeMember.id}`, payload);
+              update(next => {
+                const po = (next.pos || []).find(p => p.id === activeMember.id);
+                if (po) {
+                  po.party = mParty; po.contact = mContact; po.eta = mEta;
+                  po.status = mStatus; po.paymentMilestones = mMilestones; po.notes = mNotes;
+                }
+              });
+              setMDirty(false);
+              showToast(`PO-${activeMember.number} saved`);
+            } catch (err) {
+              showToast("Save failed");
+              console.error(err);
+            }
+          }
+
+          const mark = (setter) => (val) => { setter(val); setMDirty(true); };
+
+          return (
+            <fieldset style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
+              <Panel>
+                <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: "0 0 14px", fontSize: 16 }}>
+                  PO-{activeMember.number} — Supplier details
+                </h3>
+                <Field label="Supplier name">
+                  <input style={inputStyle} type="text" value={mParty} onChange={e => mark(setMParty)(e.target.value)} />
+                </Field>
+                <Field label="Supplier contact">
+                  <input style={inputStyle} type="text" value={mContact} onChange={e => mark(setMContact)(e.target.value)} />
+                </Field>
+                <Field label="ETA">
+                  <input style={inputStyle} type="date" value={mEta} onChange={e => mark(setMEta)(e.target.value)} />
+                </Field>
+                <Field label="Status">
+                  <select style={inputStyle} value={mStatus} onChange={e => mark(setMStatus)(e.target.value)}>
+                    {["Draft","Sent","Accepted","Paid","Received","Cancelled"].map(s => <option key={s} value={s}>{s}</option>)}
+                  </select>
+                </Field>
+              </Panel>
+
+              <Panel>
+                <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: "0 0 14px", fontSize: 16 }}>Payment Schedule</h3>
+                <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 80px auto", gap: 8, padding: "4px 0 8px", borderBottom: "1px solid #d3c9b8" }}>
+                    {["DUE DATE","AMOUNT","SUPPLIER INV","PAID",""].map(h => <span key={h} style={{ fontSize: 11, fontWeight: 600, color: "#8a7a66" }}>{h}</span>)}
+                  </div>
+                  {mMilestones.map((m, idx) => (
+                    <div key={idx} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 80px auto", gap: 8, padding: "8px 0", borderBottom: "1px solid #f0e8d9", alignItems: "center" }}>
+                      <input type="date" value={m.due || ""} style={{ ...inputStyle, margin: 0 }} onChange={e => { const u=[...mMilestones]; u[idx]={...u[idx],due:e.target.value}; mark(setMMilestones)(u); }} />
+                      <input type="number" value={m.amount || ""} placeholder="0.00" style={{ ...inputStyle, margin: 0 }} onChange={e => { const u=[...mMilestones]; u[idx]={...u[idx],amount:e.target.value}; mark(setMMilestones)(u); }} />
+                      <input type="text" value={m.invoice || ""} placeholder="INV-" style={{ ...inputStyle, margin: 0, fontSize: 12 }} onChange={e => { const u=[...mMilestones]; u[idx]={...u[idx],invoice:e.target.value}; mark(setMMilestones)(u); }} />
+                      <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 12 }}>
+                        <input type="checkbox" checked={m.paid || false} onChange={e => { const u=[...mMilestones]; u[idx]={...u[idx],paid:e.target.checked,paidDate:e.target.checked?(m.due||""):""}; mark(setMMilestones)(u); }} />
+                        {m.paid && <span style={{ color: "#5c7a4f", fontWeight: 600 }}>Paid</span>}
+                      </label>
+                      <button onClick={() => mark(setMMilestones)(mMilestones.filter((_,i)=>i!==idx))} style={{ background:"none",border:"none",color:"#a3442e",cursor:"pointer",fontSize:16,padding:"0 4px" }}>✕</button>
+                    </div>
+                  ))}
+                  <div style={{ marginTop: 10 }}>
+                    <Btn variant="secondary" size="sm" onClick={() => mark(setMMilestones)([...mMilestones, { due:"",amount:"",invoice:"",paid:false }])}>+ Add milestone</Btn>
+                  </div>
+                </div>
+              </Panel>
+
+              <Panel>
+                <Field label="Internal Notes">
+                  <textarea value={mNotes} onChange={e => mark(setMNotes)(e.target.value)} style={{ ...inputStyle, minHeight: 60, resize: "vertical" }} placeholder="Internal notes (not sent to supplier)" />
+                </Field>
+              </Panel>
+
+              {mDirty && (
+                <div style={{ padding: "12px 0" }}>
+                  <Btn variant="primary" onClick={saveMember}>Save PO-{activeMember.number}</Btn>
+                </div>
+              )}
+            </fieldset>
+          );
+        })()}
+
+        {/* Normal left panel — shown for primary PO tab, non-consolidated POs, or when Summary tab active */}
+        {(isQuote || isNew || !editing?.consolidatedMemberIds?.length || consolidatedTab === "summary" || !(db.pos || []).filter(p => (editing?.consolidatedMemberIds || []).includes(p.id)).find(m => m.id === consolidatedTab)) && (
         <fieldset disabled={viewOnly} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
           <Panel>
             <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: "0 0 14px", fontSize: 16 }}>
@@ -5984,6 +6112,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
             )}
           </Panel>
         </fieldset>
+        )} {/* end conditional normal left panel */}
 
         {/* ---------------- LIVE PREVIEW SIDE ---------------- */}
         <div>
