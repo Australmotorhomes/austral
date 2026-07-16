@@ -9511,14 +9511,15 @@ function DashboardTab({ db, setTab, openRecord }) {
             <div style={{ display: "flex", gap: 10, overflowX: "auto", paddingBottom: 8 }}>
               {columns.map(fyEnd => {
                 const { start, end, label } = getFYRange(fyEnd);
-                const fyQ = (db.quotes || []).filter(q => q.date >= start && q.date <= end);
-                const acc = fyQ.filter(q => q.status === "Accepted");
+                const income = calculatePeriodSales(db.customers || [], start, end);
+                const fyQuotes = (db.quotes || []).filter(q => (q.date || "").slice(0,10) >= start && (q.date || "").slice(0,10) <= end);
+                const acc = fyQuotes.filter(q => q.status === "Accepted" || q.status === "Delivered");
                 return (
                   <div key={fyEnd} style={{ ...card, minWidth: 155, flex: "0 0 auto", marginBottom: 0 }}>
                     <div style={{ fontSize: 12, fontWeight: 700, color: "#b5552b", marginBottom: 8 }}>{label}</div>
-                    <div style={{ fontSize: 10, color: "#8a7a66", marginBottom: 2 }}>Revenue (accepted)</div>
-                    <div style={{ fontSize: 17, fontWeight: 700, color: "#4a3527", marginBottom: 10 }}>{fmtMoney(acc.reduce((s, q) => s + (q.total || 0), 0), "AUD")}</div>
-                    <div style={{ fontSize: 10, color: "#8a7a66", marginBottom: 2 }}>Orders</div>
+                    <div style={{ fontSize: 10, color: "#8a7a66", marginBottom: 2 }}>Income (invoiced)</div>
+                    <div style={{ fontSize: 15, fontWeight: 700, color: "#4a3527", marginBottom: 10 }}>{fmtMoney(income.periodTotal, "AUD")}</div>
+                    <div style={{ fontSize: 10, color: "#8a7a66", marginBottom: 2 }}>Orders accepted</div>
                     <div style={{ fontSize: 20, fontWeight: 700, color: "#4a3527" }}>{acc.length}</div>
                   </div>
                 );
