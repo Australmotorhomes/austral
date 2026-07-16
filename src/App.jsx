@@ -3636,10 +3636,14 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
     });
   }
   // Status filter — skip when searching so archived records aren't excluded
-  if (statusFilter && !search) list = list.filter((d) => d.status === statusFilter);
-  
-  // Filter out archived unless searching — applies to both POs and Quotes
-  if (!search) {
+  if (statusFilter === "archived") {
+    list = list.filter((d) => d.archived);
+  } else if (statusFilter && !search) {
+    list = list.filter((d) => d.status === statusFilter);
+  }
+
+  // Filter out archived unless searching or viewing archived filter
+  if (!search && statusFilter !== "archived") {
     list = list.filter((d) => !d.archived);
   }
   
@@ -4449,10 +4453,9 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
             <select style={inputStyle} value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
               <option value="">All statuses</option>
               {statusOptions.map((s) => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
+                <option key={s} value={s}>{s}</option>
               ))}
+              <option value="archived">Archived</option>
             </select>
           </Field>
         </div>
