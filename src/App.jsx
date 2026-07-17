@@ -140,6 +140,11 @@ const DATA_KEY = "austral:db";
 const FALLBACK_USD_AUD_RATE = 1.41; // seeded planning estimate, see rate panel for live/manual value in use
 const DEFAULT_MARGIN = 0.5; // cost is 50% of sell price → sell = cost / (1 - margin) = cost * 2
 
+const defaultQuoteTerms = `Quote valid for 7 days
+Prices include GST
+Payment terms — Stock items: 50% deposit, balance when ready for collection
+Payment terms — Made to order: 33.3% to confirm order, 33% when manufacturing complete, balance when ready for collection`;
+
 // ---- Date Formatting ----
 function parseDateInput(ddmmyy) {
   if (!ddmmyy) return null;
@@ -4826,8 +4831,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
   const [model, setModel] = useState(editing ? editing.model || "" : "");
   const [date, setDate] = useState(editing ? editing.date : todayISO());
   const [contact, setContact] = useState(editing ? editing.contact || "" : "");
-  const [notes, setNotes] = useState(editing ? editing.notes || "" : "");
-  const [supplierNote, setSupplierNote] = useState(editing ? editing.supplierNote || "" : "");
+  const [notes, setNotes] = useState(editing ? editing.notes || "" : (isQuote ? defaultQuoteTerms : ""));
   const [discount, setDiscount] = useState(editing ? String(editing.discount || 0) : "0");
   const [lines, setLines] = useState(
     editing && editing.lines
@@ -6126,10 +6130,10 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
 
           {!(!isQuote && !isNew && editing?.consolidatedMemberIds?.length > 0) && (
             <Panel>
-              <Field label={isQuote ? "Notes (terms, validity, inclusions)" : "Notes (delivery instructions, terms)"}>
+              <Field label={isQuote ? "Terms & Conditions (one per line, editable)" : "Notes (delivery instructions, terms)"}>
                 <textarea
-                  style={{ ...inputStyle, minHeight: 64, resize: "vertical" }}
-                  placeholder="Optional"
+                  style={{ ...inputStyle, minHeight: isQuote ? 120 : 64, resize: "vertical" }}
+                  placeholder={isQuote ? defaultQuoteTerms : "Optional"}
                   value={notes}
                   onChange={(e) => setNotes(e.target.value)}
                 />
@@ -6427,10 +6431,26 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
             )}
 
             <div style={{ fontSize: 11, color: "#8a7a66", marginTop: 10 }}>
-              All prices include GST.
-              {lines.some((l) => (l.currency || "AUD") === "USD") && ` USD lines converted at 1 USD = ${rate.toFixed(4)} AUD.`}
-              {isQuote && " Quote valid for 7 days."}
+              {lines.some((l) => (l.currency || "AUD") === "USD") && `USD lines converted at 1 USD = ${rate.toFixed(4)} AUD.`}
             </div>
+
+            {/* Terms section — shown on quotes */}
+            {isQuote && (
+              <div style={{ marginTop: 16, padding: "12px 14px", background: "#f9f5f0", borderRadius: 6, border: "1px solid #e3d8c6" }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#6b5240", marginBottom: 8, textTransform: "uppercase", letterSpacing: 0.5 }}>Terms & Conditions</div>
+                {(notes || defaultQuoteTerms).split("\n").filter(l => l.trim()).map((line, i) => (
+                  <div key={i} style={{ fontSize: 11, color: "#6b5240", display: "flex", gap: 6, marginBottom: 3 }}>
+                    <span>•</span>
+                    <span>{line.replace(/^[-•]\s*/, "")}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Notes footer for POs */}
+            {!isQuote && notes && (
+              <div style={{ fontSize: 11, color: "#8a7a66", marginTop: 10, whiteSpace: "pre-wrap" }}>{notes}</div>
+            )}
           </div>
         </div>
       </div>
