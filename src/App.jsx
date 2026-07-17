@@ -4865,30 +4865,30 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
   const [mContact, setMContact] = useState("");
   const [mEta, setMEta] = useState("");
   const [mStatus, setMStatus] = useState("Draft");
-  const [mMilestones, setMMilestones] = useState([]);
+  const [mLines, setMLines] = useState([]);
+  const [mModel, setMModel] = useState("");
   const [mNotes, setMNotes] = useState("");
   const [mDirty, setMDirty] = useState(false);
 
   // When the active preview tab changes to a member PO, load that PO's fields
-  // into the member edit state so the left panel switches to editing it.
   useEffect(() => {
     if (!editing?.consolidatedMemberIds?.length) return;
     const members = (db.pos || []).filter(p => (editing.consolidatedMemberIds || []).includes(p.id));
-    // Use previewPoId as the source of truth — it's set by both left and right panel tabs
-    const activeMember = members.find(m => m.id === previewPoId);
+    const activeMember = members.find(m => m.id === consolidatedTab);
     if (activeMember && activeMember.id !== memberEditId) {
       setMemberEditId(activeMember.id);
       setMParty(activeMember.party || "");
       setMContact(activeMember.contact || "");
       setMEta(activeMember.eta || "");
       setMStatus(activeMember.status || "Draft");
-      setMMilestones(activeMember.paymentMilestones || []);
+      setMLines(activeMember.lines || []);
+      setMModel(activeMember.model || "");
       setMNotes(activeMember.notes || "");
       setMDirty(false);
     } else if (!activeMember) {
       setMemberEditId(null);
     }
-  }, [previewPoId]);
+  }, [consolidatedTab]);
 
   const sortedItems = items.slice().sort((a, b) => (a.model || "").localeCompare(b.model || "") || (a.name || "").localeCompare(b.name || ""));
 
@@ -5124,6 +5124,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
       <div className="doc-split-grid">
         {/* ---------------- EDIT SIDE ---------------- */}
         {/* For consolidated POs: when a member PO tab is active, show that member's editable fields */}
+        {/* Member PO edit panel — shown when a member PO tab is active */}
         {!isQuote && !isNew && editing?.consolidatedMemberIds?.length > 0 && memberEditId && (() => {
           const activeMember = (db.pos || []).find(p => p.id === memberEditId);
           if (!activeMember) return null;
@@ -5132,14 +5133,14 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
             try {
               const payload = toSupabaseFormat({
                 party: mParty, contact: mContact, eta: mEta, status: mStatus,
-                paymentMilestones: mMilestones, notes: mNotes, updatedAt: todayISO(),
+                model: mModel, lines: mLines, notes: mNotes, updatedAt: todayISO(),
               }, "purchase_orders");
               await supabaseRESTWithSchemaFallback("PATCH", `purchase_orders?id=eq.${activeMember.id}`, payload);
               update(next => {
                 const po = (next.pos || []).find(p => p.id === activeMember.id);
                 if (po) {
                   po.party = mParty; po.contact = mContact; po.eta = mEta;
-                  po.status = mStatus; po.paymentMilestones = mMilestones; po.notes = mNotes;
+                  po.status = mStatus; po.model = mModel; po.lines = mLines; po.notes = mNotes;
                 }
               });
               setMDirty(false);
@@ -5154,12 +5155,16 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
 
           return (
             <fieldset style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
+              {/* Supplier Details */}
               <Panel>
                 <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: "0 0 14px", fontSize: 16 }}>
-                  PO-{activeMember.number} — Supplier details
+                  PO-{activeMember.number} — Edit
                 </h3>
                 <Field label="Supplier name">
                   <input style={inputStyle} type="text" value={mParty} onChange={e => mark(setMParty)(e.target.value)} />
+                </Field>
+                <Field label="Model">
+                  <input style={inputStyle} type="text" value={mModel} onChange={e => mark(setMModel)(e.target.value)} />
                 </Field>
                 <Field label="Supplier contact">
                   <input style={inputStyle} type="text" value={mContact} onChange={e => mark(setMContact)(e.target.value)} />
@@ -5174,47 +5179,79 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                 </Field>
               </Panel>
 
+              {/* Line Items */}
               <Panel>
-                <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: "0 0 14px", fontSize: 16 }}>Payment Schedule</h3>
-                <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 80px auto", gap: 8, padding: "4px 0 8px", borderBottom: "1px solid #d3c9b8" }}>
-                    {["DUE DATE","AMOUNT","SUPPLIER INV","PAID",""].map(h => <span key={h} style={{ fontSize: 11, fontWeight: 600, color: "#8a7a66" }}>{h}</span>)}
-                  </div>
-                  {mMilestones.map((m, idx) => (
-                    <div key={idx} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 80px auto", gap: 8, padding: "8px 0", borderBottom: "1px solid #f0e8d9", alignItems: "center" }}>
-                      <input type="date" value={m.due || ""} style={{ ...inputStyle, margin: 0 }} onChange={e => { const u=[...mMilestones]; u[idx]={...u[idx],due:e.target.value}; mark(setMMilestones)(u); }} />
-                      <input type="number" value={m.amount || ""} placeholder="0.00" style={{ ...inputStyle, margin: 0 }} onChange={e => { const u=[...mMilestones]; u[idx]={...u[idx],amount:e.target.value}; mark(setMMilestones)(u); }} />
-                      <input type="text" value={m.invoice || ""} placeholder="INV-" style={{ ...inputStyle, margin: 0, fontSize: 12 }} onChange={e => { const u=[...mMilestones]; u[idx]={...u[idx],invoice:e.target.value}; mark(setMMilestones)(u); }} />
-                      <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 12 }}>
-                        <input type="checkbox" checked={m.paid || false} onChange={e => { const u=[...mMilestones]; u[idx]={...u[idx],paid:e.target.checked,paidDate:e.target.checked?(m.due||""):""}; mark(setMMilestones)(u); }} />
-                        {m.paid && <span style={{ color: "#5c7a4f", fontWeight: 600 }}>Paid</span>}
-                      </label>
-                      <button onClick={() => mark(setMMilestones)(mMilestones.filter((_,i)=>i!==idx))} style={{ background:"none",border:"none",color:"#a3442e",cursor:"pointer",fontSize:16,padding:"0 4px" }}>✕</button>
-                    </div>
+                <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: "0 0 14px", fontSize: 16 }}>Line Items</h3>
+                <div style={{ display: "grid", gridTemplateColumns: "2fr 60px 1fr auto", gap: 6, marginBottom: 6 }}>
+                  {["Description","Qty","Price (AUD)",""].map(h => (
+                    <span key={h} style={{ fontSize: 11, fontWeight: 600, color: "#8a7a66" }}>{h}</span>
                   ))}
-                  <div style={{ marginTop: 10 }}>
-                    <Btn variant="secondary" size="sm" onClick={() => mark(setMMilestones)([...mMilestones, { due:"",amount:"",invoice:"",paid:false }])}>+ Add milestone</Btn>
+                </div>
+                {mLines.map((l, idx) => (
+                  <div key={idx} style={{ display: "grid", gridTemplateColumns: "2fr 60px 1fr auto", gap: 6, marginBottom: 6, alignItems: "center" }}>
+                    <input
+                      style={{ ...inputStyle, margin: 0, fontSize: 12 }}
+                      type="text"
+                      value={l.desc || l.description || ""}
+                      onChange={e => { const u=[...mLines]; u[idx]={...u[idx],desc:e.target.value}; mark(setMLines)(u); }}
+                    />
+                    <input
+                      style={{ ...inputStyle, margin: 0, fontSize: 12, textAlign: "center" }}
+                      type="number"
+                      min="1"
+                      value={l.qty || l.quantity || 1}
+                      onChange={e => { const u=[...mLines]; u[idx]={...u[idx],qty:parseFloat(e.target.value)||1}; mark(setMLines)(u); }}
+                    />
+                    <input
+                      style={{ ...inputStyle, margin: 0, fontSize: 12, textAlign: "right" }}
+                      type="number"
+                      step="0.01"
+                      value={l.price || l.unitPrice || ""}
+                      onChange={e => { const u=[...mLines]; u[idx]={...u[idx],price:parseFloat(e.target.value)||0}; mark(setMLines)(u); }}
+                    />
+                    <button
+                      onClick={() => mark(setMLines)(mLines.filter((_,i)=>i!==idx))}
+                      style={{ background:"none",border:"none",color:"#a3442e",cursor:"pointer",fontSize:16,padding:"0 4px" }}
+                    >✕</button>
                   </div>
+                ))}
+                {/* Line totals */}
+                {mLines.length > 0 && (
+                  <div style={{ textAlign: "right", fontSize: 13, fontWeight: 700, color: "#4a3527", marginTop: 8, paddingTop: 8, borderTop: "1px solid #e3d8c6" }}>
+                    Total: ${mLines.reduce((s,l) => s + ((parseFloat(l.price||l.unitPrice)||0) * (parseFloat(l.qty||l.quantity)||1)), 0).toLocaleString()}
+                  </div>
+                )}
+                <div style={{ marginTop: 10 }}>
+                  <Btn variant="secondary" size="sm" onClick={() => mark(setMLines)([...mLines, { desc:"", qty:1, price:0, currency:"AUD" }])}>
+                    + Add line
+                  </Btn>
                 </div>
               </Panel>
 
+              {/* Notes */}
               <Panel>
                 <Field label="Internal Notes">
-                  <textarea value={mNotes} onChange={e => mark(setMNotes)(e.target.value)} style={{ ...inputStyle, minHeight: 60, resize: "vertical" }} placeholder="Internal notes (not sent to supplier)" />
+                  <textarea
+                    value={mNotes}
+                    onChange={e => mark(setMNotes)(e.target.value)}
+                    style={{ ...inputStyle, minHeight: 60, resize: "vertical" }}
+                    placeholder="Internal notes"
+                  />
                 </Field>
               </Panel>
 
+              {/* Save button */}
               {mDirty && (
                 <div style={{ padding: "12px 0" }}>
-                  <Btn variant="primary" onClick={saveMember}>Save PO-{activeMember.number}</Btn>
+                  <Btn variant="primary" onClick={saveMember}>💾 Save PO-{activeMember.number}</Btn>
                 </div>
               )}
             </fieldset>
           );
         })()}
 
-        {/* Normal left panel — shown for primary PO tab, non-consolidated POs, or when Summary tab active */}
-        {(isQuote || isNew || !editing?.consolidatedMemberIds?.length || !memberEditId || !(db.pos || []).filter(p => (editing?.consolidatedMemberIds || []).includes(p.id)).find(m => m.id === previewPoId)) && (
+        {/* Normal left panel — shown for primary PO, non-consolidated POs, or Summary tab */}
+        {(isQuote || isNew || !editing?.consolidatedMemberIds?.length || !memberEditId) && (
         <fieldset disabled={viewOnly} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
           <Panel>
             <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: "0 0 14px", fontSize: 16 }}>
