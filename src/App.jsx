@@ -4832,6 +4832,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
   const [date, setDate] = useState(editing ? editing.date : todayISO());
   const [contact, setContact] = useState(editing ? editing.contact || "" : "");
   const [notes, setNotes] = useState(editing ? editing.notes || "" : (isQuote ? defaultQuoteTerms : ""));
+  const [supplierNote, setSupplierNote] = useState(editing ? editing.supplierNote || "" : "");
   const [discount, setDiscount] = useState(editing ? String(editing.discount || 0) : "0");
   const [lines, setLines] = useState(
     editing && editing.lines
@@ -4874,22 +4875,23 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
   const [mNotes, setMNotes] = useState("");
   const [mDirty, setMDirty] = useState(false);
 
-  // When the active preview tab changes to a member PO, load that PO's fields
+  // When the active tab changes to a member PO, load that PO's fields
   useEffect(() => {
     if (!editing?.consolidatedMemberIds?.length) return;
     const members = (db.pos || []).filter(p => (editing.consolidatedMemberIds || []).includes(p.id));
     const activeMember = members.find(m => m.id === consolidatedTab);
-    if (activeMember && activeMember.id !== memberEditId) {
+    if (activeMember) {
+      // Always reload when tab changes — don't guard on memberEditId
       setMemberEditId(activeMember.id);
       setMParty(activeMember.party || "");
       setMContact(activeMember.contact || "");
       setMEta(activeMember.eta || "");
       setMStatus(activeMember.status || "Draft");
-      setMLines(activeMember.lines || []);
+      setMLines((activeMember.lines || []).map(l => ({ currency: "AUD", ...l })));
       setMModel(activeMember.model || "");
       setMNotes(activeMember.notes || "");
       setMDirty(false);
-    } else if (!activeMember) {
+    } else {
       setMemberEditId(null);
     }
   }, [consolidatedTab]);
@@ -5186,47 +5188,66 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
               {/* Line Items */}
               <Panel>
                 <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: "0 0 14px", fontSize: 16 }}>Line Items</h3>
-                <div style={{ display: "grid", gridTemplateColumns: "2fr 60px 1fr auto", gap: 6, marginBottom: 6 }}>
-                  {["Description","Qty","Price (AUD)",""].map(h => (
+                <div style={{ display: "grid", gridTemplateColumns: "2fr 50px 80px 1fr auto", gap: 6, marginBottom: 6 }}>
+                  {["Description","Qty","Currency","Price",""].map(h => (
                     <span key={h} style={{ fontSize: 11, fontWeight: 600, color: "#8a7a66" }}>{h}</span>
                   ))}
                 </div>
                 {mLines.map((l, idx) => (
-                  <div key={idx} style={{ display: "grid", gridTemplateColumns: "2fr 60px 1fr auto", gap: 6, marginBottom: 6, alignItems: "center" }}>
-                    <input
-                      style={{ ...inputStyle, margin: 0, fontSize: 12 }}
-                      type="text"
-                      value={l.desc || l.description || ""}
-                      onChange={e => { const u=[...mLines]; u[idx]={...u[idx],desc:e.target.value}; mark(setMLines)(u); }}
+                  <div key={idx} style={{ marginBottom: 8 }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "2fr 50px 80px 1fr auto", gap: 6, alignItems: "center" }}>
+                      <input
+                        style={{ ...inputStyle, margin: 0, fontSize: 12 }}
+                        type="text"
+                        value={l.desc || l.description || ""}
+                        onChange={e => { const u=[...mLines]; u[idx]={...u[idx],desc:e.target.value}; mark(setMLines)(u); }}
+                      />
+                      <input
+                        style={{ ...inputStyle, margin: 0, fontSize: 12, textAlign: "center" }}
+                        type="number"
+                        min="1"
+                        value={l.qty || l.quantity || 1}
+                        onChange={e => { const u=[...mLines]; u[idx]={...u[idx],qty:parseFloat(e.target.value)||1}; mark(setMLines)(u); }}
+                      />
+                      <select
+                        style={{ ...inputStyle, margin: 0, fontSize: 12 }}
+                        value={l.currency || "AUD"}
+                        onChange={e => { const u=[...mLines]; u[idx]={...u[idx],currency:e.target.value}; mark(setMLines)(u); }}
+                      >
+                        <option value="AUD">AUD</option>
+                        <option value="USD">USD</option>
+                        <option value="CNY">CNY</option>
+                        <option value="EUR">EUR</option>
+                      </select>
+                      <input
+                        style={{ ...inputStyle, margin: 0, fontSize: 12, textAlign: "right" }}
+                        type="number"
+                        step="0.01"
+                        value={l.price || l.unitPrice || ""}
+                        onChange={e => { const u=[...mLines]; u[idx]={...u[idx],price:parseFloat(e.target.value)||0}; mark(setMLines)(u); }}
+                      />
+                      <button
+                        onClick={() => mark(setMLines)(mLines.filter((_,i)=>i!==idx))}
+                        style={{ background:"none",border:"none",color:"#a3442e",cursor:"pointer",fontSize:16,padding:"0 4px" }}
+                      >✕</button>
+                    </div>
+                    {/* Line note */}
+                    <textarea
+                      style={{ ...inputStyle, margin: "4px 0 0", fontSize: 11, minHeight: 36, resize: "vertical", width: "100%", color: "#6b5240" }}
+                      placeholder="Line notes / specifications (optional)"
+                      value={l.lineNote || ""}
+                      onChange={e => { const u=[...mLines]; u[idx]={...u[idx],lineNote:e.target.value}; mark(setMLines)(u); }}
                     />
-                    <input
-                      style={{ ...inputStyle, margin: 0, fontSize: 12, textAlign: "center" }}
-                      type="number"
-                      min="1"
-                      value={l.qty || l.quantity || 1}
-                      onChange={e => { const u=[...mLines]; u[idx]={...u[idx],qty:parseFloat(e.target.value)||1}; mark(setMLines)(u); }}
-                    />
-                    <input
-                      style={{ ...inputStyle, margin: 0, fontSize: 12, textAlign: "right" }}
-                      type="number"
-                      step="0.01"
-                      value={l.price || l.unitPrice || ""}
-                      onChange={e => { const u=[...mLines]; u[idx]={...u[idx],price:parseFloat(e.target.value)||0}; mark(setMLines)(u); }}
-                    />
-                    <button
-                      onClick={() => mark(setMLines)(mLines.filter((_,i)=>i!==idx))}
-                      style={{ background:"none",border:"none",color:"#a3442e",cursor:"pointer",fontSize:16,padding:"0 4px" }}
-                    >✕</button>
                   </div>
                 ))}
-                {/* Line totals */}
+                {/* Line total */}
                 {mLines.length > 0 && (
                   <div style={{ textAlign: "right", fontSize: 13, fontWeight: 700, color: "#4a3527", marginTop: 8, paddingTop: 8, borderTop: "1px solid #e3d8c6" }}>
                     Total: ${mLines.reduce((s,l) => s + ((parseFloat(l.price||l.unitPrice)||0) * (parseFloat(l.qty||l.quantity)||1)), 0).toLocaleString()}
                   </div>
                 )}
-                <div style={{ marginTop: 10 }}>
-                  <Btn variant="secondary" size="sm" onClick={() => mark(setMLines)([...mLines, { desc:"", qty:1, price:0, currency:"AUD" }])}>
+                <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
+                  <Btn variant="secondary" size="sm" onClick={() => mark(setMLines)([...mLines, { desc:"", qty:1, price:0, currency:"AUD", lineNote:"" }])}>
                     + Add line
                   </Btn>
                 </div>
