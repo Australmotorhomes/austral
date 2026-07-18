@@ -6009,9 +6009,9 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                   ))}
                 </div>
 
-                {/* Summary tab */}
-                {activeTab === "summary" && (
-                  <div>
+                {/* Summary — always visible regardless of which tab is active */}
+                {/* Tabs only control the LEFT panel editing, not this right panel */}
+                <div>
                     {allPOs.map(po => (
                       <div key={po.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 0", borderBottom: "1px solid #f0e8d9", fontSize: 12 }}>
                         <div>
@@ -6037,7 +6037,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                           onChange={(e) => {
                             const value = parseFloat(e.target.value) || 0;
                             setConsolidatedCustoms(value);
-                            setCustomsClearance(value);  // Sync to customsClearance for saving
+                            setCustomsClearance(value);
                           }}
                           style={{ flex: 1, padding: "6px 8px", fontSize: 12, border: "1px solid #d4a574", borderRadius: 3 }}
                         />
@@ -6084,67 +6084,6 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                       <div style={{ fontSize: 16, fontWeight: 700 }}>${(Number(groupTotal) || 0).toLocaleString()}</div>
                     </div>
                   </div>
-                )}
-
-                {/* Per-PO tabs */}
-                {allPOs.map(po => activeTab === po.id && (
-                  <div key={po.id}>
-                    <div style={{ fontSize: 13, fontWeight: 700, color: "#4a3527", marginBottom: 12 }}>
-                      PO-{stripPO(po.number)}{po.customer ? ` — ${po.customer}` : ""}
-                    </div>
-                    {po.lines && po.lines.length > 0 ? (
-                      <div>
-                        {po.lines.map((line, li) => (
-                          <div key={li} style={{ padding: "9px 0", borderBottom: li < po.lines.length - 1 ? "1px solid #f0e8d9" : "none", fontSize: 12 }}>
-                            <div style={{ fontWeight: 600, color: "#4a3527" }}>{line.desc || line.description || "Item"}</div>
-                            <div style={{ display: "flex", gap: 16, marginTop: 3, flexWrap: "wrap" }}>
-                              {(line.qty || line.quantity) && <span style={{ color: "#8a7a66", fontSize: 11 }}>Qty: {line.qty || line.quantity}</span>}
-                              {(line.price || line.unitPrice) && <span style={{ color: "#8a7a66", fontSize: 11 }}>Unit: ${parseFloat(line.price || line.unitPrice || 0).toLocaleString()}</span>}
-                              <span style={{ fontWeight: 600, color: "#b5552b", fontSize: 11 }}>
-                                ${(parseFloat(line.amount) || ((parseFloat(line.qty) || 0) * (parseFloat(line.price) || 0))).toLocaleString()}
-                              </span>
-                            </div>
-                          </div>
-                        ))}
-                        <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 0 2px", borderTop: "2px solid #d4a574", marginTop: 6 }}>
-                          <span style={{ fontWeight: 700, color: "#4a3527", fontSize: 12 }}>Subtotal</span>
-                          <span style={{ fontWeight: 700, color: "#4a3527", fontSize: 12 }}>
-                            ${(Number(poSubtotalVal(po)) || 0).toLocaleString()}
-                          </span>
-                        </div>
-                        {poTotal(po) !== poSubtotalVal(po) && (
-                          <div style={{ display: "flex", justifyContent: "space-between", paddingTop: 4 }}>
-                            <span style={{ fontWeight: 700, color: "#b5552b", fontSize: 12 }}>Total</span>
-                            <span style={{ fontWeight: 700, color: "#b5552b", fontSize: 12 }}>
-                              ${(Number(poTotal(po)) || 0).toLocaleString()}
-                            </span>
-                          </div>
-                        )}
-                      </div>
-                    ) : (
-                      <p style={{ fontSize: 12, color: "#8a7a66" }}>No line items on this PO.</p>
-                    )}
-                    
-                    {/* Internal Notes for this PO — left panel only */}
-                    <div style={{ marginTop: 14, paddingTop: 14, borderTop: "2px solid #d4a574" }}>
-                      <label style={{ fontSize: 12, fontWeight: 600, color: "#6b5240", display: "block", marginBottom: 6 }}>
-                        Internal Notes
-                      </label>
-                      <textarea
-                        value={po.id === editing.id ? notes : (po.notes || "")}
-                        onChange={(e) => {
-                          if (po.id === editing.id) {
-                            setNotes(e.target.value);
-                          } else {
-                            savePONotes(po.id, e.target.value);
-                          }
-                        }}
-                        style={{ width: "100%", minHeight: 60, padding: "8px", fontSize: 12, border: "1px solid #d4a574", borderRadius: 4, fontFamily: "inherit", resize: "vertical" }}
-                        placeholder="Internal notes (not sent to supplier)"
-                      />
-                    </div>
-                  </div>
-                ))}
               </Panel>
             );
           })()}
