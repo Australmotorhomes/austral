@@ -4112,12 +4112,8 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
         update((next) => {
           allPOs.forEach(po => {
             const p = next.pos.find(x => x.id === po.id);
-            if (p) {
-              p.customsClearance = splitAmount;
-            }
+            if (p) p.customsClearance = splitAmount;
           });
-          const gp = next.pos.find(p => p.id === groupPO.id);
-          if (gp) gp.customsClearance = customsAmount;
         });
         showToast(`Freight Forward Fee $${customsAmount.toLocaleString()} split 50/50 across ${allPOs.length} POs ($${splitAmount.toLocaleString()} each)`);
       } catch (err) {
@@ -4870,12 +4866,13 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
   const [mDirty, setMDirty] = useState(false);
 
   // When the active preview tab changes to a member PO, load that PO's fields
-  // When a PO tab is clicked in the consolidated view, load that member PO's data for left panel editing
+  // into the member edit state so the left panel switches to editing it.
   useEffect(() => {
     if (!editing?.consolidatedMemberIds?.length) return;
     const members = (db.pos || []).filter(p => (editing.consolidatedMemberIds || []).includes(p.id));
-    const activeMember = members.find(m => m.id === consolidatedTab);
-    if (activeMember) {
+    // Use previewPoId as the source of truth — it's set by both left and right panel tabs
+    const activeMember = members.find(m => m.id === previewPoId);
+    if (activeMember && activeMember.id !== memberEditId) {
       setMemberEditId(activeMember.id);
       setMParty(activeMember.party || "");
       setMContact(activeMember.contact || "");
@@ -4884,11 +4881,10 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
       setMMilestones(activeMember.paymentMilestones || []);
       setMNotes(activeMember.notes || "");
       setMDirty(false);
-    } else {
-      // Summary tab or primary PO tab — clear member edit state
+    } else if (!activeMember) {
       setMemberEditId(null);
     }
-  }, [consolidatedTab]);
+  }, [previewPoId]);
 
   const sortedItems = items.slice().sort((a, b) => (a.model || "").localeCompare(b.model || "") || (a.name || "").localeCompare(b.name || ""));
 
@@ -5213,8 +5209,8 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
           );
         })()}
 
-        {/* Normal left panel — shown when no member PO is being edited */}
-        {(isQuote || isNew || !editing?.consolidatedMemberIds?.length || !memberEditId) && (
+        {/* Normal left panel — shown for primary PO tab, non-consolidated POs, or when Summary tab active */}
+        {(isQuote || isNew || !editing?.consolidatedMemberIds?.length || !memberEditId || !(db.pos || []).filter(p => (editing?.consolidatedMemberIds || []).includes(p.id)).find(m => m.id === previewPoId)) && (
         <fieldset disabled={viewOnly} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
           <Panel>
             <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: "0 0 14px", fontSize: 16 }}>
@@ -5947,17 +5943,18 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                   ))}
                 </div>
 
-                {/* Summary — always visible */}
-                <div>
+                {/* Summary tab */}
+                {activeTab === "summary" && (
+                  <div>
                     {allPOs.map(po => (
-                      <div key={po.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 0", borderBottom: "1px solid #f0e8d9", fontSize: 12 }}>
-                        <div>
+                      <div key={po.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", padding: "9px 0", borderBottom: "1px solid #f0e8d9", fontSize: 12, flexWrap: "wrap", gap: 4 }}>
+                        <div style={{ minWidth: 0, flex: 1 }}>
                           <strong>PO-{stripPO(po.number)}</strong>
                           {po.customer && <span style={{ color: "#8a7a66" }}> — {po.customer}</span>}
                         </div>
-                        <div style={{ textAlign: "right" }}>
-                          <div style={{ fontWeight: 600 }}>${poTotal(po).toLocaleString()}</div>
-                          {po.customsClearance > 0 && <div style={{ fontSize: 11, color: "#8a7a66" }}>Customs: ${po.customsClearance.toLocaleString()}</div>}
+                        <div style={{ textAlign: "right", flexShrink: 0 }}>
+                          <div style={{ fontWeight: 600 }}>${Number(poTotal(po)).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",")}</div>
+                          {po.customsClearance > 0 && <div style={{ fontSize: 11, color: "#8a7a66" }}>Customs: ${Number(po.customsClearance).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",")}</div>}
                         </div>
                       </div>
                     ))}
@@ -5995,13 +5992,13 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                       <div style={{ marginBottom: 14 }}>
                         <h5 style={{ fontSize: 12, fontWeight: 600, color: "#6b5240", marginBottom: 10 }}>Payment Schedule</h5>
                         {paymentMilestones.filter(m => m.due || m.amount).map((m, i) => (
-                          <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: "1px solid #f0e8d9", fontSize: 11 }}>
+                          <div key={i} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 0", borderBottom: "1px solid #f0e8d9", fontSize: 11, flexWrap: "wrap", gap: 4 }}>
                             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                               {m.paid && <span style={{ background: "#d4edda", color: "#2d7a4f", borderRadius: 3, padding: "1px 6px", fontWeight: 600, fontSize: 10 }}>PAID</span>}
                               <span style={{ color: "#6b5240" }}>{m.due ? new Date(m.due).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" }) : "Date TBC"}</span>
                             </div>
                             <span style={{ fontWeight: 600, color: m.paid ? "#2d7a4f" : "#b5552b" }}>
-                              {m.amount ? `$${parseFloat(m.amount).toLocaleString()}` : "Amount TBC"}
+                              {m.amount ? `$${Number(parseFloat(m.amount)).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",")}` : "Amount TBC"}
                             </span>
                           </div>
                         ))}
@@ -6009,51 +6006,52 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                           <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 0 2px", borderTop: "2px solid #b5552b", marginTop: 4 }}>
                             <span style={{ fontWeight: 600, color: "#4a3527", fontSize: 12 }}>Total</span>
                             <span style={{ fontWeight: 700, color: "#b5552b", fontSize: 12 }}>
-                              ${paymentMilestones.filter(m => m.amount).reduce((s, m) => s + (parseFloat(m.amount) || 0), 0).toLocaleString()}
+                              ${Number(paymentMilestones.filter(m => m.amount).reduce((s, m) => s + (parseFloat(m.amount) || 0), 0)).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",")}
                             </span>
                           </div>
                         )}
                       </div>
                     )}
 
-                    <div style={{ padding: 12, background: "#b5552b", color: "#fff", borderRadius: 4, textAlign: "center" }}>
-                      <div style={{ fontSize: 11, fontWeight: 600, marginBottom: 4 }}>CONSOLIDATED TOTAL</div>
-                      <div style={{ fontSize: 16, fontWeight: 700 }}>${(Number(groupTotal) || 0).toLocaleString()}</div>
+                    <div style={{ padding: "14px 12px", background: "#b5552b", color: "#fff", borderRadius: 4, textAlign: "center" }}>
+                      <div style={{ fontSize: 11, fontWeight: 600, marginBottom: 4, letterSpacing: 0.5 }}>CONSOLIDATED TOTAL</div>
+                      <div style={{ fontSize: isMobile ? 18 : 22, fontWeight: 700 }}>${Number(groupTotal).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",")}</div>
                     </div>
                   </div>
-                </div>
+                )}
 
-                {/* Per-PO financial detail — shown below summary when a PO tab is active */}
+                {/* Per-PO tabs */}
                 {allPOs.map(po => activeTab === po.id && (
                   <div key={po.id}>
-                    <div style={{ fontSize: 13, fontWeight: 700, color: "#4a3527", marginBottom: 12 }}>
+                    <div style={{ fontSize: isMobile ? 12 : 13, fontWeight: 700, color: "#4a3527", marginBottom: 12 }}>
                       PO-{stripPO(po.number)}{po.customer ? ` — ${po.customer}` : ""}
                     </div>
                     {po.lines && po.lines.length > 0 ? (
                       <div>
                         {po.lines.map((line, li) => (
                           <div key={li} style={{ padding: "9px 0", borderBottom: li < po.lines.length - 1 ? "1px solid #f0e8d9" : "none", fontSize: 12 }}>
-                            <div style={{ fontWeight: 600, color: "#4a3527" }}>{line.desc || line.description || "Item"}</div>
-                            <div style={{ display: "flex", gap: 16, marginTop: 3, flexWrap: "wrap" }}>
+                            <div style={{ fontWeight: 600, color: "#4a3527", fontSize: isMobile ? 12 : 13 }}>{line.desc || line.description || "Item"}</div>
+                            <div style={{ display: "flex", gap: isMobile ? 8 : 16, marginTop: 3, flexWrap: "wrap" }}>
                               {(line.qty || line.quantity) && <span style={{ color: "#8a7a66", fontSize: 11 }}>Qty: {line.qty || line.quantity}</span>}
-                              {(line.price || line.unitPrice) && <span style={{ color: "#8a7a66", fontSize: 11 }}>Unit: ${parseFloat(line.price || line.unitPrice || 0).toLocaleString()}</span>}
+                              {(line.price || line.unitPrice) && <span style={{ color: "#8a7a66", fontSize: 11 }}>Unit: ${Number(parseFloat(line.price || line.unitPrice || 0)).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",")}</span>}
                               <span style={{ fontWeight: 600, color: "#b5552b", fontSize: 11 }}>
-                                ${(parseFloat(line.amount) || ((parseFloat(line.qty) || 0) * (parseFloat(line.price) || 0))).toLocaleString()}
+                                ${Number(parseFloat(line.amount) || ((parseFloat(line.qty || line.quantity) || 1) * (parseFloat(line.price || line.unitPrice) || 0))).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",")}
                               </span>
                             </div>
+                            {line.lineNote && <div style={{ fontSize: 11, color: "#8a7a66", marginTop: 3, fontStyle: "italic" }}>{line.lineNote}</div>}
                           </div>
                         ))}
                         <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 0 2px", borderTop: "2px solid #d4a574", marginTop: 6 }}>
                           <span style={{ fontWeight: 700, color: "#4a3527", fontSize: 12 }}>Subtotal</span>
                           <span style={{ fontWeight: 700, color: "#4a3527", fontSize: 12 }}>
-                            ${(Number(poSubtotalVal(po)) || 0).toLocaleString()}
+                            ${Number(poSubtotalVal(po) || 0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",")}
                           </span>
                         </div>
                         {poTotal(po) !== poSubtotalVal(po) && (
                           <div style={{ display: "flex", justifyContent: "space-between", paddingTop: 4 }}>
                             <span style={{ fontWeight: 700, color: "#b5552b", fontSize: 12 }}>Total</span>
                             <span style={{ fontWeight: 700, color: "#b5552b", fontSize: 12 }}>
-                              ${(Number(poTotal(po)) || 0).toLocaleString()}
+                              ${Number(poTotal(po) || 0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",")}
                             </span>
                           </div>
                         )}
@@ -6062,22 +6060,22 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                       <p style={{ fontSize: 12, color: "#8a7a66" }}>No line items on this PO.</p>
                     )}
                     
-                    {/* Internal Notes for this PO — left panel only */}
+                    {/* Supplier Notes for this PO */}
                     <div style={{ marginTop: 14, paddingTop: 14, borderTop: "2px solid #d4a574" }}>
                       <label style={{ fontSize: 12, fontWeight: 600, color: "#6b5240", display: "block", marginBottom: 6 }}>
-                        Internal Notes
+                        Supplier Notes
                       </label>
                       <textarea
-                        value={po.id === editing.id ? notes : (po.notes || "")}
+                        value={po.id === editing.id ? supplierNote : (po.supplierNote || "")}
                         onChange={(e) => {
                           if (po.id === editing.id) {
-                            setNotes(e.target.value);
+                            setSupplierNote(e.target.value);
                           } else {
-                            savePONotes(po.id, e.target.value);
+                            savePOSupplierNote(po.id, e.target.value);
                           }
                         }}
                         style={{ width: "100%", minHeight: 60, padding: "8px", fontSize: 12, border: "1px solid #d4a574", borderRadius: 4, fontFamily: "inherit", resize: "vertical" }}
-                        placeholder="Internal notes (not sent to supplier)"
+                        placeholder="Instructions for the supplier"
                       />
                     </div>
                   </div>
