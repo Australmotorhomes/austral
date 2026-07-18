@@ -6024,7 +6024,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                 {allPOs.map(po => activeTab === po.id && (
                   <div key={po.id}>
                     <div style={{ fontSize: isMobile ? 12 : 13, fontWeight: 700, color: "#4a3527", marginBottom: 12 }}>
-                      PO-{stripPO(po.number)}{po.customer ? ` — ${po.customer}` : ""}
+                      PO-{stripPO(po.number)}
                     </div>
                     {po.lines && po.lines.length > 0 ? (
                       <div>
@@ -6038,7 +6038,6 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                                 ${Number(parseFloat(line.amount) || ((parseFloat(line.qty || line.quantity) || 1) * (parseFloat(line.price || line.unitPrice) || 0))).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",")}
                               </span>
                             </div>
-                            {line.lineNote && <div style={{ fontSize: 11, color: "#8a7a66", marginTop: 3, fontStyle: "italic" }}>{line.lineNote}</div>}
                           </div>
                         ))}
                         <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 0 2px", borderTop: "2px solid #d4a574", marginTop: 6 }}>
