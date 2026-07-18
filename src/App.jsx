@@ -4808,6 +4808,7 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
 function DocModal({ kind, editing, db, items, models, categories, fx, statusOptions, onCancel, onSave, onSaveMilestones, onAddItem, onAddModel, onAddCategory, onStatusChange, onDelete, onGeneratePOs, onCreateCustomsPO, onConsolidatePOs, onReverseConsolidation, onSplitCustoms, openRecord, showToast, update }) {
   const isQuote = kind === "quote";
   const isMobile = useIsMobile();
+  const isTablet = useIsMobile(880); // covers iPad-width viewports where the desktop payment-schedule grid gets too tight
   const rate = fx ? fx.usdAudRate : FALLBACK_USD_AUD_RATE;
   const isNew = editing === null;
   // POs now open directly editable, same as quotes and prospects — no separate
@@ -5593,19 +5594,30 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
               <p style={{ fontSize: 12, color: "#8a7a66", margin: 0 }}>No payment milestones yet. Click "+ Add payment" to create one.</p>
             ) : (
               <>
-                {/* Compact table — one row per milestone */}
+                {(() => {
+                  // Tablet (e.g. iPad portrait): still wide enough to show the Paid
+                  // column, but too narrow for a 3-flexible-column + fixed layout —
+                  // drop the Supplier Inv column so Due Date and Amount get room to breathe.
+                  const showSupplierInvCol = !isQuote && !isTablet;
+                  const showPaidCol = !isMobile;
+                  const gridCols = isMobile
+                    ? "1fr 1fr auto"
+                    : showSupplierInvCol
+                    ? "1fr 1fr 1fr 80px auto"
+                    : "1.3fr 1fr 80px auto";
+                  return (
                 <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
                   {/* Header row */}
-                  <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr auto" : (isQuote ? "1fr 1fr 80px auto" : "1fr 1fr 1fr 80px auto"), gap: 8, padding: "4px 0 8px", borderBottom: "1px solid #d3c9b8" }}>
+                  <div style={{ display: "grid", gridTemplateColumns: gridCols, gap: 8, padding: "4px 0 8px", borderBottom: "1px solid #d3c9b8" }}>
                     <span style={{ fontSize: 11, fontWeight: 600, color: "#8a7a66" }}>DUE DATE</span>
                     <span style={{ fontSize: 11, fontWeight: 600, color: "#8a7a66" }}>AMOUNT (AUD)</span>
-                    {!isMobile && !isQuote && <span style={{ fontSize: 11, fontWeight: 600, color: "#8a7a66" }}>SUPPLIER INV</span>}
-                    {!isMobile && <span style={{ fontSize: 11, fontWeight: 600, color: "#8a7a66" }}>PAID</span>}
+                    {showSupplierInvCol && <span style={{ fontSize: 11, fontWeight: 600, color: "#8a7a66" }}>SUPPLIER INV</span>}
+                    {showPaidCol && <span style={{ fontSize: 11, fontWeight: 600, color: "#8a7a66" }}>PAID</span>}
                     <span></span>
                   </div>
 
                   {paymentMilestones.map((milestone, idx) => (
-                    <div key={idx} style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr 1fr auto" : (isQuote ? "1fr 1fr 80px auto" : "1fr 1fr 1fr 80px auto"), gap: 8, padding: "8px 0", borderBottom: "1px solid #f0e8d9", alignItems: "center" }}>
+                    <div key={idx} style={{ display: "grid", gridTemplateColumns: gridCols, gap: 8, padding: "8px 0", borderBottom: "1px solid #f0e8d9", alignItems: "center" }}>
                       <input
                         type="date"
                         value={milestone.due || ""}
@@ -5614,7 +5626,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                           updated[idx] = { ...updated[idx], due: e.target.value };
                           setPaymentMilestones(updated);
                         }}
-                        style={{ ...inputStyle, margin: 0, width: "100%" }}
+                        style={{ ...inputStyle, margin: 0, width: "100%", minWidth: 0 }}
                       />
                       <input
                         type="number"
@@ -5626,9 +5638,9 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                           updated[idx] = { ...updated[idx], amount: e.target.value };
                           setPaymentMilestones(updated);
                         }}
-                        style={{ ...inputStyle, margin: 0, width: "100%" }}
+                        style={{ ...inputStyle, margin: 0, width: "100%", minWidth: 0 }}
                       />
-                      {!isMobile && !isQuote && (
+                      {showSupplierInvCol && (
                         <input
                           type="text"
                           placeholder="e.g. INV-001"
@@ -5638,11 +5650,11 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                             updated[idx] = { ...updated[idx], invoice: e.target.value };
                             setPaymentMilestones(updated);
                           }}
-                          style={{ ...inputStyle, margin: 0, width: "100%", fontSize: 12 }}
+                          style={{ ...inputStyle, margin: 0, width: "100%", minWidth: 0, fontSize: 12 }}
                         />
                       )}
-                      {!isMobile && (
-                        <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 12 }}>
+                      {showPaidCol && (
+                        <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 12, minWidth: 0 }}>
                           <input
                             type="checkbox"
                             checked={milestone.paid || false}
@@ -5669,6 +5681,8 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                     </div>
                   ))}
                 </div>
+                  );
+                })()}
 
                 {/* Running total */}
                 {paymentMilestones.some(m => m.amount) && (
@@ -6059,22 +6073,22 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                       <p style={{ fontSize: 12, color: "#8a7a66" }}>No line items on this PO.</p>
                     )}
                     
-                    {/* Supplier Notes for this PO */}
+                    {/* Internal Notes for this PO — not sent to the supplier */}
                     <div style={{ marginTop: 14, paddingTop: 14, borderTop: "2px solid #d4a574" }}>
                       <label style={{ fontSize: 12, fontWeight: 600, color: "#6b5240", display: "block", marginBottom: 6 }}>
-                        Supplier Notes
+                        Internal Notes
                       </label>
                       <textarea
-                        value={po.id === editing.id ? supplierNote : (po.supplierNote || "")}
+                        value={po.id === editing.id ? notes : (po.notes || "")}
                         onChange={(e) => {
                           if (po.id === editing.id) {
-                            setSupplierNote(e.target.value);
+                            setNotes(e.target.value);
                           } else {
-                            savePOSupplierNote(po.id, e.target.value);
+                            savePONotes(po.id, e.target.value);
                           }
                         }}
                         style={{ width: "100%", minHeight: 60, padding: "8px", fontSize: 12, border: "1px solid #d4a574", borderRadius: 4, fontFamily: "inherit", resize: "vertical" }}
-                        placeholder="Instructions for the supplier"
+                        placeholder="Internal notes (not sent to supplier) — carried over from the original PO"
                       />
                     </div>
                   </div>
