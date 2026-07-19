@@ -3586,6 +3586,8 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
   const [linkingQuotes, setLinkingQuotes] = useState(false);
   const [linkPOsConfirm, setLinkPOsConfirm] = useState(false);
   const [linkingPOs, setLinkingPOs] = useState(false);
+  const [sortCol, setSortCol] = useState(isQuote ? "date" : "eta");
+  const [sortDir, setSortDir] = useState("desc");
 
   // Cross-tab navigation: if another tab asked to open a specific quote/PO, do it.
   useEffect(() => {
@@ -3647,16 +3649,41 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
     list = list.filter((d) => !d.archived);
   }
   
-  // Sort: POs by ETA (newest to oldest), Quotes by createdAt (newest to oldest)
-  if (!isQuote) {
-    list.sort((a, b) => {
-      const etaA = a.eta || "";
-      const etaB = b.eta || "";
-      return etaB.localeCompare(etaA) || String(b.number).localeCompare(String(a.number));
-    });
-  } else {
-    list.sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || "") || String(b.number).localeCompare(String(a.number)));
-  }
+  // Sort: click any column heading to sort by that column
+  const handleSort = (col) => {
+    if (sortCol === col) {
+      setSortDir(d => d === "asc" ? "desc" : "asc");
+    } else {
+      setSortCol(col);
+      setSortDir(col === "total" ? "desc" : "asc");
+    }
+  };
+
+  const getSortVal = (d, col) => {
+    switch(col) {
+      case "number":  return String(d.number || "");
+      case "party":   return (d.party || "").toLowerCase();
+      case "model":   return (d.model || "").toLowerCase();
+      case "customer":return (d.customer || "").toLowerCase();
+      case "date":    return d.date || d.createdAt || "";
+      case "eta":     return d.eta || "";
+      case "status":  return (d.status || "").toLowerCase();
+      case "total":   return parseFloat(d.total) || 0;
+      default:        return "";
+    }
+  };
+
+  list.sort((a, b) => {
+    const va = getSortVal(a, sortCol);
+    const vb = getSortVal(b, sortCol);
+    let cmp = 0;
+    if (typeof va === "number") {
+      cmp = va - vb;
+    } else {
+      cmp = String(va).localeCompare(String(vb));
+    }
+    return sortDir === "asc" ? cmp : -cmp;
+  });
 
   function saveMilestones(doc, milestones) {
     (async () => {
@@ -4518,13 +4545,20 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
             <table>
               <thead>
                 <tr>
-                  <th>PO #</th>
-                  <th>Supplier</th>
-                  <th>Reference</th>
-                  <th>Date</th>
-                  <th>ETA</th>
-                  <th className="num">Total (AUD)</th>
-                  <th>Status</th>
+                  {[
+                    { col: "number", label: "PO #" },
+                    { col: "party", label: "Supplier" },
+                    { col: "model", label: "Reference" },
+                    { col: "date", label: "Date" },
+                    { col: "eta", label: "ETA" },
+                    { col: "total", label: "Total (AUD)", num: true },
+                    { col: "status", label: "Status" },
+                  ].map(({ col, label, num }) => (
+                    <th key={col} className={num ? "num" : ""} onClick={() => handleSort(col)} style={{ cursor: "pointer", userSelect: "none", whiteSpace: "nowrap" }}>
+                      {label}
+                      {sortCol === col ? (sortDir === "asc" ? " ▲" : " ▼") : " ⇅"}
+                    </th>
+                  ))}
                   <th></th>
                 </tr>
               </thead>
@@ -4611,12 +4645,19 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
           <table>
             <thead>
               <tr>
-                <th>Quote #</th>
-                <th>Customer</th>
-                <th>Model</th>
-                <th>Date</th>
-                <th className="num">Total (AUD)</th>
-                <th>Status</th>
+                {[
+                  { col: "number", label: "Quote #" },
+                  { col: "party", label: "Customer" },
+                  { col: "model", label: "Model" },
+                  { col: "date", label: "Date" },
+                  { col: "total", label: "Total (AUD)", num: true },
+                  { col: "status", label: "Status" },
+                ].map(({ col, label, num }) => (
+                  <th key={col} className={num ? "num" : ""} onClick={() => handleSort(col)} style={{ cursor: "pointer", userSelect: "none", whiteSpace: "nowrap" }}>
+                    {label}
+                    {sortCol === col ? (sortDir === "asc" ? " ▲" : " ▼") : " ⇅"}
+                  </th>
+                ))}
                 <th></th>
               </tr>
             </thead>
