@@ -9501,7 +9501,7 @@ function DashboardTab({ db, setTab, openRecord }) {
   const [depositsTableCollapsed, setDepositsTableCollapsed] = React.useState(true);
   const [showPaidDeposits, setShowPaidDeposits] = React.useState(false);
   const [stockTableCollapsed, setStockTableCollapsed] = React.useState(true);
-  const [salesDashboardCollapsed, setSalesDashboardCollapsed] = React.useState(true);
+  const [salesDashboardCollapsed, setSalesDashboardCollapsed] = React.useState(false);
   const [shipmentsDueCollapsed, setShipmentsDueCollapsed] = React.useState(true);
   // Default to current FY — July 2026 is in FY26/27
   const [stockFYEnd, setStockFYEnd] = React.useState(currentFYEnd);
@@ -9882,20 +9882,6 @@ function DashboardTab({ db, setTab, openRecord }) {
 
   return (
     <>
-      {/* ── STOCK MOVEMENT TABLE ── */}
-      <section style={{ marginBottom: 32, padding: 20, background: "#f4faf6", borderRadius: 8, border: "1px solid #c0d8c8" }}>
-        <StockMovementTable
-          db={db}
-          collapsed={stockTableCollapsed}
-          setCollapsed={setStockTableCollapsed}
-          fyEnd={stockFYEnd}
-          setFyEnd={setStockFYEnd}
-          currentFYEnd={currentFYEnd}
-          getFYRange={getFYRange}
-          EARLIEST_FY_END={EARLIEST_FY_END}
-        />
-      </section>
-
       {/* ── SALES DASHBOARD (merged: Sales Performance + Pipeline/PO/Margin) ── */}
       <section style={{ marginBottom: 32, padding: 20, background: "#f9f5f0", borderRadius: 8, border: "1px solid #e3d8c6" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: salesDashboardCollapsed ? 0 : 4 }}>
@@ -10230,6 +10216,20 @@ function DashboardTab({ db, setTab, openRecord }) {
       </div>
         </>
         )}
+      </section>
+
+      {/* ── STOCK MOVEMENT TABLE ── */}
+      <section style={{ marginBottom: 32, padding: 20, background: "#f4faf6", borderRadius: 8, border: "1px solid #c0d8c8" }}>
+        <StockMovementTable
+          db={db}
+          collapsed={stockTableCollapsed}
+          setCollapsed={setStockTableCollapsed}
+          fyEnd={stockFYEnd}
+          setFyEnd={setStockFYEnd}
+          currentFYEnd={currentFYEnd}
+          getFYRange={getFYRange}
+          EARLIEST_FY_END={EARLIEST_FY_END}
+        />
       </section>
 
       {/* Shipments due */}
