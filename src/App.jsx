@@ -9329,12 +9329,20 @@ function StockMovementTable({ db, collapsed, setCollapsed, fyEnd, setFyEnd, curr
   return (
     <>
       <div
-        onClick={() => setCollapsed(v => !v)}
-        style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", userSelect: "none", marginBottom: collapsed ? 0 : 12 }}
+        style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: collapsed ? 0 : 12 }}
       >
-        <span style={{ fontSize: 16, color: "#3a7a4a", lineHeight: 1 }}>{collapsed ? "▶" : "▼"}</span>
-        <h3 style={{ fontSize: 14, fontWeight: 700, color: "#2d5a38", margin: 0 }}>Stock Movement</h3>
-        {collapsed && <span style={{ fontSize: 11, color: "#3a7a4a", marginLeft: 4 }}>click to expand</span>}
+        <h3 style={{ fontFamily: "Georgia,serif", fontSize: 16, fontWeight: 700, color: "#4a3527", margin: 0 }}>Stock Movement</h3>
+        <label style={{ position: "relative", display: "inline-block", width: 40, height: 22, cursor: "pointer", flexShrink: 0 }}>
+          <input
+            type="checkbox"
+            checked={!collapsed}
+            onChange={() => setCollapsed(v => !v)}
+            style={{ position: "absolute", opacity: 0, width: "100%", height: "100%", margin: 0, cursor: "pointer" }}
+            aria-label="Show Stock Movement"
+          />
+          <span style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, background: collapsed ? "#d4c4b0" : "#b5552b", borderRadius: 22, transition: "background 0.2s", pointerEvents: "none" }} />
+          <span style={{ position: "absolute", top: 2, left: collapsed ? 2 : 20, width: 18, height: 18, background: "#fff", borderRadius: "50%", transition: "left 0.2s", boxShadow: "0 1px 3px rgba(0,0,0,0.3)", pointerEvents: "none" }} />
+        </label>
       </div>
 
       {!collapsed && (
