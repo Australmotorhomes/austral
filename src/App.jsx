@@ -9483,6 +9483,7 @@ function DashboardTab({ db, setTab, openRecord }) {
   const [drillDown, setDrillDown] = React.useState(null); // { key: "2026-06", label: "June FY25/26" }
   const [salesTableCollapsed, setSalesTableCollapsed] = React.useState(true);
   const [depositsTableCollapsed, setDepositsTableCollapsed] = React.useState(true);
+  const [showPaidDeposits, setShowPaidDeposits] = React.useState(false);
   const [stockTableCollapsed, setStockTableCollapsed] = React.useState(false);
   // Default to current FY — July 2026 is in FY26/27
   const [stockFYEnd, setStockFYEnd] = React.useState(currentFYEnd);
@@ -9593,7 +9594,8 @@ function DashboardTab({ db, setTab, openRecord }) {
       return Object.entries(grouped).map(([supplier, pos]) => ({ supplier, pos }));
     })();
 
-    // Pre-compute deposit rows for Page 2
+    // Pre-compute deposit rows for Page 2 — soonest due date first, paid items pushed to
+    // the end (still soonest-first within that group) and hidden behind a toggle.
     const depositRows = (() => {
       const today2 = new Date();
       const mths = [];
@@ -9608,11 +9610,17 @@ function DashboardTab({ db, setTab, openRecord }) {
           const pmDate = new Date(pm.due);
           const mi = mths.findIndex(m => m.date.getFullYear() === pmDate.getFullYear() && m.date.getMonth() === pmDate.getMonth());
           if (mi < 0) return;
-          rows.push({ name: q.party || "—", product: q.model || "—", month: mths[mi].label, amount: parseFloat(pm.amount) || 0, paid: !!pm.paid, quoteId: q.id });
+          rows.push({ name: q.party || "—", product: q.model || "—", month: mths[mi].label, due: pm.due, amount: parseFloat(pm.amount) || 0, paid: !!pm.paid, quoteId: q.id });
         });
+      });
+      rows.sort((a, b) => {
+        if (a.paid !== b.paid) return a.paid ? 1 : -1; // unpaid before paid
+        return (a.due || "9999").localeCompare(b.due || "9999"); // soonest first within each group
       });
       return rows;
     })();
+    const unpaidDepositRows = depositRows.filter(r => !r.paid);
+    const paidDepositRows = depositRows.filter(r => r.paid);
 
     const totalPages = 4 + mobileShipments.length;
     const pageTitles = ["Sales Performance", "Deposits", "Stock", "Sales Funnel",
@@ -9689,20 +9697,47 @@ function DashboardTab({ db, setTab, openRecord }) {
           <div style={page}>
             {depositRows.length === 0
               ? <p style={{ fontSize: 13, color: "#8a7a66" }}>No deposits scheduled.</p>
-              : depositRows.map((r, i) => (
-                <div key={i} onClick={() => openRecord && openRecord("quote", r.quoteId)}
-                  style={{ ...card, display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }}>
-                  <div>
-                    <div style={{ fontSize: 13, fontWeight: 700, color: "#4a3527" }}>{r.name}</div>
-                    <div style={{ fontSize: 11, color: "#8a7a66", marginTop: 2 }}>{r.product}</div>
-                    <div style={{ fontSize: 11, color: "#8a7a66" }}>{r.month}</div>
-                  </div>
-                  <div style={{ textAlign: "right" }}>
-                    <div style={{ fontSize: 15, fontWeight: 700, color: r.paid ? "#5c7a4f" : "#b5552b" }}>{fmtMoney(r.amount, "AUD")}</div>
-                    {r.paid && <div style={{ fontSize: 10, color: "#5c7a4f", fontWeight: 700 }}>PAID ✓</div>}
-                  </div>
-                </div>
-              ))
+              : (
+                <>
+                  {unpaidDepositRows.map((r, i) => (
+                    <div key={i} onClick={() => openRecord && openRecord("quote", r.quoteId)}
+                      style={{ ...card, display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }}>
+                      <div>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: "#4a3527" }}>{r.name}</div>
+                        <div style={{ fontSize: 11, color: "#8a7a66", marginTop: 2 }}>{r.product}</div>
+                        <div style={{ fontSize: 11, color: "#8a7a66" }}>{r.month}</div>
+                      </div>
+                      <div style={{ textAlign: "right" }}>
+                        <div style={{ fontSize: 15, fontWeight: 700, color: "#b5552b" }}>{fmtMoney(r.amount, "AUD")}</div>
+                      </div>
+                    </div>
+                  ))}
+
+                  {paidDepositRows.length > 0 && (
+                    <button
+                      onClick={() => setShowPaidDeposits(v => !v)}
+                      style={{ width: "100%", background: "none", border: "none", borderTop: "1px solid #e3d8c6", padding: "12px 0", marginTop: unpaidDepositRows.length ? 4 : 0, fontSize: 12, fontWeight: 600, color: "#8a7a66", cursor: "pointer", textAlign: "center" }}
+                    >
+                      {showPaidDeposits ? "▴ Hide" : "▾ Show"} paid deposits ({paidDepositRows.length})
+                    </button>
+                  )}
+
+                  {showPaidDeposits && paidDepositRows.map((r, i) => (
+                    <div key={i} onClick={() => openRecord && openRecord("quote", r.quoteId)}
+                      style={{ ...card, display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }}>
+                      <div>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: "#4a3527" }}>{r.name}</div>
+                        <div style={{ fontSize: 11, color: "#8a7a66", marginTop: 2 }}>{r.product}</div>
+                        <div style={{ fontSize: 11, color: "#8a7a66" }}>{r.month}</div>
+                      </div>
+                      <div style={{ textAlign: "right" }}>
+                        <div style={{ fontSize: 15, fontWeight: 700, color: "#5c7a4f" }}>{fmtMoney(r.amount, "AUD")}</div>
+                        <div style={{ fontSize: 10, color: "#5c7a4f", fontWeight: 700 }}>PAID ✓</div>
+                      </div>
+                    </div>
+                  ))}
+                </>
+              )
             }
           </div>
 
