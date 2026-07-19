@@ -9332,17 +9332,7 @@ function StockMovementTable({ db, collapsed, setCollapsed, fyEnd, setFyEnd, curr
         style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: collapsed ? 0 : 12 }}
       >
         <h3 style={{ fontFamily: "Georgia,serif", fontSize: 16, fontWeight: 700, color: "#4a3527", margin: 0 }}>Stock Movement</h3>
-        <label style={{ position: "relative", display: "inline-block", width: 40, height: 22, cursor: "pointer", flexShrink: 0 }}>
-          <input
-            type="checkbox"
-            checked={!collapsed}
-            onChange={() => setCollapsed(v => !v)}
-            style={{ position: "absolute", opacity: 0, width: "100%", height: "100%", margin: 0, cursor: "pointer" }}
-            aria-label="Show Stock Movement"
-          />
-          <span style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, background: collapsed ? "#d4c4b0" : "#b5552b", borderRadius: 22, transition: "background 0.2s", pointerEvents: "none" }} />
-          <span style={{ position: "absolute", top: 2, left: collapsed ? 2 : 20, width: 18, height: 18, background: "#fff", borderRadius: "50%", transition: "left 0.2s", boxShadow: "0 1px 3px rgba(0,0,0,0.3)", pointerEvents: "none" }} />
-        </label>
+        <ToggleSwitch checked={!collapsed} onChange={() => setCollapsed(v => !v)} label="Show Stock Movement" />
       </div>
 
       {!collapsed && (
@@ -9474,6 +9464,24 @@ function StockMovementTable({ db, collapsed, setCollapsed, fyEnd, setFyEnd, curr
   );
 }
 
+// Reusable pill-style toggle switch — used across the dashboard (Stock Movement,
+// Sales Dashboard, Shipments Due) so every collapsible section behaves and looks identical.
+function ToggleSwitch({ checked, onChange, label }) {
+  return (
+    <label style={{ position: "relative", display: "inline-block", width: 40, height: 22, cursor: "pointer", flexShrink: 0 }}>
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={onChange}
+        style={{ position: "absolute", opacity: 0, width: "100%", height: "100%", margin: 0, cursor: "pointer" }}
+        aria-label={label}
+      />
+      <span style={{ position: "absolute", top: 0, left: 0, right: 0, bottom: 0, background: checked ? "#b5552b" : "#d4c4b0", borderRadius: 22, transition: "background 0.2s", pointerEvents: "none" }} />
+      <span style={{ position: "absolute", top: 2, left: checked ? 20 : 2, width: 18, height: 18, background: "#fff", borderRadius: "50%", transition: "left 0.2s", boxShadow: "0 1px 3px rgba(0,0,0,0.3)", pointerEvents: "none" }} />
+    </label>
+  );
+}
+
 function DashboardTab({ db, setTab, openRecord }) {
   const isMobile = useIsMobile();
   // Each column is a fiscal year ending June 30 of fyYear
@@ -9492,7 +9500,9 @@ function DashboardTab({ db, setTab, openRecord }) {
   const [salesTableCollapsed, setSalesTableCollapsed] = React.useState(true);
   const [depositsTableCollapsed, setDepositsTableCollapsed] = React.useState(true);
   const [showPaidDeposits, setShowPaidDeposits] = React.useState(false);
-  const [stockTableCollapsed, setStockTableCollapsed] = React.useState(false);
+  const [stockTableCollapsed, setStockTableCollapsed] = React.useState(true);
+  const [salesDashboardCollapsed, setSalesDashboardCollapsed] = React.useState(true);
+  const [shipmentsDueCollapsed, setShipmentsDueCollapsed] = React.useState(true);
   // Default to current FY — July 2026 is in FY26/27
   const [stockFYEnd, setStockFYEnd] = React.useState(currentFYEnd);
   const [mobilePage, setMobilePage] = React.useState(0);
@@ -9886,9 +9896,16 @@ function DashboardTab({ db, setTab, openRecord }) {
         />
       </section>
 
-      {/* ── SALES PERFORMANCE DASHBOARD ── */}
+      {/* ── SALES DASHBOARD (merged: Sales Performance + Pipeline/PO/Margin) ── */}
       <section style={{ marginBottom: 32, padding: 20, background: "#f9f5f0", borderRadius: 8, border: "1px solid #e3d8c6" }}>
-        <h2 className="section-title" style={{ marginTop: 0 }}>Sales Performance</h2>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: salesDashboardCollapsed ? 0 : 4 }}>
+          <h2 className="section-title" style={{ margin: 0 }}>Sales Dashboard</h2>
+          <ToggleSwitch checked={!salesDashboardCollapsed} onChange={() => setSalesDashboardCollapsed(v => !v)} label="Show Sales Dashboard" />
+        </div>
+
+        {!salesDashboardCollapsed && (
+        <>
+        <p className="section-desc">Overview of your sales pipeline, purchase orders, and expected profitability. Click any stat to view details.</p>
 
         {/* FY Column selector */}
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
@@ -10119,12 +10136,6 @@ function DashboardTab({ db, setTab, openRecord }) {
             </>
           );
         })()}
-      </section>
-
-      {/* ── EXISTING PIPELINE / PO / MARGIN DASHBOARD ── */}
-      <section>
-      <h2 className="section-title">Sales Dashboard</h2>
-      <p className="section-desc">Overview of your sales pipeline, purchase orders, and expected profitability. Click any stat to view details.</p>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 14, marginBottom: 28 }}>
         <div
@@ -10217,11 +10228,17 @@ function DashboardTab({ db, setTab, openRecord }) {
           </div>
         </Panel>
       </div>
+        </>
+        )}
+      </section>
 
-      {/* Shipments list */}
+      {/* Shipments due */}
       <Panel style={{ marginTop: 24 }}>
-        <h3 style={{ fontFamily: "Georgia,serif", fontSize: 16, color: "#4a3527", margin: "0 0 16px" }}>Shipments due</h3>
-        {(() => {
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: shipmentsDueCollapsed ? 0 : 16 }}>
+          <h3 style={{ fontFamily: "Georgia,serif", fontSize: 16, color: "#4a3527", margin: 0 }}>Shipments due</h3>
+          <ToggleSwitch checked={!shipmentsDueCollapsed} onChange={() => setShipmentsDueCollapsed(v => !v)} label="Show Shipments due" />
+        </div>
+        {!shipmentsDueCollapsed && (() => {
           // Show only POs with a Freight Forward fee — indicates containers arriving at port
           const shipments = (db.pos || []).filter((po) =>
             (po.customsClearance || 0) > 0 &&
@@ -10451,7 +10468,6 @@ function DashboardTab({ db, setTab, openRecord }) {
           })()}
         </Modal>
       )}
-    </section>
     </>
   );
 }
