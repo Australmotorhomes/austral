@@ -242,6 +242,18 @@ function toSupabaseFormat(data, table) {
         copy.last_quote_value = copy.lastQuoteValue;
         delete copy.lastQuoteValue;
       }
+      if (copy.invoiceAmount1st !== undefined) {
+        copy.invoice_amount_1st = copy.invoiceAmount1st;
+        delete copy.invoiceAmount1st;
+      }
+      if (copy.invoiceAmount2nd !== undefined) {
+        copy.invoice_amount_2nd = copy.invoiceAmount2nd;
+        delete copy.invoiceAmount2nd;
+      }
+      if (copy.invoiceAmount3rd !== undefined) {
+        copy.invoice_amount_3rd = copy.invoiceAmount3rd;
+        delete copy.invoiceAmount3rd;
+      }
       if (copy.archived !== undefined) {
         copy.is_archived = copy.archived;
         delete copy.archived;
@@ -412,6 +424,9 @@ function fromSupabaseFormat(data, table) {
       if (copy.invoice_number !== undefined) copy.invoiceNumber = copy.invoice_number;
       if (copy.invoices !== undefined) copy.invoices = copy.invoices || [];
       if (copy.invoice_amount !== undefined) copy.invoiceAmount = copy.invoice_amount;
+      if (copy.invoice_amount_1st !== undefined) copy.invoiceAmount1st = parseFloat(copy.invoice_amount_1st) || 0;
+      if (copy.invoice_amount_2nd !== undefined) copy.invoiceAmount2nd = parseFloat(copy.invoice_amount_2nd) || 0;
+      if (copy.invoice_amount_3rd !== undefined) copy.invoiceAmount3rd = parseFloat(copy.invoice_amount_3rd) || 0;
       if (copy.last_quote_number !== undefined) copy.lastQuoteNumber = copy.last_quote_number;
       if (copy.last_quote_value !== undefined) copy.lastQuoteValue = copy.last_quote_value;
       if (copy.is_archived !== undefined) copy.archived = copy.is_archived;
@@ -7392,12 +7407,16 @@ function ContactsTab({ kind, db, update, showToast, nextNumber, pendingOpen, cle
                     )}
                   </div>
                   {!isSupplier && (() => {
-                    const cq = (db.quotes || []).filter(q =>
-                      q.party && q.party.trim().toLowerCase() === c.name.trim().toLowerCase() &&
-                      ["Accepted","Delivered"].includes(q.status)
-                    ).sort((a, b) => (b.date || b.createdAt || "").localeCompare(a.date || a.createdAt || ""));
-                    const prod = cq[0]?.lines?.[0]?.desc || cq[0]?.lines?.[0]?.description || cq[0]?.model || c.product;
-                    return prod ? <div style={{ fontSize: 12, color: "#8a7a66", marginTop: 2 }}>{prod}</div> : null;
+                    const amtPaid = (c.invoiceAmount1st || 0) + (c.invoiceAmount2nd || 0) + (c.invoiceAmount3rd || 0);
+                    const prod = c.product;
+                    if (!prod && !amtPaid) return null;
+                    return (
+                      <div style={{ fontSize: 12, color: "#8a7a66", marginTop: 2 }}>
+                        {prod && <span>{prod}</span>}
+                        {prod && amtPaid > 0 && <span style={{ margin: "0 4px" }}>·</span>}
+                        {amtPaid > 0 && <span style={{ color: "#4a3527", fontWeight: 600 }}>${amtPaid.toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>}
+                      </div>
+                    );
                   })()}
                   {isSupplier && c.contactPerson && <div style={{ fontSize: 12, color: "#8a7a66", marginTop: 2 }}>{c.contactPerson}</div>}
                 </div>
@@ -7656,6 +7675,10 @@ function ContactModal({ kind, editing, onCancel, onSave, onCreateQuote, onArchiv
     : null;
   const [status, setStatus] = useState(!isSupplier ? normalizedExistingStatus || editing?.status || "Deposit" : "");
   const [invoices, setInvoices] = useState(!isSupplier ? (editing?.invoices || []) : []);
+  const [product, setProduct] = useState(!isSupplier ? (editing?.product || "") : "");
+  const [invoiceAmount1st, setInvoiceAmount1st] = useState(!isSupplier ? (editing?.invoiceAmount1st || 0) : 0);
+  const [invoiceAmount2nd, setInvoiceAmount2nd] = useState(!isSupplier ? (editing?.invoiceAmount2nd || 0) : 0);
+  const [invoiceAmount3rd, setInvoiceAmount3rd] = useState(!isSupplier ? (editing?.invoiceAmount3rd || 0) : 0);
   const [lastQuoteNumber, setLastQuoteNumber] = useState(!isSupplier ? String(editing?.lastQuoteNumber || "") : "");
   const [lastQuoteValue, setLastQuoteValue] = useState(!isSupplier ? String(editing?.lastQuoteValue || "") : "");
   const [notes, setNotes] = useState(editing ? editing.notes || "" : "");
@@ -7678,7 +7701,11 @@ function ContactModal({ kind, editing, onCancel, onSave, onCreateQuote, onArchiv
         ...(isSupplier && { bankAccount: { name: bankAccountName.trim(), bsb: bsb.trim(), account: accountNumber.trim() } }),
         ...(!isSupplier && invoiceNumber && { invoiceNumber: invoiceNumber.trim() }),
         ...(!isSupplier && { status }),
+        ...(!isSupplier && { product: product.trim() }),
         ...(!isSupplier && { invoices: invoices.filter(inv => inv.amount || inv.invoiceMonth) }),
+        ...(!isSupplier && { invoiceAmount1st: parseFloat(invoiceAmount1st) || 0 }),
+        ...(!isSupplier && { invoiceAmount2nd: parseFloat(invoiceAmount2nd) || 0 }),
+        ...(!isSupplier && { invoiceAmount3rd: parseFloat(invoiceAmount3rd) || 0 }),
         notes: notes.trim(),
         attachments,
       },
@@ -7909,27 +7936,45 @@ function ContactModal({ kind, editing, onCancel, onSave, onCreateQuote, onArchiv
         </div>
       )}
 
-      {!isSupplier && (() => {
-        // Find the most recent accepted/delivered quote for this customer
-        const customerQuotes = (db?.quotes || []).filter(q =>
-          q.party && editing?.name &&
-          q.party.trim().toLowerCase() === editing.name.trim().toLowerCase() &&
-          ["Accepted", "Delivered"].includes(q.status)
-        ).sort((a, b) => (b.date || b.createdAt || "").localeCompare(a.date || a.createdAt || ""));
-        const latestQuote = customerQuotes[0];
-        const firstLine = latestQuote?.lines?.[0];
-        const productName = firstLine?.desc || firstLine?.description || latestQuote?.model || null;
-        if (!productName) return null;
-        return (
-          <div style={{ borderTop: "1px solid #e3d8c6", paddingTop: 14, marginTop: 14 }}>
-            <h4 style={{ fontSize: 13, fontWeight: 600, color: "#6b5240", margin: "0 0 6px" }}>Product</h4>
-            <div style={{ fontSize: 13, color: "#4a3527", fontWeight: 500 }}>{productName}</div>
-            <div style={{ fontSize: 11, color: "#8a7a66", marginTop: 2 }}>
-              From {latestQuote.number} · {fmtDate(latestQuote.date)}
-            </div>
+      {!isSupplier && (
+        <div style={{ borderTop: "1px solid #e3d8c6", paddingTop: 14, marginTop: 14 }}>
+          <h4 style={{ fontSize: 13, fontWeight: 600, color: "#6b5240", margin: "0 0 12px" }}>Product & Payments</h4>
+          <Field label="Product (model / description)">
+            <input
+              style={inputStyle}
+              type="text"
+              placeholder="e.g. Savanna 4.2m L-shape"
+              value={product}
+              onChange={(e) => setProduct(e.target.value)}
+            />
+          </Field>
+          <p style={{ fontSize: 11, color: "#8a7a66", margin: "0 0 10px" }}>
+            Amount paid — total from all payments received
+            {invoiceAmount1st + invoiceAmount2nd + invoiceAmount3rd > 0 && (
+              <strong style={{ color: "#4a3527", marginLeft: 6 }}>
+                ${(invoiceAmount1st + invoiceAmount2nd + invoiceAmount3rd).toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </strong>
+            )}
+          </p>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
+            <Field label="Payment 1 (AUD)">
+              <input style={inputStyle} type="number" step="0.01" min="0" placeholder="0.00"
+                value={invoiceAmount1st || ""}
+                onChange={(e) => setInvoiceAmount1st(parseFloat(e.target.value) || 0)} />
+            </Field>
+            <Field label="Payment 2 (AUD)">
+              <input style={inputStyle} type="number" step="0.01" min="0" placeholder="0.00"
+                value={invoiceAmount2nd || ""}
+                onChange={(e) => setInvoiceAmount2nd(parseFloat(e.target.value) || 0)} />
+            </Field>
+            <Field label="Payment 3 (AUD)">
+              <input style={inputStyle} type="number" step="0.01" min="0" placeholder="0.00"
+                value={invoiceAmount3rd || ""}
+                onChange={(e) => setInvoiceAmount3rd(parseFloat(e.target.value) || 0)} />
+            </Field>
           </div>
-        );
-      })()}
+        </div>
+      )}
 
       <div style={{ borderTop: "1px solid #e3d8c6", paddingTop: 14, marginTop: 14 }}>
         <h4 style={{ fontSize: 13, fontWeight: 600, color: "#6b5240", margin: "0 0 10px" }}>Address</h4>
@@ -9511,6 +9556,8 @@ function DashboardTab({ db, setTab, openRecord }) {
   const [shipmentsDueCollapsed, setShipmentsDueCollapsed] = React.useState(true);
   // Default to current FY — July 2026 is in FY26/27
   const [stockFYEnd, setStockFYEnd] = React.useState(currentFYEnd);
+  const [salesModelCollapsed, setSalesModelCollapsed] = React.useState(false);
+  const [salesModelFYEnd, setSalesModelFYEnd] = React.useState(currentFYEnd);
   const [mobilePage, setMobilePage] = React.useState(0);
   const touchStartX = React.useRef(0);
 
@@ -10236,6 +10283,115 @@ function DashboardTab({ db, setTab, openRecord }) {
           getFYRange={getFYRange}
           EARLIEST_FY_END={EARLIEST_FY_END}
         />
+      </section>
+
+      {/* ── SALES BY MODEL TABLE ── */}
+      <section style={{ marginBottom: 32, padding: 20, background: "#f6f1e7", borderRadius: 8, border: "1px solid #e3d8c6" }}>
+        {(() => {
+          const MODELS = ["Campo", "Scout", "Savanna", "Pontoon Boat"];
+          const fyRange = getFYRange(salesModelFYEnd);
+          const fyOptions = [];
+          for (let y = EARLIEST_FY_END; y <= currentFYEnd + 1; y++) fyOptions.push(y);
+
+          // OUT: quotes where first milestone is ticked, using paidDate for FY range
+          // Group by model name matched against customer product field or quote model/lines
+          const getModel = (q) => {
+            const desc = (q.lines?.[0]?.desc || q.lines?.[0]?.description || q.model || "").toLowerCase();
+            const party = (q.party || "").toLowerCase();
+            // Match customer product field if available
+            const cust = (db.customers || []).find(c =>
+              c.name && q.party && c.name.trim().toLowerCase() === q.party.trim().toLowerCase()
+            );
+            const prodField = (cust?.product || "").toLowerCase();
+            const searchStr = prodField || desc;
+            if (searchStr.includes("campo")) return "Campo";
+            if (searchStr.includes("scout")) return "Scout";
+            if (searchStr.includes("savanna") || searchStr.includes("savannah")) return "Savanna";
+            if (searchStr.includes("pontoon")) return "Pontoon Boat";
+            return null;
+          };
+
+          // Units sold = quotes with first milestone paid, paidDate in FY
+          const soldData = {}; // { model: { units, revenue } }
+          MODELS.forEach(m => { soldData[m] = { units: 0, revenue: 0 }; });
+
+          (db.quotes || []).forEach(q => {
+            const milestones = q.paymentMilestones || [];
+            if (!milestones.length) return;
+            const first = milestones[0];
+            if (!first?.paid) return;
+            const paidDate = (first.paidDate || first.due || "").slice(0, 10);
+            if (!paidDate || paidDate < fyRange.start || paidDate > fyRange.end) return;
+            const model = getModel(q);
+            if (!model) return;
+            soldData[model].units += 1;
+            soldData[model].revenue += parseFloat(q.total) || 0;
+          });
+
+          const totUnits = MODELS.reduce((s, m) => s + soldData[m].units, 0);
+          const totRev = MODELS.reduce((s, m) => s + soldData[m].revenue, 0);
+
+          const thS = { padding: "8px 12px", fontSize: 11, fontWeight: 700, textAlign: "right", whiteSpace: "nowrap", color: "#6b5240" };
+          const tdS = { padding: "8px 12px", fontSize: 13, textAlign: "right", borderBottom: "1px solid #f0e8d9" };
+          const tdL = { padding: "8px 12px", fontSize: 13, textAlign: "left", borderBottom: "1px solid #f0e8d9", fontWeight: 600, color: "#4a3527" };
+
+          return (
+            <>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: salesModelCollapsed ? 0 : 12 }}>
+                <h3 style={{ fontFamily: "Georgia,serif", fontSize: 16, fontWeight: 700, color: "#4a3527", margin: 0 }}>Sales by Model</h3>
+                <ToggleSwitch checked={!salesModelCollapsed} onChange={() => setSalesModelCollapsed(v => !v)} label="Show Sales by Model" />
+              </div>
+
+              {!salesModelCollapsed && (
+                <>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 14, flexWrap: "wrap" }}>
+                    <label style={{ fontSize: 12, color: "#6b5240", fontWeight: 600 }}>Financial Year:</label>
+                    <select
+                      value={salesModelFYEnd}
+                      onChange={e => setSalesModelFYEnd(Number(e.target.value))}
+                      style={{ fontSize: 12, padding: "4px 8px", border: "1px solid #d4a574", borderRadius: 4, color: "#4a3527" }}
+                    >
+                      {fyOptions.map(y => <option key={y} value={y}>{getFYRange(y).label}</option>)}
+                    </select>
+                    <span style={{ fontSize: 11, color: "#8a7a66" }}>{fyRange.start} – {fyRange.end}</span>
+                  </div>
+
+                  <div style={{ overflowX: "auto" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", background: "#fff", borderRadius: 6, overflow: "hidden", border: "1px solid #e3d8c6", fontSize: 13 }}>
+                      <thead>
+                        <tr style={{ background: "#f0e8d9", borderBottom: "2px solid #b5552b" }}>
+                          <th style={{ ...thS, textAlign: "left" }}>Model</th>
+                          <th style={{ ...thS, color: "#b5552b" }}>Units Sold</th>
+                          <th style={{ ...thS, color: "#b5552b" }}>Revenue (AUD)</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {MODELS.map((model, ri) => (
+                          <tr key={model} style={{ background: ri % 2 === 0 ? "#fff" : "#fdf8f0" }}>
+                            <td style={{ ...tdL }}>{model}</td>
+                            <td style={{ ...tdS, color: soldData[model].units > 0 ? "#b5552b" : "#ccc", fontWeight: soldData[model].units > 0 ? 700 : 400 }}>
+                              {soldData[model].units || "—"}
+                            </td>
+                            <td style={{ ...tdS, color: soldData[model].revenue > 0 ? "#4a3527" : "#ccc", fontWeight: soldData[model].revenue > 0 ? 600 : 400 }}>
+                              {soldData[model].revenue > 0 ? `$${soldData[model].revenue.toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "—"}
+                            </td>
+                          </tr>
+                        ))}
+                        <tr style={{ background: "#f0e8d9", borderTop: "2px solid #b5552b", fontWeight: 700 }}>
+                          <td style={{ ...tdL, color: "#b5552b" }}>Total</td>
+                          <td style={{ ...tdS, color: "#b5552b", fontWeight: 700 }}>{totUnits || "—"}</td>
+                          <td style={{ ...tdS, color: "#b5552b", fontWeight: 700 }}>
+                            {totRev > 0 ? `$${totRev.toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "—"}
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </>
+              )}
+            </>
+          );
+        })()}
       </section>
 
       {/* Shipments due */}
