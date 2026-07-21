@@ -10359,6 +10359,9 @@ function DashboardTab({ db, setTab, openRecord }) {
             if (str.includes("scout")) return "Scout";
             if (str.includes("savanna") || str.includes("savannah")) return "Savanna";
             if (str.includes("pontoon")) return "Pontoon Boat";
+            // Pontoon boats are also recorded just by size — "19ft"/"22ft" (with or
+            // without a space, e.g. "19 ft") — with no other model keyword present.
+            if (/\b(19|22)\s*ft\b/.test(str)) return "Pontoon Boat";
             return null;
           };
 
