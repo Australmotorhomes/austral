@@ -9340,6 +9340,299 @@ function countProductsSold(customers, startDate, endDate, status) {
   return productCounts;
 }
 
+const SALES_MODELS = ["Campo", "Scout", "Savanna", "Pontoon Boat"];
+
+// Normalise a name for comparison: lowercase, trim, strip punctuation/extra
+// whitespace so things like "Adventure Tours Co." vs "adventure tours co" or
+// "  John Smith " still match.
+function normalizeSalesName(s) {
+  return (s || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+}
+
+function matchSalesModel(str) {
+  if (!str) return null;
+  if (str.includes("campo")) return "Campo";
+  if (str.includes("scout")) return "Scout";
+  if (str.includes("savanna") || str.includes("savannah")) return "Savanna";
+  if (str.includes("pontoon")) return "Pontoon Boat";
+  // Pontoon boats are also recorded just by size/trim code, with no other
+  // model keyword present — e.g. "19ft"/"22ft", or trim codes like
+  // "19SE"/"22SE" (with or without a space, e.g. "22 SE").
+  if (/\b(19|22)\s*(ft|se)\b/.test(str)) return "Pontoon Boat";
+  return null;
+}
+
+// Shared "Sales by Model" computation, used by both the desktop table and the
+// mobile swipeable page so the two can never drift out of sync.
+function computeSalesByModel(db, fyRange) {
+  const getModel = (q) => {
+    const desc = (q.lines?.[0]?.desc || q.lines?.[0]?.description || q.model || "").toLowerCase();
+    const partyRaw = q.party || q.customer || "";
+    const partyNorm = normalizeSalesName(partyRaw);
+    // Match customer product field if available — try, in order:
+    // 1) the reliable customerId link (survives renames)
+    // 2) an exact normalised name match
+    // 3) a substring match either direction (handles abbreviations,
+    //    trailing "Pty Ltd"/"Co" suffixes, minor typos, etc.)
+    let cust = (db.customers || []).find(c => c.id && q.customerId && c.id === q.customerId);
+    if (!cust && partyNorm) {
+      cust = (db.customers || []).find(c => normalizeSalesName(c.name) === partyNorm);
+    }
+    if (!cust && partyNorm) {
+      cust = (db.customers || []).find(c => {
+        const cNorm = normalizeSalesName(c.name);
+        return cNorm && (cNorm.includes(partyNorm) || partyNorm.includes(cNorm));
+      });
+    }
+    const prodField = (cust?.product || "").toLowerCase();
+    // Prefer the customer's product field, but if it doesn't contain a
+    // recognisable model keyword (e.g. it's a product code like "SAV4.2"
+    // rather than the full model name), fall back to the quote's own line
+    // description instead of dropping the sale entirely.
+    const model = matchSalesModel(prodField) || matchSalesModel(desc);
+    return {
+      model,
+      customerName: cust?.name || partyRaw || "Unknown",
+      custId: cust?.id || null,
+      debug: { matchedCustomer: !!cust, product: cust?.product || "", partyRaw },
+    };
+  };
+
+  // Units sold = quotes with first milestone paid, paidDate in FY
+  const soldData = {}; // { model: { units, revenue, quotes: [...] } }
+  SALES_MODELS.forEach(m => { soldData[m] = { units: 0, revenue: 0, quotes: [] }; });
+  const unmatched = []; // paid-in-FY quotes we couldn't assign to a model — surfaced for debugging
+  const countedCustomerIds = new Set(); // avoid double-counting a customer via both a quote and their legacy invoice fields
+
+  (db.quotes || []).forEach(q => {
+    const milestones = q.paymentMilestones || [];
+    if (!milestones.length) return;
+    const first = milestones[0];
+    if (!first?.paid) return;
+    const paidDate = (first.paidDate || first.due || "").slice(0, 10);
+    if (!paidDate || paidDate < fyRange.start || paidDate > fyRange.end) return;
+    const { model, customerName, custId, debug } = getModel(q);
+    const total = parseFloat(q.total) || 0;
+    if (!model) {
+      unmatched.push({
+        quoteId: q.id,
+        customerName,
+        total,
+        matchedCustomer: debug.matchedCustomer,
+        product: debug.product,
+      });
+      return;
+    }
+    if (custId) countedCustomerIds.add(custId);
+    soldData[model].units += 1;
+    soldData[model].revenue += total;
+    soldData[model].quotes.push({
+      quoteId: q.id,
+      customerName,
+      month: new Date(paidDate + "T00:00:00").toLocaleDateString("en-AU", { month: "long", year: "numeric" }),
+      total,
+    });
+  });
+
+  // Historical customers (mostly FY2023–FY2026) were bulk-imported straight into
+  // the Customer table with no linked quote — their sale is recorded as
+  // invoiceAmount1st/2nd/3rd (summed), dated by the month they were SOLD in
+  // (invoice_month_1st — delivery often happens later and isn't what FY
+  // reporting should key off). This is the primary source of Campo/Scout/
+  // Savanna/Pontoon Boat sales for those years.
+  const skippedNoDate = []; // has product + a paid amount, but no sale month — invisible in every FY until that's set
+  const fyStartMonth = fyRange.start.slice(0, 7);
+  const fyEndMonth = fyRange.end.slice(0, 7);
+  (db.customers || []).forEach(c => {
+    if (countedCustomerIds.has(c.id)) return;
+    const legacyTotal = (parseFloat(c.invoiceAmount1st) || 0) + (parseFloat(c.invoiceAmount2nd) || 0) + (parseFloat(c.invoiceAmount3rd) || 0);
+    if (legacyTotal <= 0) return;
+    const saleMonth = getCustomerSaleMonth(c);
+    if (!saleMonth) {
+      skippedNoDate.push({ customerName: c.name || "Unknown", product: c.product || "", total: legacyTotal });
+      return;
+    }
+    if (saleMonth < fyStartMonth || saleMonth > fyEndMonth) return;
+    const model = matchSalesModel((c.product || "").toLowerCase());
+    if (!model) {
+      unmatched.push({
+        quoteId: c.id,
+        customerName: c.name || "Unknown",
+        total: legacyTotal,
+        matchedCustomer: true,
+        product: c.product || "",
+      });
+      return;
+    }
+    soldData[model].units += 1;
+    soldData[model].revenue += legacyTotal;
+    soldData[model].quotes.push({
+      quoteId: c.id,
+      customerName: c.name || "Unknown",
+      month: new Date(saleMonth + "-01T00:00:00").toLocaleDateString("en-AU", { month: "long", year: "numeric" }),
+      total: legacyTotal,
+    });
+  });
+
+  if (unmatched.length && typeof console !== "undefined") {
+    console.warn(
+      `Sales by Model: ${unmatched.length} paid deposit(s) in ${fyRange.label} couldn't be matched to Campo/Scout/Savanna/Pontoon Boat.`,
+      unmatched
+    );
+  }
+
+  const totUnits = SALES_MODELS.reduce((s, m) => s + soldData[m].units, 0);
+  const totRev = SALES_MODELS.reduce((s, m) => s + soldData[m].revenue, 0);
+
+  return { soldData, unmatched, skippedNoDate, totUnits, totRev };
+}
+
+// The three drill-down modals shared by both the desktop table and the mobile
+// "Sales by Model" page, so tapping/clicking a row behaves identically everywhere.
+function SalesByModelModals({ drillDown, setDrillDown, unmatchedInfo, setUnmatchedInfo, skippedNoDate, setSkippedNoDate, openRecord }) {
+  return (
+    <>
+      {unmatchedInfo && (
+        <Modal onClose={() => setUnmatchedInfo(null)} width={600}>
+          <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: "0 0 4px", fontSize: 19 }}>
+            Unmatched sales — {unmatchedInfo.fyLabel}
+          </h3>
+          <p style={{ fontSize: 12, color: "#8a7a66", margin: "0 0 16px" }}>
+            These quotes had a paid deposit in this financial year but couldn't be matched to Campo, Scout, Savanna, or Pontoon Boat.
+            Check the customer's Product field and/or the quote's line description for a recognisable model name.
+          </p>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+              <thead>
+                <tr style={{ borderBottom: "2px solid #b5552b" }}>
+                  <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11, color: "#6b5240" }}>Customer</th>
+                  <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11, color: "#6b5240" }}>Customer matched?</th>
+                  <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11, color: "#6b5240" }}>Product field seen</th>
+                  <th style={{ textAlign: "right", padding: "6px 8px", fontSize: 11, color: "#6b5240" }}>Quote Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {unmatchedInfo.rows.map((r, idx) => (
+                  <tr
+                    key={r.quoteId || idx}
+                    onClick={() => openRecord && openRecord("quote", r.quoteId)}
+                    style={{ borderBottom: "1px solid #f0e8d9", cursor: openRecord ? "pointer" : "default" }}
+                  >
+                    <td style={{ padding: "6px 8px", fontWeight: 600, color: "#4a3527" }}>{r.customerName}</td>
+                    <td style={{ padding: "6px 8px", color: r.matchedCustomer ? "#5c7a4f" : "#b5552b" }}>
+                      {r.matchedCustomer ? "Yes" : "No — check name/link"}
+                    </td>
+                    <td style={{ padding: "6px 8px", color: "#6b5240" }}>{r.product || "(empty)"}</td>
+                    <td style={{ padding: "6px 8px", textAlign: "right", color: "#4a3527", fontWeight: 600 }}>
+                      ${r.total.toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ marginTop: 18, display: "flex", justifyContent: "flex-end" }}>
+            <Btn variant="ghost" onClick={() => setUnmatchedInfo(null)}>Close</Btn>
+          </div>
+        </Modal>
+      )}
+
+      {skippedNoDate && (
+        <Modal onClose={() => setSkippedNoDate(null)} width={600}>
+          <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: "0 0 4px", fontSize: 19 }}>
+            Missing Month Sold
+          </h3>
+          <p style={{ fontSize: 12, color: "#8a7a66", margin: "0 0 16px" }}>
+            These customers have a Payment 1/2/3 total recorded but no Month sold — without it there's
+            no way to place them in any financial year, so they never appear in Sales by Model, Income / Sales,
+            or Deposits Received &amp; Forecast. Open each customer and set the "Month sold (used for FY
+            reporting)" field to fix this.
+          </p>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+              <thead>
+                <tr style={{ borderBottom: "2px solid #b5552b" }}>
+                  <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11, color: "#6b5240" }}>Customer</th>
+                  <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11, color: "#6b5240" }}>Product field seen</th>
+                  <th style={{ textAlign: "right", padding: "6px 8px", fontSize: 11, color: "#6b5240" }}>Payments total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {skippedNoDate.map((r, idx) => (
+                  <tr key={idx} style={{ borderBottom: "1px solid #f0e8d9" }}>
+                    <td style={{ padding: "6px 8px", fontWeight: 600, color: "#4a3527" }}>{r.customerName}</td>
+                    <td style={{ padding: "6px 8px", color: "#6b5240" }}>{r.product || "(empty)"}</td>
+                    <td style={{ padding: "6px 8px", textAlign: "right", color: "#4a3527", fontWeight: 600 }}>
+                      ${r.total.toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ marginTop: 18, display: "flex", justifyContent: "flex-end" }}>
+            <Btn variant="ghost" onClick={() => setSkippedNoDate(null)}>Close</Btn>
+          </div>
+        </Modal>
+      )}
+
+      {drillDown && (
+        <Modal onClose={() => setDrillDown(null)} width={560}>
+          <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: "0 0 4px", fontSize: 19 }}>
+            {drillDown.model} — {drillDown.fyLabel}
+          </h3>
+          <p style={{ fontSize: 12, color: "#8a7a66", margin: "0 0 16px" }}>
+            Customers whose deposit was paid in this financial year, contributing to this model's units sold.
+          </p>
+          {drillDown.quotes.length === 0 ? (
+            <p className="muted" style={{ fontSize: 13 }}>No sales found for this model.</p>
+          ) : (
+            <>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                  <thead>
+                    <tr style={{ borderBottom: "2px solid #b5552b" }}>
+                      <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11, color: "#6b5240" }}>Customer</th>
+                      <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11, color: "#6b5240" }}>Month</th>
+                      <th style={{ textAlign: "right", padding: "6px 8px", fontSize: 11, color: "#6b5240" }}>Quote Total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {drillDown.quotes.map((r, idx) => (
+                      <tr
+                        key={r.quoteId || idx}
+                        onClick={() => openRecord && openRecord("quote", r.quoteId)}
+                        style={{ borderBottom: "1px solid #f0e8d9", cursor: openRecord ? "pointer" : "default" }}
+                      >
+                        <td style={{ padding: "6px 8px", fontWeight: 600, color: "#4a3527" }}>{r.customerName}</td>
+                        <td style={{ padding: "6px 8px", color: "#6b5240" }}>{r.month}</td>
+                        <td style={{ padding: "6px 8px", textAlign: "right", color: "#4a3527", fontWeight: 600 }}>
+                          ${r.total.toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr style={{ borderTop: "2px solid #b5552b", fontWeight: 700 }}>
+                      <td style={{ padding: "6px 8px" }} colSpan={2}>Total</td>
+                      <td style={{ padding: "6px 8px", textAlign: "right", color: "#b5552b" }}>
+                        ${drillDown.quotes.reduce((s, r) => s + r.total, 0).toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            </>
+          )}
+          <div style={{ marginTop: 18, display: "flex", justifyContent: "flex-end" }}>
+            <Btn variant="ghost" onClick={() => setDrillDown(null)}>Close</Btn>
+          </div>
+        </Modal>
+      )}
+    </>
+  );
+}
+
 function StockMovementTable({ db, collapsed, setCollapsed, fyEnd, setFyEnd, currentFYEnd, getFYRange, EARLIEST_FY_END }) {
   const fyRange = getFYRange(fyEnd);
 
@@ -9746,8 +10039,8 @@ function DashboardTab({ db, setTab, openRecord }) {
     const unpaidDepositRows = depositRows.filter(r => !r.paid);
     const paidDepositRows = depositRows.filter(r => r.paid);
 
-    const totalPages = 4 + mobileShipments.length;
-    const pageTitles = ["Sales Performance", "Deposits", "Stock", "Sales Funnel",
+    const totalPages = 5 + mobileShipments.length;
+    const pageTitles = ["Sales Performance", "Deposits", "Stock", "Sales by Model", "Sales Funnel",
       ...mobileShipments.map(g => g.supplier)];
 
     const handleTouchStart = (e) => { touchStartX.current = e.touches[0].clientX; };
@@ -9874,7 +10167,70 @@ function DashboardTab({ db, setTab, openRecord }) {
             </div>
           </div>
 
-          {/* PAGE 4 — Sales Funnel */}
+          {/* PAGE 4 — Sales by Model */}
+          <div style={page}>
+            {(() => {
+              const fyRange = getFYRange(salesModelFYEnd);
+              const fyOptions = [];
+              for (let y = EARLIEST_FY_END; y <= currentFYEnd + 1; y++) fyOptions.push(y);
+              const { soldData, unmatched, skippedNoDate, totUnits, totRev } = computeSalesByModel(db, fyRange);
+
+              return (
+                <>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
+                    <label style={{ fontSize: 12, color: "#6b5240", fontWeight: 600 }}>Financial Year:</label>
+                    <select
+                      value={salesModelFYEnd}
+                      onChange={e => setSalesModelFYEnd(Number(e.target.value))}
+                      style={{ fontSize: 12, padding: "4px 8px", border: "1px solid #d4a574", borderRadius: 4, color: "#4a3527" }}
+                    >
+                      {fyOptions.map(y => <option key={y} value={y}>{getFYRange(y).label}</option>)}
+                    </select>
+                  </div>
+                  {SALES_MODELS.map((model) => (
+                    <div
+                      key={model}
+                      onClick={() => soldData[model].units > 0 && setSalesModelDrillDown({ model, fyLabel: fyRange.label, quotes: soldData[model].quotes })}
+                      style={{ ...card, display: "flex", justifyContent: "space-between", alignItems: "center", cursor: soldData[model].units > 0 ? "pointer" : "default" }}
+                    >
+                      <span style={{ fontSize: 14, color: "#4a3527", fontWeight: 700 }}>{model}</span>
+                      <div style={{ textAlign: "right" }}>
+                        <div style={{ fontSize: 11, color: "#8a7a66" }}>{soldData[model].units || 0} unit{soldData[model].units === 1 ? "" : "s"}</div>
+                        <div style={{ fontSize: 15, fontWeight: 700, color: soldData[model].revenue > 0 ? "#b5552b" : "#ccc" }}>
+                          {soldData[model].revenue > 0 ? fmtMoney(soldData[model].revenue, "AUD") : "—"}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  <div style={{ ...card, display: "flex", justifyContent: "space-between", alignItems: "center", background: "#f0e8d9", border: "2px solid #b5552b" }}>
+                    <span style={{ fontSize: 14, color: "#b5552b", fontWeight: 700 }}>Total</span>
+                    <div style={{ textAlign: "right" }}>
+                      <div style={{ fontSize: 11, color: "#8a6b1f" }}>{totUnits} unit{totUnits === 1 ? "" : "s"}</div>
+                      <div style={{ fontSize: 15, fontWeight: 700, color: "#b5552b" }}>{totRev > 0 ? fmtMoney(totRev, "AUD") : "—"}</div>
+                    </div>
+                  </div>
+                  {unmatched.length > 0 && (
+                    <div
+                      onClick={() => setSalesModelUnmatched({ fyLabel: fyRange.label, rows: unmatched })}
+                      style={{ marginTop: 8, padding: "8px 12px", background: "#fdf3e0", border: "1px solid #e8c98a", borderRadius: 6, fontSize: 12, color: "#8a6b1f", cursor: "pointer" }}
+                    >
+                      ⚠ {unmatched.length} paid deposit{unmatched.length === 1 ? "" : "s"} couldn't be matched — tap to see why
+                    </div>
+                  )}
+                  {skippedNoDate.length > 0 && (
+                    <div
+                      onClick={() => setSalesModelSkippedNoDate(skippedNoDate)}
+                      style={{ marginTop: 8, padding: "8px 12px", background: "#fceceb", border: "1px solid #e8a8a0", borderRadius: 6, fontSize: 12, color: "#a3442e", cursor: "pointer" }}
+                    >
+                      ⚠ {skippedNoDate.length} customer{skippedNoDate.length === 1 ? "" : "s"} missing Month sold — tap to see which
+                    </div>
+                  )}
+                </>
+              );
+            })()}
+          </div>
+
+          {/* PAGE 5 — Sales Funnel */}
           <div style={page}>
             {[
               { label: "Call / Email", value: funnelStats.call, color: "#8a7a66" },
@@ -9891,7 +10247,7 @@ function DashboardTab({ db, setTab, openRecord }) {
             <p style={{ fontSize: 11, color: "#8a7a66", textAlign: "center", marginTop: 4 }}>Tap any row to open Prospects</p>
           </div>
 
-          {/* PAGES 5+ — One page per supplier, all their POs scrollable */}
+          {/* PAGES 6+ — One page per supplier, all their POs scrollable */}
           {mobileShipments.map(({ supplier, pos: supplierPOs }) => {
             const fmtD = (d) => d ? new Date(d).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" }) : "—";
             const stripPO = (n) => String(n).replace(/^PO-?/i, "");
@@ -9981,6 +10337,16 @@ function DashboardTab({ db, setTab, openRecord }) {
             Next →
           </button>
         </div>
+
+        <SalesByModelModals
+          drillDown={salesModelDrillDown}
+          setDrillDown={setSalesModelDrillDown}
+          unmatchedInfo={salesModelUnmatched}
+          setUnmatchedInfo={setSalesModelUnmatched}
+          skippedNoDate={salesModelSkippedNoDate}
+          setSkippedNoDate={setSalesModelSkippedNoDate}
+          openRecord={openRecord}
+        />
       </div>
     );
   }
@@ -10341,148 +10707,12 @@ function DashboardTab({ db, setTab, openRecord }) {
       {/* ── SALES BY MODEL TABLE ── */}
       <section style={{ marginBottom: 32, padding: 20, background: "#f6f1e7", borderRadius: 8, border: "1px solid #e3d8c6" }}>
         {(() => {
-          const MODELS = ["Campo", "Scout", "Savanna", "Pontoon Boat"];
+          const MODELS = SALES_MODELS;
           const fyRange = getFYRange(salesModelFYEnd);
           const fyOptions = [];
           for (let y = EARLIEST_FY_END; y <= currentFYEnd + 1; y++) fyOptions.push(y);
 
-          // OUT: quotes where first milestone is ticked, using paidDate for FY range
-          // Group by model name matched against customer product field or quote model/lines
-          // Normalise a name for comparison: lowercase, trim, strip punctuation/
-          // extra whitespace so things like "Adventure Tours Co." vs "adventure
-          // tours co" or "  John Smith " still match.
-          const normName = (s) => (s || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-
-          const matchModel = (str) => {
-            if (!str) return null;
-            if (str.includes("campo")) return "Campo";
-            if (str.includes("scout")) return "Scout";
-            if (str.includes("savanna") || str.includes("savannah")) return "Savanna";
-            if (str.includes("pontoon")) return "Pontoon Boat";
-            // Pontoon boats are also recorded just by size — "19ft"/"22ft" (with or
-            // without a space, e.g. "19 ft") — with no other model keyword present.
-            if (/\b(19|22)\s*ft\b/.test(str)) return "Pontoon Boat";
-            return null;
-          };
-
-          const getModel = (q) => {
-            const desc = (q.lines?.[0]?.desc || q.lines?.[0]?.description || q.model || "").toLowerCase();
-            const partyRaw = q.party || q.customer || "";
-            const partyNorm = normName(partyRaw);
-            // Match customer product field if available — try, in order:
-            // 1) the reliable customerId link (survives renames)
-            // 2) an exact normalised name match
-            // 3) a substring match either direction (handles abbreviations,
-            //    trailing "Pty Ltd"/"Co" suffixes, minor typos, etc.)
-            let cust = (db.customers || []).find(c => c.id && q.customerId && c.id === q.customerId);
-            if (!cust && partyNorm) {
-              cust = (db.customers || []).find(c => normName(c.name) === partyNorm);
-            }
-            if (!cust && partyNorm) {
-              cust = (db.customers || []).find(c => {
-                const cNorm = normName(c.name);
-                return cNorm && (cNorm.includes(partyNorm) || partyNorm.includes(cNorm));
-              });
-            }
-            const prodField = (cust?.product || "").toLowerCase();
-            // Prefer the customer's product field, but if it doesn't contain a
-            // recognisable model keyword (e.g. it's a product code like "SAV4.2"
-            // rather than the full model name), fall back to the quote's own
-            // line description instead of dropping the sale entirely.
-            const model = matchModel(prodField) || matchModel(desc);
-            return {
-              model,
-              customerName: cust?.name || partyRaw || "Unknown",
-              custId: cust?.id || null,
-              debug: { matchedCustomer: !!cust, product: cust?.product || "", partyRaw },
-            };
-          };
-
-          // Units sold = quotes with first milestone paid, paidDate in FY
-          const soldData = {}; // { model: { units, revenue, quotes: [...] } }
-          MODELS.forEach(m => { soldData[m] = { units: 0, revenue: 0, quotes: [] }; });
-          const unmatched = []; // paid-in-FY quotes we couldn't assign to a model — surfaced for debugging
-          const countedCustomerIds = new Set(); // avoid double-counting a customer via both a quote and their legacy invoice fields
-
-          (db.quotes || []).forEach(q => {
-            const milestones = q.paymentMilestones || [];
-            if (!milestones.length) return;
-            const first = milestones[0];
-            if (!first?.paid) return;
-            const paidDate = (first.paidDate || first.due || "").slice(0, 10);
-            if (!paidDate || paidDate < fyRange.start || paidDate > fyRange.end) return;
-            const { model, customerName, custId, debug } = getModel(q);
-            const total = parseFloat(q.total) || 0;
-            if (!model) {
-              unmatched.push({
-                quoteId: q.id,
-                customerName,
-                total,
-                matchedCustomer: debug.matchedCustomer,
-                product: debug.product,
-              });
-              return;
-            }
-            if (custId) countedCustomerIds.add(custId);
-            soldData[model].units += 1;
-            soldData[model].revenue += total;
-            soldData[model].quotes.push({
-              quoteId: q.id,
-              customerName,
-              month: new Date(paidDate + "T00:00:00").toLocaleDateString("en-AU", { month: "long", year: "numeric" }),
-              total,
-            });
-          });
-
-          // Historical customers (mostly FY2023–FY2026) were bulk-imported straight into
-          // the Customer table with no linked quote — their sale is recorded as
-          // invoiceAmount1st/2nd/3rd (summed), dated by the month they were SOLD in
-          // (invoice_month_1st — delivery often happens later and isn't what FY
-          // reporting should key off). This is the primary source of Campo/Scout/
-          // Savanna/Pontoon Boat sales for those years.
-          const skippedNoDate = []; // has product + a paid amount, but no sale month — invisible in every FY until that's set
-          const fyStartMonth = fyRange.start.slice(0, 7);
-          const fyEndMonth = fyRange.end.slice(0, 7);
-          (db.customers || []).forEach(c => {
-            if (countedCustomerIds.has(c.id)) return;
-            const legacyTotal = (parseFloat(c.invoiceAmount1st) || 0) + (parseFloat(c.invoiceAmount2nd) || 0) + (parseFloat(c.invoiceAmount3rd) || 0);
-            if (legacyTotal <= 0) return;
-            const saleMonth = getCustomerSaleMonth(c);
-            if (!saleMonth) {
-              skippedNoDate.push({ customerName: c.name || "Unknown", product: c.product || "", total: legacyTotal });
-              return;
-            }
-            if (saleMonth < fyStartMonth || saleMonth > fyEndMonth) return;
-            const model = matchModel((c.product || "").toLowerCase());
-            if (!model) {
-              unmatched.push({
-                quoteId: c.id,
-                customerName: c.name || "Unknown",
-                total: legacyTotal,
-                matchedCustomer: true,
-                product: c.product || "",
-              });
-              return;
-            }
-            soldData[model].units += 1;
-            soldData[model].revenue += legacyTotal;
-            soldData[model].quotes.push({
-              quoteId: c.id,
-              customerName: c.name || "Unknown",
-              month: new Date(saleMonth + "-01T00:00:00").toLocaleDateString("en-AU", { month: "long", year: "numeric" }),
-              total: legacyTotal,
-            });
-          });
-
-          if (unmatched.length && typeof console !== "undefined") {
-            console.warn(
-              `Sales by Model: ${unmatched.length} paid deposit(s) in ${fyRange.label} couldn't be matched to Campo/Scout/Savanna/Pontoon Boat.`,
-              unmatched
-            );
-          }
-
-          const totUnits = MODELS.reduce((s, m) => s + soldData[m].units, 0);
-          const totRev = MODELS.reduce((s, m) => s + soldData[m].revenue, 0);
+          const { soldData, unmatched, skippedNoDate, totUnits, totRev } = computeSalesByModel(db, fyRange);
 
           const thS = { padding: "8px 12px", fontSize: 11, fontWeight: 700, textAlign: "right", whiteSpace: "nowrap", color: "#6b5240" };
           const tdS = { padding: "8px 12px", fontSize: 13, textAlign: "right", borderBottom: "1px solid #f0e8d9" };
@@ -10618,143 +10848,15 @@ function DashboardTab({ db, setTab, openRecord }) {
         })()}
       </section>
 
-      {salesModelUnmatched && (
-        <Modal onClose={() => setSalesModelUnmatched(null)} width={600}>
-          <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: "0 0 4px", fontSize: 19 }}>
-            Unmatched sales — {salesModelUnmatched.fyLabel}
-          </h3>
-          <p style={{ fontSize: 12, color: "#8a7a66", margin: "0 0 16px" }}>
-            These quotes had a paid deposit in this financial year but couldn't be matched to Campo, Scout, Savanna, or Pontoon Boat.
-            Check the customer's Product field and/or the quote's line description for a recognisable model name.
-          </p>
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-              <thead>
-                <tr style={{ borderBottom: "2px solid #b5552b" }}>
-                  <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11, color: "#6b5240" }}>Customer</th>
-                  <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11, color: "#6b5240" }}>Customer matched?</th>
-                  <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11, color: "#6b5240" }}>Product field seen</th>
-                  <th style={{ textAlign: "right", padding: "6px 8px", fontSize: 11, color: "#6b5240" }}>Quote Total</th>
-                </tr>
-              </thead>
-              <tbody>
-                {salesModelUnmatched.rows.map((r, idx) => (
-                  <tr
-                    key={r.quoteId || idx}
-                    onClick={() => openRecord && openRecord("quote", r.quoteId)}
-                    style={{ borderBottom: "1px solid #f0e8d9", cursor: openRecord ? "pointer" : "default" }}
-                  >
-                    <td style={{ padding: "6px 8px", fontWeight: 600, color: "#4a3527" }}>{r.customerName}</td>
-                    <td style={{ padding: "6px 8px", color: r.matchedCustomer ? "#5c7a4f" : "#b5552b" }}>
-                      {r.matchedCustomer ? "Yes" : "No — check name/link"}
-                    </td>
-                    <td style={{ padding: "6px 8px", color: "#6b5240" }}>{r.product || "(empty)"}</td>
-                    <td style={{ padding: "6px 8px", textAlign: "right", color: "#4a3527", fontWeight: 600 }}>
-                      ${r.total.toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <div style={{ marginTop: 18, display: "flex", justifyContent: "flex-end" }}>
-            <Btn variant="ghost" onClick={() => setSalesModelUnmatched(null)}>Close</Btn>
-          </div>
-        </Modal>
-      )}
-
-      {salesModelSkippedNoDate && (
-        <Modal onClose={() => setSalesModelSkippedNoDate(null)} width={600}>
-          <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: "0 0 4px", fontSize: 19 }}>
-            Missing Month Sold
-          </h3>
-          <p style={{ fontSize: 12, color: "#8a7a66", margin: "0 0 16px" }}>
-            These customers have a Payment 1/2/3 total recorded but no Month sold — without it there's
-            no way to place them in any financial year, so they never appear in Sales by Model, Income / Sales,
-            or Deposits Received &amp; Forecast. Open each customer and set the "Month sold (used for FY
-            reporting)" field to fix this.
-          </p>
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-              <thead>
-                <tr style={{ borderBottom: "2px solid #b5552b" }}>
-                  <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11, color: "#6b5240" }}>Customer</th>
-                  <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11, color: "#6b5240" }}>Product field seen</th>
-                  <th style={{ textAlign: "right", padding: "6px 8px", fontSize: 11, color: "#6b5240" }}>Payments total</th>
-                </tr>
-              </thead>
-              <tbody>
-                {salesModelSkippedNoDate.map((r, idx) => (
-                  <tr key={idx} style={{ borderBottom: "1px solid #f0e8d9" }}>
-                    <td style={{ padding: "6px 8px", fontWeight: 600, color: "#4a3527" }}>{r.customerName}</td>
-                    <td style={{ padding: "6px 8px", color: "#6b5240" }}>{r.product || "(empty)"}</td>
-                    <td style={{ padding: "6px 8px", textAlign: "right", color: "#4a3527", fontWeight: 600 }}>
-                      ${r.total.toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          <div style={{ marginTop: 18, display: "flex", justifyContent: "flex-end" }}>
-            <Btn variant="ghost" onClick={() => setSalesModelSkippedNoDate(null)}>Close</Btn>
-          </div>
-        </Modal>
-      )}
-
-      {salesModelDrillDown && (
-        <Modal onClose={() => setSalesModelDrillDown(null)} width={560}>
-          <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: "0 0 4px", fontSize: 19 }}>
-            {salesModelDrillDown.model} — {salesModelDrillDown.fyLabel}
-          </h3>
-          <p style={{ fontSize: 12, color: "#8a7a66", margin: "0 0 16px" }}>
-            Customers whose deposit was paid in this financial year, contributing to this model's units sold.
-          </p>
-          {salesModelDrillDown.quotes.length === 0 ? (
-            <p className="muted" style={{ fontSize: 13 }}>No sales found for this model.</p>
-          ) : (
-            <>
-              <div style={{ overflowX: "auto" }}>
-                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
-                  <thead>
-                    <tr style={{ borderBottom: "2px solid #b5552b" }}>
-                      <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11, color: "#6b5240" }}>Customer</th>
-                      <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11, color: "#6b5240" }}>Month</th>
-                      <th style={{ textAlign: "right", padding: "6px 8px", fontSize: 11, color: "#6b5240" }}>Quote Total</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {salesModelDrillDown.quotes.map((r, idx) => (
-                      <tr
-                        key={r.quoteId || idx}
-                        onClick={() => openRecord && openRecord("quote", r.quoteId)}
-                        style={{ borderBottom: "1px solid #f0e8d9", cursor: openRecord ? "pointer" : "default" }}
-                      >
-                        <td style={{ padding: "6px 8px", fontWeight: 600, color: "#4a3527" }}>{r.customerName}</td>
-                        <td style={{ padding: "6px 8px", color: "#6b5240" }}>{r.month}</td>
-                        <td style={{ padding: "6px 8px", textAlign: "right", color: "#4a3527", fontWeight: 600 }}>
-                          ${r.total.toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                  <tfoot>
-                    <tr style={{ borderTop: "2px solid #b5552b", fontWeight: 700 }}>
-                      <td style={{ padding: "6px 8px" }} colSpan={2}>Total</td>
-                      <td style={{ padding: "6px 8px", textAlign: "right", color: "#b5552b" }}>
-                        ${salesModelDrillDown.quotes.reduce((s, r) => s + r.total, 0).toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                      </td>
-                    </tr>
-                  </tfoot>
-                </table>
-              </div>
-            </>
-          )}
-          <div style={{ marginTop: 18, display: "flex", justifyContent: "flex-end" }}>
-            <Btn variant="ghost" onClick={() => setSalesModelDrillDown(null)}>Close</Btn>
-          </div>
-        </Modal>
-      )}
+      <SalesByModelModals
+        drillDown={salesModelDrillDown}
+        setDrillDown={setSalesModelDrillDown}
+        unmatchedInfo={salesModelUnmatched}
+        setUnmatchedInfo={setSalesModelUnmatched}
+        skippedNoDate={salesModelSkippedNoDate}
+        setSkippedNoDate={setSalesModelSkippedNoDate}
+        openRecord={openRecord}
+      />
 
       {/* Shipments due */}
       <Panel style={{ marginTop: 24 }}>
