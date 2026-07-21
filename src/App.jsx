@@ -9594,6 +9594,7 @@ function DashboardTab({ db, setTab, openRecord }) {
   const [salesModelFYEnd, setSalesModelFYEnd] = React.useState(currentFYEnd);
   const [salesModelDrillDown, setSalesModelDrillDown] = React.useState(null); // { model, fyRange }
   const [salesModelUnmatched, setSalesModelUnmatched] = React.useState(null); // { fyLabel, rows }
+  const [salesModelSkippedNoDate, setSalesModelSkippedNoDate] = React.useState(null); // rows[] — customers with payments but no invoiceDate1st
   const [mobilePage, setMobilePage] = React.useState(0);
   const touchStartX = React.useRef(0);
 
@@ -10418,10 +10419,15 @@ function DashboardTab({ db, setTab, openRecord }) {
           // the Customer table with no linked quote — their sale is recorded as
           // invoiceAmount1st/2nd/3rd (summed) dated by invoiceDate1st. This is the
           // primary source of Campo/Scout/Savanna/Pontoon Boat sales for those years.
+          const skippedNoDate = []; // has product + a paid amount, but no invoiceDate1st — invisible in every FY until that's set
           (db.customers || []).forEach(c => {
             if (countedCustomerIds.has(c.id)) return;
             const legacyTotal = (parseFloat(c.invoiceAmount1st) || 0) + (parseFloat(c.invoiceAmount2nd) || 0) + (parseFloat(c.invoiceAmount3rd) || 0);
-            if (!c.invoiceDate1st || legacyTotal <= 0) return;
+            if (legacyTotal <= 0) return;
+            if (!c.invoiceDate1st) {
+              skippedNoDate.push({ customerName: c.name || "Unknown", product: c.product || "", total: legacyTotal });
+              return;
+            }
             const invDate = c.invoiceDate1st.slice(0, 10);
             if (invDate < fyRange.start || invDate > fyRange.end) return;
             const model = matchModel((c.product || "").toLowerCase());
@@ -10571,6 +10577,17 @@ function DashboardTab({ db, setTab, openRecord }) {
                       ⚠ {unmatched.length} paid deposit{unmatched.length === 1 ? "" : "s"} in {fyRange.label} couldn't be matched to a model — click to see why
                     </div>
                   )}
+                  {skippedNoDate.length > 0 && (
+                    <div
+                      onClick={() => setSalesModelSkippedNoDate(skippedNoDate)}
+                      style={{
+                        marginTop: 10, padding: "8px 12px", background: "#fceceb", border: "1px solid #e8a8a0",
+                        borderRadius: 6, fontSize: 12, color: "#a3442e", cursor: "pointer",
+                      }}
+                    >
+                      ⚠ {skippedNoDate.length} customer{skippedNoDate.length === 1 ? "" : "s"} with payments recorded have no Invoice Date set — invisible in every FY until that's added. Click to see which.
+                    </div>
+                  )}
                 </>
               )}
             </>
@@ -10619,6 +10636,45 @@ function DashboardTab({ db, setTab, openRecord }) {
           </div>
           <div style={{ marginTop: 18, display: "flex", justifyContent: "flex-end" }}>
             <Btn variant="ghost" onClick={() => setSalesModelUnmatched(null)}>Close</Btn>
+          </div>
+        </Modal>
+      )}
+
+      {salesModelSkippedNoDate && (
+        <Modal onClose={() => setSalesModelSkippedNoDate(null)} width={600}>
+          <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: "0 0 4px", fontSize: 19 }}>
+            Missing Invoice Date
+          </h3>
+          <p style={{ fontSize: 12, color: "#8a7a66", margin: "0 0 16px" }}>
+            These customers have a Payment 1/2/3 total recorded but no Invoice Date — without a date there's
+            no way to place them in any financial year, so they never appear in Sales by Model, Income / Sales,
+            or Deposits Received &amp; Forecast. Open each customer and set the "Invoice date (used for FY
+            reporting)" field to fix this.
+          </p>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+              <thead>
+                <tr style={{ borderBottom: "2px solid #b5552b" }}>
+                  <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11, color: "#6b5240" }}>Customer</th>
+                  <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11, color: "#6b5240" }}>Product field seen</th>
+                  <th style={{ textAlign: "right", padding: "6px 8px", fontSize: 11, color: "#6b5240" }}>Payments total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {salesModelSkippedNoDate.map((r, idx) => (
+                  <tr key={idx} style={{ borderBottom: "1px solid #f0e8d9" }}>
+                    <td style={{ padding: "6px 8px", fontWeight: 600, color: "#4a3527" }}>{r.customerName}</td>
+                    <td style={{ padding: "6px 8px", color: "#6b5240" }}>{r.product || "(empty)"}</td>
+                    <td style={{ padding: "6px 8px", textAlign: "right", color: "#4a3527", fontWeight: 600 }}>
+                      ${r.total.toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ marginTop: 18, display: "flex", justifyContent: "flex-end" }}>
+            <Btn variant="ghost" onClick={() => setSalesModelSkippedNoDate(null)}>Close</Btn>
           </div>
         </Modal>
       )}
