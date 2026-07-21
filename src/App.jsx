@@ -9957,12 +9957,24 @@ function DashboardTab({ db, setTab, openRecord }) {
     .reduce((sum, p) => sum + (parseFloat(p.salesValue) || 0), 0);
 
   // PO tracking
-  const openPos = db.pos.filter((po) => po.status !== "Received").length;
-  const totalPoAmount = db.pos.reduce((sum, po) => sum + (po.total || 0), 0);
+  const draftPOs = db.pos.filter((po) => po.status === "Draft").length;
+  const openPos = db.pos.filter((po) => !["Draft", "Received", "Cancelled"].includes(po.status)).length;
 
-  // Expected delivery POs
-  const expectedDeliveryPos = db.pos.filter((po) => po.status === "Sent" || po.status === "Received");
-  const expectedDeliverAmount = expectedDeliveryPos.reduce((sum, po) => sum + (po.total || 0), 0);
+  // Amount owing on POs, grouped by the calendar month of their ETA
+  const poAmountOwed = (po) => {
+    const milestones = po.paymentMilestones || [];
+    const totalDue = milestones.reduce((sum, m) => sum + (parseFloat(m.amount) || 0), 0) || po.total || 0;
+    const totalPaid = milestones.filter(m => m.paid).reduce((sum, m) => sum + (parseFloat(m.amount) || 0), 0);
+    return totalDue - totalPaid;
+  };
+  const nowForPOs = new Date();
+  const thisMonthKey = `${nowForPOs.getFullYear()}-${String(nowForPOs.getMonth() + 1).padStart(2, "0")}`;
+  const nextMonthDateForPOs = new Date(nowForPOs.getFullYear(), nowForPOs.getMonth() + 1, 1);
+  const nextMonthKey = `${nextMonthDateForPOs.getFullYear()}-${String(nextMonthDateForPOs.getMonth() + 1).padStart(2, "0")}`;
+  const posWithEtaMonth = (monthKey) =>
+    db.pos.filter((po) => po.status !== "Cancelled" && (po.eta || "").slice(0, 7) === monthKey);
+  const owingThisMonth = posWithEtaMonth(thisMonthKey).reduce((sum, po) => sum + poAmountOwed(po), 0);
+  const owingNextMonth = posWithEtaMonth(nextMonthKey).reduce((sum, po) => sum + poAmountOwed(po), 0);
 
   // Expected profit: accepted quotes revenue vs their line item costs
   const acceptedQuotes = db.quotes.filter((q) => q.status === "Accepted");
@@ -10663,16 +10675,20 @@ function DashboardTab({ db, setTab, openRecord }) {
           <h3 style={{ fontFamily: "Georgia,serif", fontSize: 16, color: "#4a3527", margin: "0 0 12px" }}>PO status</h3>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
-              <span>Total POs</span>
-              <strong>{db.pos.length}</strong>
+              <span>Draft POs</span>
+              <strong>{draftPOs}</strong>
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
-              <span>Total amount</span>
-              <strong>{fmtMoney(totalPoAmount, "AUD")}</strong>
+              <span>Open POs</span>
+              <strong>{openPos}</strong>
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
-              <span>Expected delivery</span>
-              <strong>{fmtMoney(expectedDeliverAmount, "AUD")}</strong>
+              <span>POs owing this month</span>
+              <strong>{fmtMoney(owingThisMonth, "AUD")}</strong>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+              <span>POs owing next month</span>
+              <strong>{fmtMoney(owingNextMonth, "AUD")}</strong>
             </div>
           </div>
         </Panel>
