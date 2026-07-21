@@ -9960,21 +9960,25 @@ function DashboardTab({ db, setTab, openRecord }) {
   const draftPOs = db.pos.filter((po) => po.status === "Draft").length;
   const openPos = db.pos.filter((po) => !["Draft", "Received", "Cancelled"].includes(po.status)).length;
 
-  // Amount owing on POs, grouped by the calendar month of their ETA
-  const poAmountOwed = (po) => {
-    const milestones = po.paymentMilestones || [];
-    const totalDue = milestones.reduce((sum, m) => sum + (parseFloat(m.amount) || 0), 0) || po.total || 0;
-    const totalPaid = milestones.filter(m => m.paid).reduce((sum, m) => sum + (parseFloat(m.amount) || 0), 0);
-    return totalDue - totalPaid;
-  };
+  // Amount owing on POs, grouped by the calendar month each unpaid payment
+  // milestone (schedule line) is actually due — not the PO's ETA.
   const nowForPOs = new Date();
   const thisMonthKey = `${nowForPOs.getFullYear()}-${String(nowForPOs.getMonth() + 1).padStart(2, "0")}`;
   const nextMonthDateForPOs = new Date(nowForPOs.getFullYear(), nowForPOs.getMonth() + 1, 1);
   const nextMonthKey = `${nextMonthDateForPOs.getFullYear()}-${String(nextMonthDateForPOs.getMonth() + 1).padStart(2, "0")}`;
-  const posWithEtaMonth = (monthKey) =>
-    db.pos.filter((po) => po.status !== "Cancelled" && (po.eta || "").slice(0, 7) === monthKey);
-  const owingThisMonth = posWithEtaMonth(thisMonthKey).reduce((sum, po) => sum + poAmountOwed(po), 0);
-  const owingNextMonth = posWithEtaMonth(nextMonthKey).reduce((sum, po) => sum + poAmountOwed(po), 0);
+  const owingForMonth = (monthKey) => {
+    let sum = 0;
+    db.pos.forEach((po) => {
+      if (po.status === "Cancelled") return;
+      (po.paymentMilestones || []).forEach((m) => {
+        if (m.paid) return;
+        if ((m.due || "").slice(0, 7) === monthKey) sum += parseFloat(m.amount) || 0;
+      });
+    });
+    return sum;
+  };
+  const owingThisMonth = owingForMonth(thisMonthKey);
+  const owingNextMonth = owingForMonth(nextMonthKey);
 
   // Expected profit: accepted quotes revenue vs their line item costs
   const acceptedQuotes = db.quotes.filter((q) => q.status === "Accepted");
