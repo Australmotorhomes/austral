@@ -10296,23 +10296,45 @@ function DashboardTab({ db, setTab, openRecord }) {
 
           // OUT: quotes where first milestone is ticked, using paidDate for FY range
           // Group by model name matched against customer product field or quote model/lines
+          // Normalise a name for comparison: lowercase, trim, strip punctuation/
+          // extra whitespace so things like "Adventure Tours Co." vs "adventure
+          // tours co" or "  John Smith " still match.
+          const normName = (s) => (s || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+
           const getModel = (q) => {
             const desc = (q.lines?.[0]?.desc || q.lines?.[0]?.description || q.model || "").toLowerCase();
-            const party = (q.party || "").toLowerCase();
-            // Match customer product field if available — prefer the reliable
-            // customerId link (survives renames), fall back to name matching
-            const cust = (db.customers || []).find(c => c.id && q.customerId && c.id === q.customerId)
-              || (db.customers || []).find(c =>
-                c.name && q.party && c.name.trim().toLowerCase() === q.party.trim().toLowerCase()
-              );
+            const partyRaw = q.party || q.customer || "";
+            const partyNorm = normName(partyRaw);
+            // Match customer product field if available — try, in order:
+            // 1) the reliable customerId link (survives renames)
+            // 2) an exact normalised name match
+            // 3) a substring match either direction (handles abbreviations,
+            //    trailing "Pty Ltd"/"Co" suffixes, minor typos, etc.)
+            let cust = (db.customers || []).find(c => c.id && q.customerId && c.id === q.customerId);
+            if (!cust && partyNorm) {
+              cust = (db.customers || []).find(c => normName(c.name) === partyNorm);
+            }
+            if (!cust && partyNorm) {
+              cust = (db.customers || []).find(c => {
+                const cNorm = normName(c.name);
+                return cNorm && (cNorm.includes(partyNorm) || partyNorm.includes(cNorm));
+              });
+            }
             const prodField = (cust?.product || "").toLowerCase();
-            const searchStr = prodField || desc;
-            let model = null;
-            if (searchStr.includes("campo")) model = "Campo";
-            else if (searchStr.includes("scout")) model = "Scout";
-            else if (searchStr.includes("savanna") || searchStr.includes("savannah")) model = "Savanna";
-            else if (searchStr.includes("pontoon")) model = "Pontoon Boat";
-            return { model, customerName: cust?.name || q.party || "Unknown" };
+            const matchModel = (str) => {
+              if (!str) return null;
+              if (str.includes("campo")) return "Campo";
+              if (str.includes("scout")) return "Scout";
+              if (str.includes("savanna") || str.includes("savannah")) return "Savanna";
+              if (str.includes("pontoon")) return "Pontoon Boat";
+              return null;
+            };
+            // Prefer the customer's product field, but if it doesn't contain a
+            // recognisable model keyword (e.g. it's a product code like "SAV4.2"
+            // rather than the full model name), fall back to the quote's own
+            // line description instead of dropping the sale entirely.
+            const model = matchModel(prodField) || matchModel(desc);
+            return { model, customerName: cust?.name || partyRaw || "Unknown" };
           };
 
           // Units sold = quotes with first milestone paid, paidDate in FY
