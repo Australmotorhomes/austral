@@ -254,6 +254,10 @@ function toSupabaseFormat(data, table) {
         copy.invoice_amount_3rd = copy.invoiceAmount3rd;
         delete copy.invoiceAmount3rd;
       }
+      if (copy.invoiceDate1st !== undefined) {
+        copy.invoice_date_1st = copy.invoiceDate1st;
+        delete copy.invoiceDate1st;
+      }
       if (copy.archived !== undefined) {
         copy.is_archived = copy.archived;
         delete copy.archived;
@@ -427,6 +431,7 @@ function fromSupabaseFormat(data, table) {
       if (copy.invoice_amount_1st !== undefined) copy.invoiceAmount1st = parseFloat(copy.invoice_amount_1st) || 0;
       if (copy.invoice_amount_2nd !== undefined) copy.invoiceAmount2nd = parseFloat(copy.invoice_amount_2nd) || 0;
       if (copy.invoice_amount_3rd !== undefined) copy.invoiceAmount3rd = parseFloat(copy.invoice_amount_3rd) || 0;
+      if (copy.invoice_date_1st !== undefined) copy.invoiceDate1st = copy.invoice_date_1st || "";
       if (copy.last_quote_number !== undefined) copy.lastQuoteNumber = copy.last_quote_number;
       if (copy.last_quote_value !== undefined) copy.lastQuoteValue = copy.last_quote_value;
       if (copy.is_archived !== undefined) copy.archived = copy.is_archived;
@@ -7679,6 +7684,7 @@ function ContactModal({ kind, editing, onCancel, onSave, onCreateQuote, onArchiv
   const [invoiceAmount1st, setInvoiceAmount1st] = useState(!isSupplier ? (editing?.invoiceAmount1st || 0) : 0);
   const [invoiceAmount2nd, setInvoiceAmount2nd] = useState(!isSupplier ? (editing?.invoiceAmount2nd || 0) : 0);
   const [invoiceAmount3rd, setInvoiceAmount3rd] = useState(!isSupplier ? (editing?.invoiceAmount3rd || 0) : 0);
+  const [invoiceDate1st, setInvoiceDate1st] = useState(!isSupplier ? (editing?.invoiceDate1st || "") : "");
   const [lastQuoteNumber, setLastQuoteNumber] = useState(!isSupplier ? String(editing?.lastQuoteNumber || "") : "");
   const [lastQuoteValue, setLastQuoteValue] = useState(!isSupplier ? String(editing?.lastQuoteValue || "") : "");
   const [notes, setNotes] = useState(editing ? editing.notes || "" : "");
@@ -7706,6 +7712,7 @@ function ContactModal({ kind, editing, onCancel, onSave, onCreateQuote, onArchiv
         ...(!isSupplier && { invoiceAmount1st: parseFloat(invoiceAmount1st) || 0 }),
         ...(!isSupplier && { invoiceAmount2nd: parseFloat(invoiceAmount2nd) || 0 }),
         ...(!isSupplier && { invoiceAmount3rd: parseFloat(invoiceAmount3rd) || 0 }),
+        ...(!isSupplier && { invoiceDate1st: invoiceDate1st || "" }),
         notes: notes.trim(),
         attachments,
       },
@@ -7972,6 +7979,16 @@ function ContactModal({ kind, editing, onCancel, onSave, onCreateQuote, onArchiv
                 value={invoiceAmount3rd || ""}
                 onChange={(e) => setInvoiceAmount3rd(parseFloat(e.target.value) || 0)} />
             </Field>
+          </div>
+          <div style={{ marginTop: 10 }}>
+            <Field label="Invoice date (used for FY reporting)">
+              <input style={inputStyle} type="date"
+                value={invoiceDate1st || ""}
+                onChange={(e) => setInvoiceDate1st(e.target.value)} />
+            </Field>
+            <p style={{ fontSize: 11, color: "#8a7a66", margin: "4px 0 0" }}>
+              The three payments above are totalled and placed in the financial year this date falls in.
+            </p>
           </div>
         </div>
       )}
@@ -9227,16 +9244,33 @@ function isInDateRange(invoiceMonth, startDate, endDate) {
 // If `status` is omitted/falsy, includes every customer regardless of status
 // EXCEPT "Canceled" — i.e. all real income (Deposit + Paid + Delivered combined).
 // If `status` is provided, filters to that exact status only (legacy behaviour).
+// Historical customers (bulk-imported, mostly FY2023–FY2026) don't use the
+// "invoices" payment-schedule array — instead they carry a flat total split
+// across invoiceAmount1st/2nd/3rd with no per-payment date. The only date
+// available for them is invoiceDate1st, so the FY tables treat the SUM of
+// all three amounts as a single transaction dated by invoiceDate1st.
+function getCustomerInvoicesForCalc(c) {
+  const base = Array.isArray(c.invoices) ? c.invoices : [];
+  const legacyTotal = (parseFloat(c.invoiceAmount1st) || 0) + (parseFloat(c.invoiceAmount2nd) || 0) + (parseFloat(c.invoiceAmount3rd) || 0);
+  if (c.invoiceDate1st && legacyTotal > 0) {
+    return [...base, { amount: legacyTotal, invoiceMonth: c.invoiceDate1st.slice(0, 7) }];
+  }
+  return base;
+}
+
 function calculatePeriodSales(customers, startDate, endDate, status) {
   const filtered = customers.filter((c) => {
-    if (!Array.isArray(c.invoices)) return false;
+    const hasInvoices = Array.isArray(c.invoices) && c.invoices.length > 0;
+    const legacyTotal = (parseFloat(c.invoiceAmount1st) || 0) + (parseFloat(c.invoiceAmount2nd) || 0) + (parseFloat(c.invoiceAmount3rd) || 0);
+    const hasLegacyInvoice = !!c.invoiceDate1st && legacyTotal > 0;
+    if (!hasInvoices && !hasLegacyInvoice) return false;
     const s = (c.status || "").trim();
     if (status) return s === status.trim();
     return s.toLowerCase() !== "canceled";
   });
   const monthTotals = {};
   filtered.forEach((c) => {
-    (c.invoices || []).forEach((inv) => {
+    getCustomerInvoicesForCalc(c).forEach((inv) => {
       if (!inv || !inv.invoiceMonth) return;
       if (isInDateRange(inv.invoiceMonth, startDate, endDate)) {
         const key = inv.invoiceMonth.slice(0, 7);
@@ -9261,7 +9295,7 @@ function getTransactionsForMonth(customers, monthKey) {
   (customers || []).forEach((c) => {
     const s = (c.status || "").trim().toLowerCase();
     if (s === "canceled") return;
-    (c.invoices || []).forEach((inv) => {
+    getCustomerInvoicesForCalc(c).forEach((inv) => {
       if (!inv || !inv.invoiceMonth) return;
       if (inv.invoiceMonth.slice(0, 7) !== monthKey) return;
       rows.push({
@@ -9279,10 +9313,10 @@ function getTransactionsForMonth(customers, monthKey) {
 
 // Helper: Count distinct products sold in period
 function countProductsSold(customers, startDate, endDate, status) {
-  const filtered = customers.filter((c) => (c.status || "").trim() === status.trim() && c.product && Array.isArray(c.invoices));
+  const filtered = customers.filter((c) => (c.status || "").trim() === status.trim() && c.product);
   const productCounts = {};
   filtered.forEach((c) => {
-    const hasInvoiceInPeriod = c.invoices.some((inv) => inv && inv.invoiceMonth && isInDateRange(inv.invoiceMonth, startDate, endDate));
+    const hasInvoiceInPeriod = getCustomerInvoicesForCalc(c).some((inv) => inv && inv.invoiceMonth && isInDateRange(inv.invoiceMonth, startDate, endDate));
     if (hasInvoiceInPeriod) {
       productCounts[c.product] = (productCounts[c.product] || 0) + 1;
     }
@@ -10302,6 +10336,15 @@ function DashboardTab({ db, setTab, openRecord }) {
           // tours co" or "  John Smith " still match.
           const normName = (s) => (s || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 
+          const matchModel = (str) => {
+            if (!str) return null;
+            if (str.includes("campo")) return "Campo";
+            if (str.includes("scout")) return "Scout";
+            if (str.includes("savanna") || str.includes("savannah")) return "Savanna";
+            if (str.includes("pontoon")) return "Pontoon Boat";
+            return null;
+          };
+
           const getModel = (q) => {
             const desc = (q.lines?.[0]?.desc || q.lines?.[0]?.description || q.model || "").toLowerCase();
             const partyRaw = q.party || q.customer || "";
@@ -10322,14 +10365,6 @@ function DashboardTab({ db, setTab, openRecord }) {
               });
             }
             const prodField = (cust?.product || "").toLowerCase();
-            const matchModel = (str) => {
-              if (!str) return null;
-              if (str.includes("campo")) return "Campo";
-              if (str.includes("scout")) return "Scout";
-              if (str.includes("savanna") || str.includes("savannah")) return "Savanna";
-              if (str.includes("pontoon")) return "Pontoon Boat";
-              return null;
-            };
             // Prefer the customer's product field, but if it doesn't contain a
             // recognisable model keyword (e.g. it's a product code like "SAV4.2"
             // rather than the full model name), fall back to the quote's own
@@ -10338,6 +10373,7 @@ function DashboardTab({ db, setTab, openRecord }) {
             return {
               model,
               customerName: cust?.name || partyRaw || "Unknown",
+              custId: cust?.id || null,
               debug: { matchedCustomer: !!cust, product: cust?.product || "", partyRaw },
             };
           };
@@ -10346,6 +10382,7 @@ function DashboardTab({ db, setTab, openRecord }) {
           const soldData = {}; // { model: { units, revenue, quotes: [...] } }
           MODELS.forEach(m => { soldData[m] = { units: 0, revenue: 0, quotes: [] }; });
           const unmatched = []; // paid-in-FY quotes we couldn't assign to a model — surfaced for debugging
+          const countedCustomerIds = new Set(); // avoid double-counting a customer via both a quote and their legacy invoice fields
 
           (db.quotes || []).forEach(q => {
             const milestones = q.paymentMilestones || [];
@@ -10354,7 +10391,7 @@ function DashboardTab({ db, setTab, openRecord }) {
             if (!first?.paid) return;
             const paidDate = (first.paidDate || first.due || "").slice(0, 10);
             if (!paidDate || paidDate < fyRange.start || paidDate > fyRange.end) return;
-            const { model, customerName, debug } = getModel(q);
+            const { model, customerName, custId, debug } = getModel(q);
             const total = parseFloat(q.total) || 0;
             if (!model) {
               unmatched.push({
@@ -10366,6 +10403,7 @@ function DashboardTab({ db, setTab, openRecord }) {
               });
               return;
             }
+            if (custId) countedCustomerIds.add(custId);
             soldData[model].units += 1;
             soldData[model].revenue += total;
             soldData[model].quotes.push({
@@ -10373,6 +10411,37 @@ function DashboardTab({ db, setTab, openRecord }) {
               customerName,
               month: new Date(paidDate + "T00:00:00").toLocaleDateString("en-AU", { month: "long", year: "numeric" }),
               total,
+            });
+          });
+
+          // Historical customers (mostly FY2023–FY2026) were bulk-imported straight into
+          // the Customer table with no linked quote — their sale is recorded as
+          // invoiceAmount1st/2nd/3rd (summed) dated by invoiceDate1st. This is the
+          // primary source of Campo/Scout/Savanna/Pontoon Boat sales for those years.
+          (db.customers || []).forEach(c => {
+            if (countedCustomerIds.has(c.id)) return;
+            const legacyTotal = (parseFloat(c.invoiceAmount1st) || 0) + (parseFloat(c.invoiceAmount2nd) || 0) + (parseFloat(c.invoiceAmount3rd) || 0);
+            if (!c.invoiceDate1st || legacyTotal <= 0) return;
+            const invDate = c.invoiceDate1st.slice(0, 10);
+            if (invDate < fyRange.start || invDate > fyRange.end) return;
+            const model = matchModel((c.product || "").toLowerCase());
+            if (!model) {
+              unmatched.push({
+                quoteId: c.id,
+                customerName: c.name || "Unknown",
+                total: legacyTotal,
+                matchedCustomer: true,
+                product: c.product || "",
+              });
+              return;
+            }
+            soldData[model].units += 1;
+            soldData[model].revenue += legacyTotal;
+            soldData[model].quotes.push({
+              quoteId: c.id,
+              customerName: c.name || "Unknown",
+              month: new Date(invDate + "T00:00:00").toLocaleDateString("en-AU", { month: "long", year: "numeric" }),
+              total: legacyTotal,
             });
           });
 
