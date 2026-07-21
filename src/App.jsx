@@ -9428,6 +9428,7 @@ function computeSalesByModel(db, fyRange) {
     soldData[model].revenue += total;
     soldData[model].quotes.push({
       quoteId: q.id,
+      customerId: custId,
       customerName,
       month: new Date(paidDate + "T00:00:00").toLocaleDateString("en-AU", { month: "long", year: "numeric" }),
       total,
@@ -9468,6 +9469,7 @@ function computeSalesByModel(db, fyRange) {
     soldData[model].revenue += legacyTotal;
     soldData[model].quotes.push({
       quoteId: c.id,
+      customerId: c.id,
       customerName: c.name || "Unknown",
       month: new Date(saleMonth + "-01T00:00:00").toLocaleDateString("en-AU", { month: "long", year: "numeric" }),
       total: legacyTotal,
@@ -9598,19 +9600,26 @@ function SalesByModelModals({ drillDown, setDrillDown, unmatchedInfo, setUnmatch
                     </tr>
                   </thead>
                   <tbody>
-                    {drillDown.quotes.map((r, idx) => (
-                      <tr
-                        key={r.quoteId || idx}
-                        onClick={() => openRecord && openRecord("quote", r.quoteId)}
-                        style={{ borderBottom: "1px solid #f0e8d9", cursor: openRecord ? "pointer" : "default" }}
-                      >
-                        <td style={{ padding: "6px 8px", fontWeight: 600, color: "#4a3527" }}>{r.customerName}</td>
-                        <td style={{ padding: "6px 8px", color: "#6b5240" }}>{r.month}</td>
-                        <td style={{ padding: "6px 8px", textAlign: "right", color: "#4a3527", fontWeight: 600 }}>
-                          ${r.total.toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                        </td>
-                      </tr>
-                    ))}
+                    {drillDown.quotes.map((r, idx) => {
+                      const canOpen = openRecord && (r.customerId || r.quoteId);
+                      return (
+                        <tr
+                          key={r.quoteId || idx}
+                          onClick={() => {
+                            if (!openRecord) return;
+                            if (r.customerId) openRecord("customer", r.customerId);
+                            else if (r.quoteId) openRecord("quote", r.quoteId);
+                          }}
+                          style={{ borderBottom: "1px solid #f0e8d9", cursor: canOpen ? "pointer" : "default" }}
+                        >
+                          <td style={{ padding: "6px 8px", fontWeight: 600, color: "#4a3527" }}>{r.customerName}</td>
+                          <td style={{ padding: "6px 8px", color: "#6b5240" }}>{r.month}</td>
+                          <td style={{ padding: "6px 8px", textAlign: "right", color: "#4a3527", fontWeight: 600 }}>
+                            ${r.total.toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                   <tfoot>
                     <tr style={{ borderTop: "2px solid #b5552b", fontWeight: 700 }}>
