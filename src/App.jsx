@@ -10298,10 +10298,12 @@ function DashboardTab({ db, setTab, openRecord }) {
           const getModel = (q) => {
             const desc = (q.lines?.[0]?.desc || q.lines?.[0]?.description || q.model || "").toLowerCase();
             const party = (q.party || "").toLowerCase();
-            // Match customer product field if available
-            const cust = (db.customers || []).find(c =>
-              c.name && q.party && c.name.trim().toLowerCase() === q.party.trim().toLowerCase()
-            );
+            // Match customer product field if available — prefer the reliable
+            // customerId link (survives renames), fall back to name matching
+            const cust = (db.customers || []).find(c => c.id && q.customerId && c.id === q.customerId)
+              || (db.customers || []).find(c =>
+                c.name && q.party && c.name.trim().toLowerCase() === q.party.trim().toLowerCase()
+              );
             const prodField = (cust?.product || "").toLowerCase();
             const searchStr = prodField || desc;
             if (searchStr.includes("campo")) return "Campo";
@@ -10335,6 +10337,8 @@ function DashboardTab({ db, setTab, openRecord }) {
           const tdS = { padding: "8px 12px", fontSize: 13, textAlign: "right", borderBottom: "1px solid #f0e8d9" };
           const tdL = { padding: "8px 12px", fontSize: 13, textAlign: "left", borderBottom: "1px solid #f0e8d9", fontWeight: 600, color: "#4a3527" };
 
+          const isMobile = window.innerWidth < 768;
+
           return (
             <>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: salesModelCollapsed ? 0 : 12 }}>
@@ -10356,37 +10360,79 @@ function DashboardTab({ db, setTab, openRecord }) {
                     <span style={{ fontSize: 11, color: "#8a7a66" }}>{fyRange.start} – {fyRange.end}</span>
                   </div>
 
-                  <div style={{ overflowX: "auto" }}>
-                    <table style={{ width: "100%", borderCollapse: "collapse", background: "#fff", borderRadius: 6, overflow: "hidden", border: "1px solid #e3d8c6", fontSize: 13 }}>
-                      <thead>
-                        <tr style={{ background: "#f0e8d9", borderBottom: "2px solid #b5552b" }}>
-                          <th style={{ ...thS, textAlign: "left" }}>Model</th>
-                          <th style={{ ...thS, color: "#b5552b" }}>Units Sold</th>
-                          <th style={{ ...thS, color: "#b5552b" }}>Revenue (AUD)</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {MODELS.map((model, ri) => (
-                          <tr key={model} style={{ background: ri % 2 === 0 ? "#fff" : "#fdf8f0" }}>
-                            <td style={{ ...tdL }}>{model}</td>
-                            <td style={{ ...tdS, color: soldData[model].units > 0 ? "#b5552b" : "#ccc", fontWeight: soldData[model].units > 0 ? 700 : 400 }}>
-                              {soldData[model].units || "—"}
-                            </td>
-                            <td style={{ ...tdS, color: soldData[model].revenue > 0 ? "#4a3527" : "#ccc", fontWeight: soldData[model].revenue > 0 ? 600 : 400 }}>
-                              {soldData[model].revenue > 0 ? `$${soldData[model].revenue.toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "—"}
+                  {isMobile ? (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                      {MODELS.map((model) => (
+                        <div
+                          key={model}
+                          style={{ padding: 12, border: "1px solid #e3d8c6", borderRadius: 6, background: "#fff" }}
+                        >
+                          <div style={{ fontWeight: 700, color: "#4a3527", marginBottom: 8, fontSize: 14 }}>{model}</div>
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                            <div>
+                              <div style={{ fontSize: 11, color: "#8a7a66", fontWeight: 600 }}>Units Sold</div>
+                              <div style={{ fontSize: 14, color: soldData[model].units > 0 ? "#b5552b" : "#ccc", fontWeight: soldData[model].units > 0 ? 700 : 400 }}>
+                                {soldData[model].units || "—"}
+                              </div>
+                            </div>
+                            <div>
+                              <div style={{ fontSize: 11, color: "#8a7a66", fontWeight: 600 }}>Revenue (AUD)</div>
+                              <div style={{ fontSize: 14, color: soldData[model].revenue > 0 ? "#4a3527" : "#ccc", fontWeight: soldData[model].revenue > 0 ? 600 : 400 }}>
+                                {soldData[model].revenue > 0 ? `$${soldData[model].revenue.toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "—"}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                      <div style={{ padding: 12, border: "2px solid #b5552b", borderRadius: 6, background: "#f0e8d9" }}>
+                        <div style={{ fontWeight: 700, color: "#b5552b", marginBottom: 8, fontSize: 14 }}>Total</div>
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                          <div>
+                            <div style={{ fontSize: 11, color: "#8a7a66", fontWeight: 600 }}>Units Sold</div>
+                            <div style={{ fontSize: 14, color: "#b5552b", fontWeight: 700 }}>{totUnits || "—"}</div>
+                          </div>
+                          <div>
+                            <div style={{ fontSize: 11, color: "#8a7a66", fontWeight: 600 }}>Revenue (AUD)</div>
+                            <div style={{ fontSize: 14, color: "#b5552b", fontWeight: 700 }}>
+                              {totRev > 0 ? `$${totRev.toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "—"}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div style={{ overflowX: "auto" }}>
+                      <table style={{ width: "100%", borderCollapse: "collapse", background: "#fff", borderRadius: 6, overflow: "hidden", border: "1px solid #e3d8c6", fontSize: 13 }}>
+                        <thead>
+                          <tr style={{ background: "#f0e8d9", borderBottom: "2px solid #b5552b" }}>
+                            <th style={{ ...thS, textAlign: "left" }}>Model</th>
+                            <th style={{ ...thS, color: "#b5552b" }}>Units Sold</th>
+                            <th style={{ ...thS, color: "#b5552b" }}>Revenue (AUD)</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {MODELS.map((model, ri) => (
+                            <tr key={model} style={{ background: ri % 2 === 0 ? "#fff" : "#fdf8f0" }}>
+                              <td style={{ ...tdL }}>{model}</td>
+                              <td style={{ ...tdS, color: soldData[model].units > 0 ? "#b5552b" : "#ccc", fontWeight: soldData[model].units > 0 ? 700 : 400 }}>
+                                {soldData[model].units || "—"}
+                              </td>
+                              <td style={{ ...tdS, color: soldData[model].revenue > 0 ? "#4a3527" : "#ccc", fontWeight: soldData[model].revenue > 0 ? 600 : 400 }}>
+                                {soldData[model].revenue > 0 ? `$${soldData[model].revenue.toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "—"}
+                              </td>
+                            </tr>
+                          ))}
+                          <tr style={{ background: "#f0e8d9", borderTop: "2px solid #b5552b", fontWeight: 700 }}>
+                            <td style={{ ...tdL, color: "#b5552b" }}>Total</td>
+                            <td style={{ ...tdS, color: "#b5552b", fontWeight: 700 }}>{totUnits || "—"}</td>
+                            <td style={{ ...tdS, color: "#b5552b", fontWeight: 700 }}>
+                              {totRev > 0 ? `$${totRev.toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "—"}
                             </td>
                           </tr>
-                        ))}
-                        <tr style={{ background: "#f0e8d9", borderTop: "2px solid #b5552b", fontWeight: 700 }}>
-                          <td style={{ ...tdL, color: "#b5552b" }}>Total</td>
-                          <td style={{ ...tdS, color: "#b5552b", fontWeight: 700 }}>{totUnits || "—"}</td>
-                          <td style={{ ...tdS, color: "#b5552b", fontWeight: 700 }}>
-                            {totRev > 0 ? `$${totRev.toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "—"}
-                          </td>
-                        </tr>
-                      </tbody>
-                    </table>
-                  </div>
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
                 </>
               )}
             </>
