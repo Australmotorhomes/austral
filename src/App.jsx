@@ -9913,6 +9913,7 @@ function DashboardTab({ db, setTab, openRecord }) {
   const [salesModelDrillDown, setSalesModelDrillDown] = React.useState(null); // { model, fyRange }
   const [salesModelUnmatched, setSalesModelUnmatched] = React.useState(null); // { fyLabel, rows }
   const [salesModelSkippedNoDate, setSalesModelSkippedNoDate] = React.useState(null); // rows[] — customers with payments but no invoiceDate1st
+  const [revCostDrillDown, setRevCostDrillDown] = React.useState(null); // { title, rows, type: "quote" | "po" }
   const [mobilePage, setMobilePage] = React.useState(0);
   const touchStartX = React.useRef(0);
 
@@ -9996,6 +9997,77 @@ function DashboardTab({ db, setTab, openRecord }) {
   
   const expectedMargin = acceptedQuotesTotal - expectedCost;
   const expectedMarginPct = acceptedQuotesTotal > 0 ? ((expectedMargin / acceptedQuotesTotal) * 100).toFixed(1) : 0;
+
+  // Revenue/cost expected over the next 3 / 6 months, based on each Quote's or
+  // PO's own payment schedule (unpaid milestones), not a lump total.
+  const monthKeysFromNow = (count) => {
+    const keys = [];
+    const base = new Date();
+    for (let i = 0; i < count; i++) {
+      const dt = new Date(base.getFullYear(), base.getMonth() + i, 1);
+      keys.push(`${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}`);
+    }
+    return keys;
+  };
+  const next3MonthKeys = monthKeysFromNow(3);
+  const next6MonthKeys = monthKeysFromNow(6);
+  const monthKeyLabel = (key) => new Date(`${key}-01T00:00:00`).toLocaleDateString("en-AU", { month: "long", year: "numeric" });
+  const productLabelOf = (rec) => rec.model || (rec.lines?.[0]?.desc || rec.lines?.[0]?.description) || "—";
+
+  const collectQuoteRevenueRows = (monthKeys) => {
+    const rows = [];
+    (db.quotes || []).forEach((q) => {
+      if (!["Accepted", "Delivered"].includes(q.status)) return;
+      (q.paymentMilestones || []).forEach((m, i) => {
+        if (m.paid) return;
+        const due = (m.due || "").slice(0, 7);
+        if (!monthKeys.includes(due)) return;
+        rows.push({
+          key: `${q.id}-${i}`,
+          who: q.party || q.customer || "Unknown",
+          product: productLabelOf(q),
+          monthDue: monthKeyLabel(due),
+          monthKey: due,
+          amount: parseFloat(m.amount) || 0,
+          recordType: "quote",
+          recordId: q.id,
+        });
+      });
+    });
+    return rows.sort((a, b) => a.monthKey.localeCompare(b.monthKey));
+  };
+
+  const collectPoCostRows = (monthKeys) => {
+    const rows = [];
+    (db.pos || []).forEach((po) => {
+      if (po.status === "Cancelled") return;
+      (po.paymentMilestones || []).forEach((m, i) => {
+        if (m.paid) return;
+        const due = (m.due || "").slice(0, 7);
+        if (!monthKeys.includes(due)) return;
+        rows.push({
+          key: `${po.id}-${i}`,
+          who: po.party || "Unknown",
+          product: productLabelOf(po),
+          monthDue: monthKeyLabel(due),
+          monthKey: due,
+          amount: parseFloat(m.amount) || 0,
+          recordType: "po",
+          recordId: po.id,
+        });
+      });
+    });
+    return rows.sort((a, b) => a.monthKey.localeCompare(b.monthKey));
+  };
+
+  const revenueRows3 = collectQuoteRevenueRows(next3MonthKeys);
+  const revenueRows6 = collectQuoteRevenueRows(next6MonthKeys);
+  const costRows3 = collectPoCostRows(next3MonthKeys);
+  const costRows6 = collectPoCostRows(next6MonthKeys);
+  const revenueNext3 = revenueRows3.reduce((s, r) => s + r.amount, 0);
+  const revenueNext6 = revenueRows6.reduce((s, r) => s + r.amount, 0);
+  const costNext3 = costRows3.reduce((s, r) => s + r.amount, 0);
+  const costNext6 = costRows6.reduce((s, r) => s + r.amount, 0);
 
   // Stat box style - clickable
   const statBoxStyle = {
@@ -10700,21 +10772,95 @@ function DashboardTab({ db, setTab, openRecord }) {
         <Panel>
           <h3 style={{ fontFamily: "Georgia,serif", fontSize: 16, color: "#4a3527", margin: "0 0 12px" }}>Revenue vs cost</h3>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
-              <span>Expected revenue</span>
-              <strong>{fmtMoney(acceptedQuotesTotal, "AUD")}</strong>
+            <div
+              onClick={() => setRevCostDrillDown({ title: "Revenue expected — next 3 months", rows: revenueRows3, type: "quote" })}
+              style={{ display: "flex", justifyContent: "space-between", fontSize: 13, cursor: "pointer" }}
+            >
+              <span>Revenue expected next 3 months</span>
+              <strong>{fmtMoney(revenueNext3, "AUD")}</strong>
             </div>
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
-              <span>Expected cost</span>
-              <strong>{fmtMoney(expectedCost, "AUD")}</strong>
+            <div
+              onClick={() => setRevCostDrillDown({ title: "Cost expected — next 3 months", rows: costRows3, type: "po" })}
+              style={{ display: "flex", justifyContent: "space-between", fontSize: 13, cursor: "pointer" }}
+            >
+              <span>Cost expected next 3 months</span>
+              <strong>{fmtMoney(costNext3, "AUD")}</strong>
             </div>
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, paddingTop: 8, borderTop: "1px solid #e3d8c6" }}>
-              <span>Expected profit</span>
-              <strong style={{ color: expectedMargin >= 0 ? "#5c7a4f" : "#a3442e" }}>{fmtMoney(expectedMargin, "AUD")}</strong>
+            <div
+              onClick={() => setRevCostDrillDown({ title: "Revenue expected — next 6 months", rows: revenueRows6, type: "quote" })}
+              style={{ display: "flex", justifyContent: "space-between", fontSize: 13, paddingTop: 8, borderTop: "1px solid #e3d8c6", cursor: "pointer" }}
+            >
+              <span>Revenue expected next 6 months</span>
+              <strong>{fmtMoney(revenueNext6, "AUD")}</strong>
+            </div>
+            <div
+              onClick={() => setRevCostDrillDown({ title: "Cost expected — next 6 months", rows: costRows6, type: "po" })}
+              style={{ display: "flex", justifyContent: "space-between", fontSize: 13, cursor: "pointer" }}
+            >
+              <span>Cost expected next 6 months</span>
+              <strong>{fmtMoney(costNext6, "AUD")}</strong>
             </div>
           </div>
         </Panel>
       </div>
+
+      {revCostDrillDown && (
+        <Modal onClose={() => setRevCostDrillDown(null)} width={600}>
+          <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: "0 0 4px", fontSize: 19 }}>
+            {revCostDrillDown.title}
+          </h3>
+          <p style={{ fontSize: 12, color: "#8a7a66", margin: "0 0 16px" }}>
+            {revCostDrillDown.type === "quote"
+              ? "Unpaid payment milestones on Accepted/Delivered quotes due in this window."
+              : "Unpaid payment milestones on active POs due in this window."}
+          </p>
+          {revCostDrillDown.rows.length === 0 ? (
+            <p className="muted" style={{ fontSize: 13 }}>No payments due in this window.</p>
+          ) : (
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                <thead>
+                  <tr style={{ borderBottom: "2px solid #b5552b" }}>
+                    <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11, color: "#6b5240" }}>
+                      {revCostDrillDown.type === "quote" ? "Customer" : "Supplier"}
+                    </th>
+                    <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11, color: "#6b5240" }}>Product</th>
+                    <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11, color: "#6b5240" }}>Month Due</th>
+                    <th style={{ textAlign: "right", padding: "6px 8px", fontSize: 11, color: "#6b5240" }}>Amount</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {revCostDrillDown.rows.map((r) => (
+                    <tr
+                      key={r.key}
+                      onClick={() => openRecord && openRecord(r.recordType, r.recordId)}
+                      style={{ borderBottom: "1px solid #f0e8d9", cursor: openRecord ? "pointer" : "default" }}
+                    >
+                      <td style={{ padding: "6px 8px", fontWeight: 600, color: "#4a3527" }}>{r.who}</td>
+                      <td style={{ padding: "6px 8px", color: "#6b5240" }}>{r.product}</td>
+                      <td style={{ padding: "6px 8px", color: "#6b5240" }}>{r.monthDue}</td>
+                      <td style={{ padding: "6px 8px", textAlign: "right", color: "#4a3527", fontWeight: 600 }}>
+                        {fmtMoney(r.amount, "AUD")}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+                <tfoot>
+                  <tr style={{ borderTop: "2px solid #b5552b", fontWeight: 700 }}>
+                    <td style={{ padding: "6px 8px" }} colSpan={3}>Total</td>
+                    <td style={{ padding: "6px 8px", textAlign: "right", color: "#b5552b" }}>
+                      {fmtMoney(revCostDrillDown.rows.reduce((s, r) => s + r.amount, 0), "AUD")}
+                    </td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          )}
+          <div style={{ marginTop: 18, display: "flex", justifyContent: "flex-end" }}>
+            <Btn variant="ghost" onClick={() => setRevCostDrillDown(null)}>Close</Btn>
+          </div>
+        </Modal>
+      )}
         </>
         )}
       </section>
