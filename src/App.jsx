@@ -9559,6 +9559,7 @@ function DashboardTab({ db, setTab, openRecord }) {
   const [salesModelCollapsed, setSalesModelCollapsed] = React.useState(false);
   const [salesModelFYEnd, setSalesModelFYEnd] = React.useState(currentFYEnd);
   const [salesModelDrillDown, setSalesModelDrillDown] = React.useState(null); // { model, fyRange }
+  const [salesModelUnmatched, setSalesModelUnmatched] = React.useState(null); // { fyLabel, rows }
   const [mobilePage, setMobilePage] = React.useState(0);
   const touchStartX = React.useRef(0);
 
@@ -10334,12 +10335,17 @@ function DashboardTab({ db, setTab, openRecord }) {
             // rather than the full model name), fall back to the quote's own
             // line description instead of dropping the sale entirely.
             const model = matchModel(prodField) || matchModel(desc);
-            return { model, customerName: cust?.name || partyRaw || "Unknown" };
+            return {
+              model,
+              customerName: cust?.name || partyRaw || "Unknown",
+              debug: { matchedCustomer: !!cust, product: cust?.product || "", partyRaw },
+            };
           };
 
           // Units sold = quotes with first milestone paid, paidDate in FY
           const soldData = {}; // { model: { units, revenue, quotes: [...] } }
           MODELS.forEach(m => { soldData[m] = { units: 0, revenue: 0, quotes: [] }; });
+          const unmatched = []; // paid-in-FY quotes we couldn't assign to a model — surfaced for debugging
 
           (db.quotes || []).forEach(q => {
             const milestones = q.paymentMilestones || [];
@@ -10348,9 +10354,18 @@ function DashboardTab({ db, setTab, openRecord }) {
             if (!first?.paid) return;
             const paidDate = (first.paidDate || first.due || "").slice(0, 10);
             if (!paidDate || paidDate < fyRange.start || paidDate > fyRange.end) return;
-            const { model, customerName } = getModel(q);
-            if (!model) return;
+            const { model, customerName, debug } = getModel(q);
             const total = parseFloat(q.total) || 0;
+            if (!model) {
+              unmatched.push({
+                quoteId: q.id,
+                customerName,
+                total,
+                matchedCustomer: debug.matchedCustomer,
+                product: debug.product,
+              });
+              return;
+            }
             soldData[model].units += 1;
             soldData[model].revenue += total;
             soldData[model].quotes.push({
@@ -10360,6 +10375,13 @@ function DashboardTab({ db, setTab, openRecord }) {
               total,
             });
           });
+
+          if (unmatched.length && typeof console !== "undefined") {
+            console.warn(
+              `Sales by Model: ${unmatched.length} paid deposit(s) in ${fyRange.label} couldn't be matched to Campo/Scout/Savanna/Pontoon Boat.`,
+              unmatched
+            );
+          }
 
           const totUnits = MODELS.reduce((s, m) => s + soldData[m].units, 0);
           const totRev = MODELS.reduce((s, m) => s + soldData[m].revenue, 0);
@@ -10469,12 +10491,68 @@ function DashboardTab({ db, setTab, openRecord }) {
                       </table>
                     </div>
                   )}
+                  {unmatched.length > 0 && (
+                    <div
+                      onClick={() => setSalesModelUnmatched({ fyLabel: fyRange.label, rows: unmatched })}
+                      style={{
+                        marginTop: 10, padding: "8px 12px", background: "#fdf3e0", border: "1px solid #e8c98a",
+                        borderRadius: 6, fontSize: 12, color: "#8a6b1f", cursor: "pointer",
+                      }}
+                    >
+                      ⚠ {unmatched.length} paid deposit{unmatched.length === 1 ? "" : "s"} in {fyRange.label} couldn't be matched to a model — click to see why
+                    </div>
+                  )}
                 </>
               )}
             </>
           );
         })()}
       </section>
+
+      {salesModelUnmatched && (
+        <Modal onClose={() => setSalesModelUnmatched(null)} width={600}>
+          <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: "0 0 4px", fontSize: 19 }}>
+            Unmatched sales — {salesModelUnmatched.fyLabel}
+          </h3>
+          <p style={{ fontSize: 12, color: "#8a7a66", margin: "0 0 16px" }}>
+            These quotes had a paid deposit in this financial year but couldn't be matched to Campo, Scout, Savanna, or Pontoon Boat.
+            Check the customer's Product field and/or the quote's line description for a recognisable model name.
+          </p>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+              <thead>
+                <tr style={{ borderBottom: "2px solid #b5552b" }}>
+                  <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11, color: "#6b5240" }}>Customer</th>
+                  <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11, color: "#6b5240" }}>Customer matched?</th>
+                  <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11, color: "#6b5240" }}>Product field seen</th>
+                  <th style={{ textAlign: "right", padding: "6px 8px", fontSize: 11, color: "#6b5240" }}>Quote Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {salesModelUnmatched.rows.map((r, idx) => (
+                  <tr
+                    key={r.quoteId || idx}
+                    onClick={() => openRecord && openRecord("quote", r.quoteId)}
+                    style={{ borderBottom: "1px solid #f0e8d9", cursor: openRecord ? "pointer" : "default" }}
+                  >
+                    <td style={{ padding: "6px 8px", fontWeight: 600, color: "#4a3527" }}>{r.customerName}</td>
+                    <td style={{ padding: "6px 8px", color: r.matchedCustomer ? "#5c7a4f" : "#b5552b" }}>
+                      {r.matchedCustomer ? "Yes" : "No — check name/link"}
+                    </td>
+                    <td style={{ padding: "6px 8px", color: "#6b5240" }}>{r.product || "(empty)"}</td>
+                    <td style={{ padding: "6px 8px", textAlign: "right", color: "#4a3527", fontWeight: 600 }}>
+                      ${r.total.toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div style={{ marginTop: 18, display: "flex", justifyContent: "flex-end" }}>
+            <Btn variant="ghost" onClick={() => setSalesModelUnmatched(null)}>Close</Btn>
+          </div>
+        </Modal>
+      )}
 
       {salesModelDrillDown && (
         <Modal onClose={() => setSalesModelDrillDown(null)} width={560}>
