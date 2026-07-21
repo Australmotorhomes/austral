@@ -9558,6 +9558,7 @@ function DashboardTab({ db, setTab, openRecord }) {
   const [stockFYEnd, setStockFYEnd] = React.useState(currentFYEnd);
   const [salesModelCollapsed, setSalesModelCollapsed] = React.useState(false);
   const [salesModelFYEnd, setSalesModelFYEnd] = React.useState(currentFYEnd);
+  const [salesModelDrillDown, setSalesModelDrillDown] = React.useState(null); // { model, fyRange }
   const [mobilePage, setMobilePage] = React.useState(0);
   const touchStartX = React.useRef(0);
 
@@ -10306,16 +10307,17 @@ function DashboardTab({ db, setTab, openRecord }) {
               );
             const prodField = (cust?.product || "").toLowerCase();
             const searchStr = prodField || desc;
-            if (searchStr.includes("campo")) return "Campo";
-            if (searchStr.includes("scout")) return "Scout";
-            if (searchStr.includes("savanna") || searchStr.includes("savannah")) return "Savanna";
-            if (searchStr.includes("pontoon")) return "Pontoon Boat";
-            return null;
+            let model = null;
+            if (searchStr.includes("campo")) model = "Campo";
+            else if (searchStr.includes("scout")) model = "Scout";
+            else if (searchStr.includes("savanna") || searchStr.includes("savannah")) model = "Savanna";
+            else if (searchStr.includes("pontoon")) model = "Pontoon Boat";
+            return { model, customerName: cust?.name || q.party || "Unknown" };
           };
 
           // Units sold = quotes with first milestone paid, paidDate in FY
-          const soldData = {}; // { model: { units, revenue } }
-          MODELS.forEach(m => { soldData[m] = { units: 0, revenue: 0 }; });
+          const soldData = {}; // { model: { units, revenue, quotes: [...] } }
+          MODELS.forEach(m => { soldData[m] = { units: 0, revenue: 0, quotes: [] }; });
 
           (db.quotes || []).forEach(q => {
             const milestones = q.paymentMilestones || [];
@@ -10324,10 +10326,17 @@ function DashboardTab({ db, setTab, openRecord }) {
             if (!first?.paid) return;
             const paidDate = (first.paidDate || first.due || "").slice(0, 10);
             if (!paidDate || paidDate < fyRange.start || paidDate > fyRange.end) return;
-            const model = getModel(q);
+            const { model, customerName } = getModel(q);
             if (!model) return;
+            const total = parseFloat(q.total) || 0;
             soldData[model].units += 1;
-            soldData[model].revenue += parseFloat(q.total) || 0;
+            soldData[model].revenue += total;
+            soldData[model].quotes.push({
+              quoteId: q.id,
+              customerName,
+              month: new Date(paidDate + "T00:00:00").toLocaleDateString("en-AU", { month: "long", year: "numeric" }),
+              total,
+            });
           });
 
           const totUnits = MODELS.reduce((s, m) => s + soldData[m].units, 0);
@@ -10365,7 +10374,8 @@ function DashboardTab({ db, setTab, openRecord }) {
                       {MODELS.map((model) => (
                         <div
                           key={model}
-                          style={{ padding: 12, border: "1px solid #e3d8c6", borderRadius: 6, background: "#fff" }}
+                          onClick={() => soldData[model].units > 0 && setSalesModelDrillDown({ model, fyLabel: fyRange.label, quotes: soldData[model].quotes })}
+                          style={{ padding: 12, border: "1px solid #e3d8c6", borderRadius: 6, background: "#fff", cursor: soldData[model].units > 0 ? "pointer" : "default" }}
                         >
                           <div style={{ fontWeight: 700, color: "#4a3527", marginBottom: 8, fontSize: 14 }}>{model}</div>
                           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
@@ -10412,7 +10422,11 @@ function DashboardTab({ db, setTab, openRecord }) {
                         </thead>
                         <tbody>
                           {MODELS.map((model, ri) => (
-                            <tr key={model} style={{ background: ri % 2 === 0 ? "#fff" : "#fdf8f0" }}>
+                            <tr
+                              key={model}
+                              onClick={() => soldData[model].units > 0 && setSalesModelDrillDown({ model, fyLabel: fyRange.label, quotes: soldData[model].quotes })}
+                              style={{ background: ri % 2 === 0 ? "#fff" : "#fdf8f0", cursor: soldData[model].units > 0 ? "pointer" : "default" }}
+                            >
                               <td style={{ ...tdL }}>{model}</td>
                               <td style={{ ...tdS, color: soldData[model].units > 0 ? "#b5552b" : "#ccc", fontWeight: soldData[model].units > 0 ? 700 : 400 }}>
                                 {soldData[model].units || "—"}
@@ -10439,6 +10453,60 @@ function DashboardTab({ db, setTab, openRecord }) {
           );
         })()}
       </section>
+
+      {salesModelDrillDown && (
+        <Modal onClose={() => setSalesModelDrillDown(null)} width={560}>
+          <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: "0 0 4px", fontSize: 19 }}>
+            {salesModelDrillDown.model} — {salesModelDrillDown.fyLabel}
+          </h3>
+          <p style={{ fontSize: 12, color: "#8a7a66", margin: "0 0 16px" }}>
+            Customers whose deposit was paid in this financial year, contributing to this model's units sold.
+          </p>
+          {salesModelDrillDown.quotes.length === 0 ? (
+            <p className="muted" style={{ fontSize: 13 }}>No sales found for this model.</p>
+          ) : (
+            <>
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                  <thead>
+                    <tr style={{ borderBottom: "2px solid #b5552b" }}>
+                      <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11, color: "#6b5240" }}>Customer</th>
+                      <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11, color: "#6b5240" }}>Month</th>
+                      <th style={{ textAlign: "right", padding: "6px 8px", fontSize: 11, color: "#6b5240" }}>Quote Total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {salesModelDrillDown.quotes.map((r, idx) => (
+                      <tr
+                        key={r.quoteId || idx}
+                        onClick={() => openRecord && openRecord("quote", r.quoteId)}
+                        style={{ borderBottom: "1px solid #f0e8d9", cursor: openRecord ? "pointer" : "default" }}
+                      >
+                        <td style={{ padding: "6px 8px", fontWeight: 600, color: "#4a3527" }}>{r.customerName}</td>
+                        <td style={{ padding: "6px 8px", color: "#6b5240" }}>{r.month}</td>
+                        <td style={{ padding: "6px 8px", textAlign: "right", color: "#4a3527", fontWeight: 600 }}>
+                          ${r.total.toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr style={{ borderTop: "2px solid #b5552b", fontWeight: 700 }}>
+                      <td style={{ padding: "6px 8px" }} colSpan={2}>Total</td>
+                      <td style={{ padding: "6px 8px", textAlign: "right", color: "#b5552b" }}>
+                        ${salesModelDrillDown.quotes.reduce((s, r) => s + r.total, 0).toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                      </td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            </>
+          )}
+          <div style={{ marginTop: 18, display: "flex", justifyContent: "flex-end" }}>
+            <Btn variant="ghost" onClick={() => setSalesModelDrillDown(null)}>Close</Btn>
+          </div>
+        </Modal>
+      )}
 
       {/* Shipments due */}
       <Panel style={{ marginTop: 24 }}>
