@@ -258,6 +258,10 @@ function toSupabaseFormat(data, table) {
         copy.invoice_date_1st = copy.invoiceDate1st;
         delete copy.invoiceDate1st;
       }
+      if (copy.invoiceMonth1st !== undefined) {
+        copy.invoice_month_1st = copy.invoiceMonth1st;
+        delete copy.invoiceMonth1st;
+      }
       if (copy.archived !== undefined) {
         copy.is_archived = copy.archived;
         delete copy.archived;
@@ -432,6 +436,7 @@ function fromSupabaseFormat(data, table) {
       if (copy.invoice_amount_2nd !== undefined) copy.invoiceAmount2nd = parseFloat(copy.invoice_amount_2nd) || 0;
       if (copy.invoice_amount_3rd !== undefined) copy.invoiceAmount3rd = parseFloat(copy.invoice_amount_3rd) || 0;
       if (copy.invoice_date_1st !== undefined) copy.invoiceDate1st = copy.invoice_date_1st || "";
+      if (copy.invoice_month_1st !== undefined) copy.invoiceMonth1st = copy.invoice_month_1st || "";
       if (copy.last_quote_number !== undefined) copy.lastQuoteNumber = copy.last_quote_number;
       if (copy.last_quote_value !== undefined) copy.lastQuoteValue = copy.last_quote_value;
       if (copy.is_archived !== undefined) copy.archived = copy.is_archived;
@@ -7685,6 +7690,7 @@ function ContactModal({ kind, editing, onCancel, onSave, onCreateQuote, onArchiv
   const [invoiceAmount2nd, setInvoiceAmount2nd] = useState(!isSupplier ? (editing?.invoiceAmount2nd || 0) : 0);
   const [invoiceAmount3rd, setInvoiceAmount3rd] = useState(!isSupplier ? (editing?.invoiceAmount3rd || 0) : 0);
   const [invoiceDate1st, setInvoiceDate1st] = useState(!isSupplier ? (editing?.invoiceDate1st || "") : "");
+  const [invoiceMonth1st, setInvoiceMonth1st] = useState(!isSupplier ? (editing?.invoiceMonth1st || "") : "");
   const [lastQuoteNumber, setLastQuoteNumber] = useState(!isSupplier ? String(editing?.lastQuoteNumber || "") : "");
   const [lastQuoteValue, setLastQuoteValue] = useState(!isSupplier ? String(editing?.lastQuoteValue || "") : "");
   const [notes, setNotes] = useState(editing ? editing.notes || "" : "");
@@ -7713,6 +7719,7 @@ function ContactModal({ kind, editing, onCancel, onSave, onCreateQuote, onArchiv
         ...(!isSupplier && { invoiceAmount2nd: parseFloat(invoiceAmount2nd) || 0 }),
         ...(!isSupplier && { invoiceAmount3rd: parseFloat(invoiceAmount3rd) || 0 }),
         ...(!isSupplier && { invoiceDate1st: invoiceDate1st || "" }),
+        ...(!isSupplier && { invoiceMonth1st: invoiceMonth1st || "" }),
         notes: notes.trim(),
         attachments,
       },
@@ -7981,13 +7988,14 @@ function ContactModal({ kind, editing, onCancel, onSave, onCreateQuote, onArchiv
             </Field>
           </div>
           <div style={{ marginTop: 10 }}>
-            <Field label="Invoice date (used for FY reporting)">
-              <input style={inputStyle} type="date"
-                value={invoiceDate1st || ""}
-                onChange={(e) => setInvoiceDate1st(e.target.value)} />
+            <Field label="Month sold (used for FY reporting)">
+              <input style={inputStyle} type="month"
+                value={invoiceMonth1st || ""}
+                onChange={(e) => setInvoiceMonth1st(e.target.value)} />
             </Field>
             <p style={{ fontSize: 11, color: "#8a7a66", margin: "4px 0 0" }}>
-              The three payments above are totalled and placed in the financial year this date falls in.
+              The three payments above are totalled and placed in the financial year this month falls in —
+              use the month the sale was made, even if delivery happened later.
             </p>
           </div>
         </div>
@@ -9246,14 +9254,22 @@ function isInDateRange(invoiceMonth, startDate, endDate) {
 // If `status` is provided, filters to that exact status only (legacy behaviour).
 // Historical customers (bulk-imported, mostly FY2023–FY2026) don't use the
 // "invoices" payment-schedule array — instead they carry a flat total split
-// across invoiceAmount1st/2nd/3rd with no per-payment date. The only date
-// available for them is invoiceDate1st, so the FY tables treat the SUM of
-// all three amounts as a single transaction dated by invoiceDate1st.
+// across invoiceAmount1st/2nd/3rd. The month they were SOLD in (which is what
+// FY reporting should use, even though delivery often happens months later)
+// lives in invoice_month_1st. invoiceDate1st is kept as a fallback in case a
+// full date ever gets entered instead of just a month.
+function getCustomerSaleMonth(c) {
+  if (c.invoiceMonth1st) return c.invoiceMonth1st.slice(0, 7);
+  if (c.invoiceDate1st) return c.invoiceDate1st.slice(0, 7);
+  return null;
+}
+
 function getCustomerInvoicesForCalc(c) {
   const base = Array.isArray(c.invoices) ? c.invoices : [];
   const legacyTotal = (parseFloat(c.invoiceAmount1st) || 0) + (parseFloat(c.invoiceAmount2nd) || 0) + (parseFloat(c.invoiceAmount3rd) || 0);
-  if (c.invoiceDate1st && legacyTotal > 0) {
-    return [...base, { amount: legacyTotal, invoiceMonth: c.invoiceDate1st.slice(0, 7) }];
+  const saleMonth = getCustomerSaleMonth(c);
+  if (saleMonth && legacyTotal > 0) {
+    return [...base, { amount: legacyTotal, invoiceMonth: saleMonth }];
   }
   return base;
 }
@@ -9262,7 +9278,7 @@ function calculatePeriodSales(customers, startDate, endDate, status) {
   const filtered = customers.filter((c) => {
     const hasInvoices = Array.isArray(c.invoices) && c.invoices.length > 0;
     const legacyTotal = (parseFloat(c.invoiceAmount1st) || 0) + (parseFloat(c.invoiceAmount2nd) || 0) + (parseFloat(c.invoiceAmount3rd) || 0);
-    const hasLegacyInvoice = !!c.invoiceDate1st && legacyTotal > 0;
+    const hasLegacyInvoice = !!getCustomerSaleMonth(c) && legacyTotal > 0;
     if (!hasInvoices && !hasLegacyInvoice) return false;
     const s = (c.status || "").trim();
     if (status) return s === status.trim();
@@ -10417,19 +10433,23 @@ function DashboardTab({ db, setTab, openRecord }) {
 
           // Historical customers (mostly FY2023–FY2026) were bulk-imported straight into
           // the Customer table with no linked quote — their sale is recorded as
-          // invoiceAmount1st/2nd/3rd (summed) dated by invoiceDate1st. This is the
-          // primary source of Campo/Scout/Savanna/Pontoon Boat sales for those years.
-          const skippedNoDate = []; // has product + a paid amount, but no invoiceDate1st — invisible in every FY until that's set
+          // invoiceAmount1st/2nd/3rd (summed), dated by the month they were SOLD in
+          // (invoice_month_1st — delivery often happens later and isn't what FY
+          // reporting should key off). This is the primary source of Campo/Scout/
+          // Savanna/Pontoon Boat sales for those years.
+          const skippedNoDate = []; // has product + a paid amount, but no sale month — invisible in every FY until that's set
+          const fyStartMonth = fyRange.start.slice(0, 7);
+          const fyEndMonth = fyRange.end.slice(0, 7);
           (db.customers || []).forEach(c => {
             if (countedCustomerIds.has(c.id)) return;
             const legacyTotal = (parseFloat(c.invoiceAmount1st) || 0) + (parseFloat(c.invoiceAmount2nd) || 0) + (parseFloat(c.invoiceAmount3rd) || 0);
             if (legacyTotal <= 0) return;
-            if (!c.invoiceDate1st) {
+            const saleMonth = getCustomerSaleMonth(c);
+            if (!saleMonth) {
               skippedNoDate.push({ customerName: c.name || "Unknown", product: c.product || "", total: legacyTotal });
               return;
             }
-            const invDate = c.invoiceDate1st.slice(0, 10);
-            if (invDate < fyRange.start || invDate > fyRange.end) return;
+            if (saleMonth < fyStartMonth || saleMonth > fyEndMonth) return;
             const model = matchModel((c.product || "").toLowerCase());
             if (!model) {
               unmatched.push({
@@ -10446,7 +10466,7 @@ function DashboardTab({ db, setTab, openRecord }) {
             soldData[model].quotes.push({
               quoteId: c.id,
               customerName: c.name || "Unknown",
-              month: new Date(invDate + "T00:00:00").toLocaleDateString("en-AU", { month: "long", year: "numeric" }),
+              month: new Date(saleMonth + "-01T00:00:00").toLocaleDateString("en-AU", { month: "long", year: "numeric" }),
               total: legacyTotal,
             });
           });
@@ -10585,7 +10605,7 @@ function DashboardTab({ db, setTab, openRecord }) {
                         borderRadius: 6, fontSize: 12, color: "#a3442e", cursor: "pointer",
                       }}
                     >
-                      ⚠ {skippedNoDate.length} customer{skippedNoDate.length === 1 ? "" : "s"} with payments recorded have no Invoice Date set — invisible in every FY until that's added. Click to see which.
+                      ⚠ {skippedNoDate.length} customer{skippedNoDate.length === 1 ? "" : "s"} with payments recorded have no Month sold set — invisible in every FY until that's added. Click to see which.
                     </div>
                   )}
                 </>
@@ -10643,12 +10663,12 @@ function DashboardTab({ db, setTab, openRecord }) {
       {salesModelSkippedNoDate && (
         <Modal onClose={() => setSalesModelSkippedNoDate(null)} width={600}>
           <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: "0 0 4px", fontSize: 19 }}>
-            Missing Invoice Date
+            Missing Month Sold
           </h3>
           <p style={{ fontSize: 12, color: "#8a7a66", margin: "0 0 16px" }}>
-            These customers have a Payment 1/2/3 total recorded but no Invoice Date — without a date there's
+            These customers have a Payment 1/2/3 total recorded but no Month sold — without it there's
             no way to place them in any financial year, so they never appear in Sales by Model, Income / Sales,
-            or Deposits Received &amp; Forecast. Open each customer and set the "Invoice date (used for FY
+            or Deposits Received &amp; Forecast. Open each customer and set the "Month sold (used for FY
             reporting)" field to fix this.
           </p>
           <div style={{ overflowX: "auto" }}>
