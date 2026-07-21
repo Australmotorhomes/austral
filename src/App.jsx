@@ -9945,10 +9945,10 @@ function DashboardTab({ db, setTab, openRecord }) {
   // Sales funnel counts — normalise status to lowercase+trimmed for comparison
   const normStatus = (s) => (s || "").trim().toLowerCase();
   const funnelStats = {
-    call:      db.crm.filter((p) => ["call","phone","email","visit"].includes(normStatus(p.currentStatus))).length,
-    quote:     db.crm.filter((p) => normStatus(p.currentStatus) === "quote").length,
-    deposit:   db.crm.filter((p) => normStatus(p.currentStatus) === "deposit").length,
-    delivered: db.crm.filter((p) => normStatus(p.currentStatus) === "delivered").length,
+    activeProspects: db.crm.filter((p) => !["delivered", "lost"].includes(normStatus(p.currentStatus))).length,
+    quotesSent:      db.quotes.filter((q) => normStatus(q.status) === "sent").length,
+    quotesAccepted:  db.quotes.filter((q) => normStatus(q.status) === "accepted").length,
+    quotesDelivered: db.quotes.filter((q) => normStatus(q.status) === "delivered").length,
   };
 
   // Pipeline value — sum of salesValue for all non-delivered prospects
@@ -10113,7 +10113,7 @@ function DashboardTab({ db, setTab, openRecord }) {
             </div>
             <div style={{ ...card, marginTop: 12 }}>
               <div style={{ fontSize: 12, fontWeight: 700, color: "#6b5240", marginBottom: 8 }}>Funnel snapshot</div>
-              {[["Call / Email", funnelStats.call], ["Quote sent", funnelStats.quote], ["Deposit", funnelStats.deposit], ["Delivered", funnelStats.delivered]].map(([l, v]) => (
+              {[["Active Prospects", funnelStats.activeProspects], ["Quotes Sent", funnelStats.quotesSent], ["Quotes Accepted", funnelStats.quotesAccepted], ["Quotes Delivered", funnelStats.quotesDelivered]].map(([l, v]) => (
                 <div key={l} style={row}><span style={{ color: "#6b5240" }}>{l}</span><strong>{v}</strong></div>
               ))}
             </div>
@@ -10242,18 +10242,18 @@ function DashboardTab({ db, setTab, openRecord }) {
           {/* PAGE 5 — Sales Funnel */}
           <div style={page}>
             {[
-              { label: "Call / Email", value: funnelStats.call, color: "#8a7a66" },
-              { label: "Quote sent", value: funnelStats.quote, color: "#4a7ba7" },
-              { label: "Deposit received", value: funnelStats.deposit, color: "#b5552b" },
-              { label: "Delivered", value: funnelStats.delivered, color: "#5c7a4f" },
+              { label: "Active Prospects", value: funnelStats.activeProspects, color: "#8a7a66", tab: "crm" },
+              { label: "Quotes Sent", value: funnelStats.quotesSent, color: "#4a7ba7", tab: "quotes" },
+              { label: "Quotes Accepted", value: funnelStats.quotesAccepted, color: "#b5552b", tab: "quotes" },
+              { label: "Quotes Delivered", value: funnelStats.quotesDelivered, color: "#5c7a4f", tab: "quotes" },
             ].map(r => (
-              <div key={r.label} onClick={() => setTab("crm")}
+              <div key={r.label} onClick={() => setTab(r.tab)}
                 style={{ ...card, display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }}>
                 <span style={{ fontSize: 14, color: "#4a3527", fontWeight: 600 }}>{r.label}</span>
                 <span style={{ fontSize: 30, fontWeight: 800, color: r.color }}>{r.value}</span>
               </div>
             ))}
-            <p style={{ fontSize: 11, color: "#8a7a66", textAlign: "center", marginTop: 4 }}>Tap any row to open Prospects</p>
+            <p style={{ fontSize: 11, color: "#8a7a66", textAlign: "center", marginTop: 4 }}>Tap Active Prospects to open Prospects, or a quote stage to open Quotes</p>
           </div>
 
           {/* PAGES 6+ — One page per supplier, all their POs scrollable */}
@@ -10641,20 +10641,20 @@ function DashboardTab({ db, setTab, openRecord }) {
           <h3 style={{ fontFamily: "Georgia,serif", fontSize: 16, color: "#4a3527", margin: "0 0 12px" }}>Sales funnel</h3>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
-              <span>Call</span>
-              <strong>{funnelStats.call}</strong>
+              <span>Active Prospects</span>
+              <strong>{funnelStats.activeProspects}</strong>
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
-              <span>Quote</span>
-              <strong>{funnelStats.quote}</strong>
+              <span>Quotes Sent</span>
+              <strong>{funnelStats.quotesSent}</strong>
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
-              <span>Deposit received</span>
-              <strong>{funnelStats.deposit}</strong>
+              <span>Quotes Accepted</span>
+              <strong>{funnelStats.quotesAccepted}</strong>
             </div>
             <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
-              <span>Delivered</span>
-              <strong>{funnelStats.delivered}</strong>
+              <span>Quotes Delivered</span>
+              <strong>{funnelStats.quotesDelivered}</strong>
             </div>
           </div>
         </Panel>
