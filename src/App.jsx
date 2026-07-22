@@ -44,6 +44,34 @@ function getSupabaseHeaders(extra = {}) {
   }
   return headers;
 }
+// Exchanges a stored refresh_token for a brand-new access_token (Supabase Auth
+// tokens expire after ~1 hour). Without this, a session left open for a few
+// hours goes stale: requests keep sending the old JWT, RLS silently returns
+// zero rows for every table, and the app looks like it has "lost" its data.
+// Return value: the new session object on success; null if the refresh_token
+// itself was rejected (revoked/expired — caller should sign the user out);
+// undefined on a network hiccup (caller should just try again later, not
+// sign anyone out over a dropped connection).
+async function refreshAuthSession(session) {
+  if (!session?.refresh_token) return null;
+  try {
+    const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=refresh_token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "apikey": SUPABASE_ANON_KEY },
+      body: JSON.stringify({ refresh_token: session.refresh_token }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data.access_token) return null; // token itself was rejected
+    return {
+      ...session,
+      access_token: data.access_token,
+      refresh_token: data.refresh_token || session.refresh_token,
+      expires_at: data.expires_at,
+    };
+  } catch {
+    return undefined; // network error — leave the existing session in place, retry later
+  }
+}
 // ---- Supabase Storage helpers ----
 async function uploadAttachment(bucket, path, file) {
   const url = `${SUPABASE_URL}/storage/v1/object/${bucket}/${path}`;
@@ -1208,7 +1236,7 @@ function AuthScreen({ onAuth }) {
           const profData = await profRes.json();
           existingUsername = profData?.[0]?.username || null;
         } catch { /* if profiles table doesn't exist yet, ignore */ }
-        onAuth({ access_token: data.access_token, email: data.user?.email, expires_at: data.expires_at, username: existingUsername });
+        onAuth({ access_token: data.access_token, refresh_token: data.refresh_token, email: data.user?.email, expires_at: data.expires_at, username: existingUsername });
       }
     } catch {
       setError("Network error. Please check your connection and try again.");
@@ -1467,6 +1495,40 @@ export default function App() {
     setAuthSession(null);
     setAuthUsername(null);
   }, []);
+
+  // Keep the session alive across long-running tabs. Supabase access tokens
+  // expire ~1 hour after login; without renewing it, requests silently keep
+  // using the stale JWT and RLS returns zero rows for every table — the app
+  // *looks* fine but every list is empty. We check every couple of minutes,
+  // and again immediately whenever the tab regains focus (covers a laptop
+  // that was asleep for hours), refreshing whenever we're within 5 minutes
+  // of expiry. A rejected refresh_token signs the user out; a network hiccup
+  // just gets retried on the next tick.
+  useEffect(() => {
+    if (!authSession) return;
+    const maybeRefresh = async () => {
+      const expiresAt = authSession.expires_at; // unix seconds
+      const secondsLeft = expiresAt ? expiresAt - Date.now() / 1000 : 0;
+      if (expiresAt && secondsLeft > 300) return; // not close to expiring yet
+      const renewed = await refreshAuthSession(authSession);
+      if (renewed) {
+        localStorage.setItem("am_session", JSON.stringify(renewed));
+        setAuthSession(renewed);
+      } else if (renewed === null) {
+        handleSignOut(); // refresh_token itself was rejected — force a clean re-login
+      } // undefined (network hiccup) — leave session as-is, we'll retry next tick
+    };
+    maybeRefresh();
+    const intervalId = setInterval(maybeRefresh, 2 * 60 * 1000);
+    const onVisible = () => { if (document.visibilityState === "visible") maybeRefresh(); };
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
+    return () => {
+      clearInterval(intervalId);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onVisible);
+    };
+  }, [authSession, handleSignOut]);
 
   // Supabase REST API state — must be declared before any early returns (Rules of Hooks)
   const [supabaseConnected, setSupabaseConnected] = useState(false);
