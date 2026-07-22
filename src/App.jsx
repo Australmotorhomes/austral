@@ -9602,6 +9602,59 @@ function PoStatusDrillDownModal({ drillDown, onClose, openRecord }) {
   );
 }
 
+// Sales Funnel drill-down — "Active Prospects" shows the 5 most recently
+// added prospects (who/product/value); each Quotes stage shows the related
+// quotes (who/product/ETA/value). Clicking a quote row opens that specific
+// quote; clicking a prospect row opens that specific prospect.
+function FunnelDrillDownModal({ drillDown, onClose, openRecord }) {
+  if (!drillDown) return null;
+  const isQuotes = drillDown.kind === "quotes";
+  return (
+    <Modal onClose={onClose} width={600}>
+      <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: "0 0 4px", fontSize: 19 }}>
+        {drillDown.title}
+      </h3>
+      {drillDown.rows.length === 0 ? (
+        <p className="muted" style={{ fontSize: 13, marginTop: 16 }}>
+          {isQuotes ? "No quotes found." : "No prospects found."}
+        </p>
+      ) : (
+        <div style={{ overflowX: "auto", marginTop: 12 }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+            <thead>
+              <tr style={{ borderBottom: "2px solid #b5552b" }}>
+                <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11, color: "#6b5240" }}>Who</th>
+                <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11, color: "#6b5240" }}>Product</th>
+                {isQuotes && <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11, color: "#6b5240" }}>ETA</th>}
+                <th style={{ textAlign: "right", padding: "6px 8px", fontSize: 11, color: "#6b5240" }}>Value</th>
+              </tr>
+            </thead>
+            <tbody>
+              {drillDown.rows.map((r, idx) => (
+                <tr
+                  key={r.id || idx}
+                  onClick={() => openRecord && openRecord(isQuotes ? "quote" : "prospect", r.id)}
+                  style={{ borderBottom: "1px solid #f0e8d9", cursor: openRecord ? "pointer" : "default" }}
+                >
+                  <td style={{ padding: "6px 8px", fontWeight: 600, color: "#4a3527" }}>{r.who}</td>
+                  <td style={{ padding: "6px 8px", color: "#6b5240" }}>{r.product}</td>
+                  {isQuotes && <td style={{ padding: "6px 8px", color: "#6b5240" }}>{r.eta}</td>}
+                  <td style={{ padding: "6px 8px", textAlign: "right", color: "#4a3527", fontWeight: 600 }}>
+                    {fmtMoney(r.value, "AUD")}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      <div style={{ marginTop: 18, display: "flex", justifyContent: "flex-end" }}>
+        <Btn variant="ghost" onClick={onClose}>Close</Btn>
+      </div>
+    </Modal>
+  );
+}
+
 function SalesByModelModals({ drillDown, setDrillDown, unmatchedInfo, setUnmatchedInfo, skippedNoDate, setSkippedNoDate, openRecord }) {
   return (
     <>
@@ -10026,6 +10079,7 @@ function DashboardTab({ db, setTab, openRecord }) {
   const [salesModelSkippedNoDate, setSalesModelSkippedNoDate] = React.useState(null); // rows[] — customers with payments but no invoiceDate1st
   const [revCostDrillDown, setRevCostDrillDown] = React.useState(null); // { title, rows, type: "quote" | "po" }
   const [poStatusDrillDown, setPoStatusDrillDown] = React.useState(null); // { title, rows }
+  const [funnelDrillDown, setFunnelDrillDown] = React.useState(null); // { title, kind: "prospects" | "quotes", rows }
   const [mobilePage, setMobilePage] = React.useState(0);
   const touchStartX = React.useRef(0);
 
@@ -10072,6 +10126,34 @@ function DashboardTab({ db, setTab, openRecord }) {
   // Shared formatting helpers for drill-down rows (PO status, revenue/cost)
   const monthKeyLabel = (key) => new Date(`${key}-01T00:00:00`).toLocaleDateString("en-AU", { month: "long", year: "numeric" });
   const productLabelOf = (rec) => rec.model || (rec.lines?.[0]?.desc || rec.lines?.[0]?.description) || "—";
+
+  // Sales funnel drill-down rows — "Active Prospects" shows the 5 most recently
+  // added prospects (who, product, value); each Quotes stage shows every quote
+  // currently in that stage (who, product, ETA, value), and clicking a quote
+  // row opens that specific quote.
+  const recentProspectRows = db.crm
+    .filter((p) => !["delivered", "lost"].includes(normStatus(p.currentStatus)))
+    .slice()
+    .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""))
+    .slice(0, 5)
+    .map((p) => ({
+      id: p.id,
+      who: p.name || "Unknown",
+      product: p.enquiryProduct || "—",
+      value: parseFloat(p.salesValue) || 0,
+    }));
+  const quoteRowsForStatus = (statusKey) => db.quotes
+    .filter((q) => normStatus(q.status) === statusKey)
+    .map((q) => ({
+      id: q.id,
+      who: q.party || "Unknown",
+      product: productLabelOf(q),
+      eta: q.eta ? new Date(q.eta).toLocaleDateString("en-AU") : "—",
+      value: parseFloat(q.total) || 0,
+    }));
+  const quotesSentRows = quoteRowsForStatus("sent");
+  const quotesAcceptedRows = quoteRowsForStatus("accepted");
+  const quotesDeliveredRows = quoteRowsForStatus("delivered");
 
   // PO tracking — build full row lists (not just counts/sums) so each stat can
   // be drilled into and show the underlying POs.
@@ -10475,19 +10557,20 @@ function DashboardTab({ db, setTab, openRecord }) {
           {/* PAGE 5 — Sales Funnel */}
           <div style={page}>
             {[
-              { label: "Active Prospects", value: funnelStats.activeProspects, color: "#8a7a66", tab: "crm" },
-              { label: "Quotes Sent", value: funnelStats.quotesSent, color: "#4a7ba7", tab: "quotes" },
-              { label: "Quotes Accepted", value: funnelStats.quotesAccepted, color: "#b5552b", tab: "quotes" },
-              { label: "Quotes Delivered", value: funnelStats.quotesDelivered, color: "#5c7a4f", tab: "quotes" },
+              { label: "Active Prospects", value: funnelStats.activeProspects, color: "#8a7a66", kind: "prospects", rows: recentProspectRows },
+              { label: "Quotes Sent", value: funnelStats.quotesSent, color: "#4a7ba7", kind: "quotes", rows: quotesSentRows },
+              { label: "Quotes Accepted", value: funnelStats.quotesAccepted, color: "#b5552b", kind: "quotes", rows: quotesAcceptedRows },
+              { label: "Quotes Delivered", value: funnelStats.quotesDelivered, color: "#5c7a4f", kind: "quotes", rows: quotesDeliveredRows },
             ].map(r => (
-              <div key={r.label} onClick={() => setTab(r.tab)}
+              <div key={r.label} onClick={() => setFunnelDrillDown({ title: r.label, kind: r.kind, rows: r.rows })}
                 style={{ ...card, display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }}>
                 <span style={{ fontSize: 14, color: "#4a3527", fontWeight: 600 }}>{r.label}</span>
                 <span style={{ fontSize: 30, fontWeight: 800, color: r.color }}>{r.value}</span>
               </div>
             ))}
-            <p style={{ fontSize: 11, color: "#8a7a66", textAlign: "center", marginTop: 4 }}>Tap Active Prospects to open Prospects, or a quote stage to open Quotes</p>
+            <p style={{ fontSize: 11, color: "#8a7a66", textAlign: "center", marginTop: 4 }}>Tap a stage to see who's in it</p>
           </div>
+
 
           {/* PAGE 6 — PO Status */}
           <div style={page}>
@@ -10612,6 +10695,11 @@ function DashboardTab({ db, setTab, openRecord }) {
         <PoStatusDrillDownModal
           drillDown={poStatusDrillDown}
           onClose={() => setPoStatusDrillDown(null)}
+          openRecord={openRecord}
+        />
+        <FunnelDrillDownModal
+          drillDown={funnelDrillDown}
+          onClose={() => setFunnelDrillDown(null)}
           openRecord={openRecord}
         />
       </div>
@@ -10898,19 +10986,31 @@ function DashboardTab({ db, setTab, openRecord }) {
         <Panel>
           <h3 style={{ fontFamily: "Georgia,serif", fontSize: 16, color: "#4a3527", margin: "0 0 12px" }}>Sales funnel</h3>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+            <div
+              onClick={() => setFunnelDrillDown({ title: "Active Prospects", kind: "prospects", rows: recentProspectRows })}
+              style={{ display: "flex", justifyContent: "space-between", fontSize: 13, cursor: "pointer" }}
+            >
               <span>Active Prospects</span>
               <strong>{funnelStats.activeProspects}</strong>
             </div>
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+            <div
+              onClick={() => setFunnelDrillDown({ title: "Quotes Sent", kind: "quotes", rows: quotesSentRows })}
+              style={{ display: "flex", justifyContent: "space-between", fontSize: 13, cursor: "pointer" }}
+            >
               <span>Quotes Sent</span>
               <strong>{funnelStats.quotesSent}</strong>
             </div>
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+            <div
+              onClick={() => setFunnelDrillDown({ title: "Quotes Accepted", kind: "quotes", rows: quotesAcceptedRows })}
+              style={{ display: "flex", justifyContent: "space-between", fontSize: 13, cursor: "pointer" }}
+            >
               <span>Quotes Accepted</span>
               <strong>{funnelStats.quotesAccepted}</strong>
             </div>
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+            <div
+              onClick={() => setFunnelDrillDown({ title: "Quotes Delivered", kind: "quotes", rows: quotesDeliveredRows })}
+              style={{ display: "flex", justifyContent: "space-between", fontSize: 13, cursor: "pointer" }}
+            >
               <span>Quotes Delivered</span>
               <strong>{funnelStats.quotesDelivered}</strong>
             </div>
@@ -11054,6 +11154,11 @@ function DashboardTab({ db, setTab, openRecord }) {
       <PoStatusDrillDownModal
         drillDown={poStatusDrillDown}
         onClose={() => setPoStatusDrillDown(null)}
+        openRecord={openRecord}
+      />
+      <FunnelDrillDownModal
+        drillDown={funnelDrillDown}
+        onClose={() => setFunnelDrillDown(null)}
         openRecord={openRecord}
       />
         </>
