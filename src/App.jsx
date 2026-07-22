@@ -3956,6 +3956,14 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
     (async () => {
       try {
         const table = isQuote ? "quotes" : "purchase_orders";
+        // `supplierNote` is a PO-only concept (there's no `supplier_note` column
+        // on `quotes`), but the shared quote/PO form always includes it in the
+        // payload. Strip it before sending to Supabase when saving a quote —
+        // otherwise a brand-new quote (POST, which never auto-retries) fails
+        // outright instead of just dropping the field.
+        const supabasePayload = isQuote
+          ? (({ supplierNote, ...rest }) => rest)(payload)
+          : payload;
         
         if (editing) {
           // Update existing doc in Supabase
@@ -3963,7 +3971,7 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
           const supplierId = resolveSupplierId(payload.party);
           const updatePayload = toSupabaseFormat(
             {
-              ...payload,
+              ...supabasePayload,
               updatedAt: todayISO(),
               ...(isQuote ? { customerId } : { supplierId }),
             },
@@ -3992,7 +4000,10 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
             ...payload,
             ...(isQuote ? { customerId } : { supplierId }),
           };
-          const createPayload = toSupabaseFormat(newDocLocal, table);
+          const newDocForSupabase = isQuote
+            ? (({ supplierNote, ...rest }) => rest)(newDocLocal)
+            : newDocLocal;
+          const createPayload = toSupabaseFormat(newDocForSupabase, table);
           delete createPayload.id;
           const result = await supabaseRESTWithSchemaFallback("POST", table, createPayload);
           const savedRow = Array.isArray(result) ? result[0] : result;
@@ -9527,6 +9538,62 @@ function computeSalesByModel(db, fyRange) {
 
 // The three drill-down modals shared by both the desktop table and the mobile
 // "Sales by Model" page, so tapping/clicking a row behaves identically everywhere.
+// Shared "PO status" drill-down modal (Draft/Open/Owing this month/Owing next
+// month), used by both the desktop panel and the mobile PO Status page.
+function PoStatusDrillDownModal({ drillDown, onClose, openRecord }) {
+  if (!drillDown) return null;
+  return (
+    <Modal onClose={onClose} width={600}>
+      <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: "0 0 4px", fontSize: 19 }}>
+        {drillDown.title}
+      </h3>
+      {drillDown.rows.length === 0 ? (
+        <p className="muted" style={{ fontSize: 13, marginTop: 16 }}>No POs found.</p>
+      ) : (
+        <div style={{ overflowX: "auto", marginTop: 12 }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+            <thead>
+              <tr style={{ borderBottom: "2px solid #b5552b" }}>
+                <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11, color: "#6b5240" }}>Supplier</th>
+                <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11, color: "#6b5240" }}>Product</th>
+                <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11, color: "#6b5240" }}>Month Due</th>
+                <th style={{ textAlign: "right", padding: "6px 8px", fontSize: 11, color: "#6b5240" }}>Amount</th>
+              </tr>
+            </thead>
+            <tbody>
+              {drillDown.rows.map((r, idx) => (
+                <tr
+                  key={r.key || r.poId || idx}
+                  onClick={() => openRecord && openRecord("po", r.poId)}
+                  style={{ borderBottom: "1px solid #f0e8d9", cursor: openRecord ? "pointer" : "default" }}
+                >
+                  <td style={{ padding: "6px 8px", fontWeight: 600, color: "#4a3527" }}>{r.supplier}</td>
+                  <td style={{ padding: "6px 8px", color: "#6b5240" }}>{r.product}</td>
+                  <td style={{ padding: "6px 8px", color: "#6b5240" }}>{r.monthDue}</td>
+                  <td style={{ padding: "6px 8px", textAlign: "right", color: "#4a3527", fontWeight: 600 }}>
+                    {fmtMoney(r.amount, "AUD")}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr style={{ borderTop: "2px solid #b5552b", fontWeight: 700 }}>
+                <td style={{ padding: "6px 8px" }} colSpan={3}>Total</td>
+                <td style={{ padding: "6px 8px", textAlign: "right", color: "#b5552b" }}>
+                  {fmtMoney(drillDown.rows.reduce((s, r) => s + r.amount, 0), "AUD")}
+                </td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      )}
+      <div style={{ marginTop: 18, display: "flex", justifyContent: "flex-end" }}>
+        <Btn variant="ghost" onClick={onClose}>Close</Btn>
+      </div>
+    </Modal>
+  );
+}
+
 function SalesByModelModals({ drillDown, setDrillDown, unmatchedInfo, setUnmatchedInfo, skippedNoDate, setSkippedNoDate, openRecord }) {
   return (
     <>
@@ -9950,6 +10017,7 @@ function DashboardTab({ db, setTab, openRecord }) {
   const [salesModelUnmatched, setSalesModelUnmatched] = React.useState(null); // { fyLabel, rows }
   const [salesModelSkippedNoDate, setSalesModelSkippedNoDate] = React.useState(null); // rows[] — customers with payments but no invoiceDate1st
   const [revCostDrillDown, setRevCostDrillDown] = React.useState(null); // { title, rows, type: "quote" | "po" }
+  const [poStatusDrillDown, setPoStatusDrillDown] = React.useState(null); // { title, rows }
   const [mobilePage, setMobilePage] = React.useState(0);
   const touchStartX = React.useRef(0);
 
@@ -9993,9 +10061,28 @@ function DashboardTab({ db, setTab, openRecord }) {
     .filter((p) => normStatus(p.currentStatus) !== "delivered")
     .reduce((sum, p) => sum + (parseFloat(p.salesValue) || 0), 0);
 
-  // PO tracking
-  const draftPOs = db.pos.filter((po) => po.status === "Draft").length;
-  const openPos = db.pos.filter((po) => !["Draft", "Received", "Cancelled"].includes(po.status)).length;
+  // Shared formatting helpers for drill-down rows (PO status, revenue/cost)
+  const monthKeyLabel = (key) => new Date(`${key}-01T00:00:00`).toLocaleDateString("en-AU", { month: "long", year: "numeric" });
+  const productLabelOf = (rec) => rec.model || (rec.lines?.[0]?.desc || rec.lines?.[0]?.description) || "—";
+
+  // PO tracking — build full row lists (not just counts/sums) so each stat can
+  // be drilled into and show the underlying POs.
+  const draftPORows = db.pos.filter((po) => po.status === "Draft").map((po) => ({
+    poId: po.id,
+    supplier: po.party || "Unknown",
+    product: productLabelOf(po),
+    monthDue: po.eta ? monthKeyLabel(po.eta.slice(0, 7)) : "—",
+    amount: parseFloat(po.total) || 0,
+  }));
+  const openPORows = db.pos.filter((po) => !["Draft", "Received", "Cancelled"].includes(po.status)).map((po) => ({
+    poId: po.id,
+    supplier: po.party || "Unknown",
+    product: productLabelOf(po),
+    monthDue: po.eta ? monthKeyLabel(po.eta.slice(0, 7)) : "—",
+    amount: parseFloat(po.total) || 0,
+  }));
+  const draftPOs = draftPORows.length;
+  const openPos = openPORows.length;
 
   // Amount owing on POs, grouped by the calendar month each unpaid payment
   // milestone (schedule line) is actually due — not the PO's ETA.
@@ -10003,19 +10090,29 @@ function DashboardTab({ db, setTab, openRecord }) {
   const thisMonthKey = `${nowForPOs.getFullYear()}-${String(nowForPOs.getMonth() + 1).padStart(2, "0")}`;
   const nextMonthDateForPOs = new Date(nowForPOs.getFullYear(), nowForPOs.getMonth() + 1, 1);
   const nextMonthKey = `${nextMonthDateForPOs.getFullYear()}-${String(nextMonthDateForPOs.getMonth() + 1).padStart(2, "0")}`;
-  const owingForMonth = (monthKey) => {
-    let sum = 0;
+  const owingRowsForMonth = (monthKey) => {
+    const rows = [];
     db.pos.forEach((po) => {
       if (po.status === "Cancelled") return;
-      (po.paymentMilestones || []).forEach((m) => {
+      (po.paymentMilestones || []).forEach((m, i) => {
         if (m.paid) return;
-        if ((m.due || "").slice(0, 7) === monthKey) sum += parseFloat(m.amount) || 0;
+        if ((m.due || "").slice(0, 7) !== monthKey) return;
+        rows.push({
+          poId: po.id,
+          key: `${po.id}-${i}`,
+          supplier: po.party || "Unknown",
+          product: productLabelOf(po),
+          monthDue: monthKeyLabel(monthKey),
+          amount: parseFloat(m.amount) || 0,
+        });
       });
     });
-    return sum;
+    return rows;
   };
-  const owingThisMonth = owingForMonth(thisMonthKey);
-  const owingNextMonth = owingForMonth(nextMonthKey);
+  const owingThisMonthRows = owingRowsForMonth(thisMonthKey);
+  const owingNextMonthRows = owingRowsForMonth(nextMonthKey);
+  const owingThisMonth = owingThisMonthRows.reduce((s, r) => s + r.amount, 0);
+  const owingNextMonth = owingNextMonthRows.reduce((s, r) => s + r.amount, 0);
 
   // Expected profit: accepted quotes revenue vs their line item costs
   const acceptedQuotes = db.quotes.filter((q) => q.status === "Accepted");
@@ -10047,8 +10144,6 @@ function DashboardTab({ db, setTab, openRecord }) {
   };
   const next3MonthKeys = monthKeysFromNow(3);
   const next6MonthKeys = monthKeysFromNow(6);
-  const monthKeyLabel = (key) => new Date(`${key}-01T00:00:00`).toLocaleDateString("en-AU", { month: "long", year: "numeric" });
-  const productLabelOf = (rec) => rec.model || (rec.lines?.[0]?.desc || rec.lines?.[0]?.description) || "—";
 
   const collectQuoteRevenueRows = (monthKeys) => {
     const rows = [];
@@ -10172,8 +10267,8 @@ function DashboardTab({ db, setTab, openRecord }) {
     const unpaidDepositRows = depositRows.filter(r => !r.paid);
     const paidDepositRows = depositRows.filter(r => r.paid);
 
-    const totalPages = 5 + mobileShipments.length;
-    const pageTitles = ["Sales Performance", "Deposits", "Stock", "Sales by Model", "Sales Funnel",
+    const totalPages = 6 + mobileShipments.length;
+    const pageTitles = ["Sales Performance", "Deposits", "Stock", "Sales by Model", "Sales Funnel", "PO Status",
       ...mobileShipments.map(g => g.supplier)];
 
     const handleTouchStart = (e) => { touchStartX.current = e.touches[0].clientX; };
@@ -10380,7 +10475,26 @@ function DashboardTab({ db, setTab, openRecord }) {
             <p style={{ fontSize: 11, color: "#8a7a66", textAlign: "center", marginTop: 4 }}>Tap Active Prospects to open Prospects, or a quote stage to open Quotes</p>
           </div>
 
-          {/* PAGES 6+ — One page per supplier, all their POs scrollable */}
+          {/* PAGE 6 — PO Status */}
+          <div style={page}>
+            {[
+              { label: "Draft POs", value: draftPOs, color: "#8a7a66", rows: draftPORows, isMoney: false },
+              { label: "Open POs", value: openPos, color: "#4a7ba7", rows: openPORows, isMoney: false },
+              { label: "POs owing this month", value: owingThisMonth, color: "#b5552b", rows: owingThisMonthRows, isMoney: true },
+              { label: "POs owing next month", value: owingNextMonth, color: "#5c7a4f", rows: owingNextMonthRows, isMoney: true },
+            ].map(r => (
+              <div key={r.label} onClick={() => setPoStatusDrillDown({ title: r.label, rows: r.rows })}
+                style={{ ...card, display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }}>
+                <span style={{ fontSize: 14, color: "#4a3527", fontWeight: 600 }}>{r.label}</span>
+                <span style={{ fontSize: r.isMoney ? 20 : 30, fontWeight: 800, color: r.color }}>
+                  {r.isMoney ? fmtMoney(r.value, "AUD") : r.value}
+                </span>
+              </div>
+            ))}
+            <p style={{ fontSize: 11, color: "#8a7a66", textAlign: "center", marginTop: 4 }}>Tap any row to see the POs behind it</p>
+          </div>
+
+          {/* PAGES 7+ — One page per supplier, all their POs scrollable */}
           {mobileShipments.map(({ supplier, pos: supplierPOs }) => {
             const fmtD = (d) => d ? new Date(d).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" }) : "—";
             const stripPO = (n) => String(n).replace(/^PO-?/i, "");
@@ -10478,6 +10592,11 @@ function DashboardTab({ db, setTab, openRecord }) {
           setUnmatchedInfo={setSalesModelUnmatched}
           skippedNoDate={salesModelSkippedNoDate}
           setSkippedNoDate={setSalesModelSkippedNoDate}
+          openRecord={openRecord}
+        />
+        <PoStatusDrillDownModal
+          drillDown={poStatusDrillDown}
+          onClose={() => setPoStatusDrillDown(null)}
           openRecord={openRecord}
         />
       </div>
@@ -10786,19 +10905,31 @@ function DashboardTab({ db, setTab, openRecord }) {
         <Panel>
           <h3 style={{ fontFamily: "Georgia,serif", fontSize: 16, color: "#4a3527", margin: "0 0 12px" }}>PO status</h3>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+            <div
+              onClick={() => setPoStatusDrillDown({ title: "Draft POs", rows: draftPORows })}
+              style={{ display: "flex", justifyContent: "space-between", fontSize: 13, cursor: "pointer" }}
+            >
               <span>Draft POs</span>
               <strong>{draftPOs}</strong>
             </div>
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+            <div
+              onClick={() => setPoStatusDrillDown({ title: "Open POs", rows: openPORows })}
+              style={{ display: "flex", justifyContent: "space-between", fontSize: 13, cursor: "pointer" }}
+            >
               <span>Open POs</span>
               <strong>{openPos}</strong>
             </div>
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+            <div
+              onClick={() => setPoStatusDrillDown({ title: "POs owing this month", rows: owingThisMonthRows })}
+              style={{ display: "flex", justifyContent: "space-between", fontSize: 13, cursor: "pointer" }}
+            >
               <span>POs owing this month</span>
               <strong>{fmtMoney(owingThisMonth, "AUD")}</strong>
             </div>
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+            <div
+              onClick={() => setPoStatusDrillDown({ title: "POs owing next month", rows: owingNextMonthRows })}
+              style={{ display: "flex", justifyContent: "space-between", fontSize: 13, cursor: "pointer" }}
+            >
               <span>POs owing next month</span>
               <strong>{fmtMoney(owingNextMonth, "AUD")}</strong>
             </div>
@@ -10897,6 +11028,12 @@ function DashboardTab({ db, setTab, openRecord }) {
           </div>
         </Modal>
       )}
+
+      <PoStatusDrillDownModal
+        drillDown={poStatusDrillDown}
+        onClose={() => setPoStatusDrillDown(null)}
+        openRecord={openRecord}
+      />
         </>
         )}
       </section>
