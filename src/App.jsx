@@ -18,18 +18,31 @@ const SUPABASE_ANON_KEY = process.env.REACT_APP_SUPABASE_ANON_KEY || "sb_publish
 // setSupabaseAuthToken() whenever the app's session is loaded/refreshed, and cleared
 // (passing null) on logout — after which requests fall back to the anon key, so
 // RLS policies must not grant read/write to the anon role for these tables.
-let _supabaseAuthToken = null;
+let _supabaseAuthToken = (() => {
+  try {
+    const s = JSON.parse(localStorage.getItem("am_session") || "null");
+    return s?.access_token || null;
+  } catch { return null; }
+})();
 function setSupabaseAuthToken(token) {
   _supabaseAuthToken = token || null;
 }
 function getSupabaseHeaders(extra = {}) {
-  return {
+  const headers = {
     "Content-Type": "application/json",
     "apikey": SUPABASE_ANON_KEY,
-    "Authorization": `Bearer ${_supabaseAuthToken || SUPABASE_ANON_KEY}`,
     "Prefer": "return=representation",
     ...extra,
   };
+  // Only attach a real user JWT. SUPABASE_ANON_KEY is a publishable API key,
+  // not a JWT — sending it as "Authorization: Bearer <anon key>" is invalid
+  // and gets every request rejected. When there's no logged-in user, omit
+  // Authorization entirely so the request authenticates as anon via apikey
+  // alone (exactly as it always has).
+  if (_supabaseAuthToken) {
+    headers["Authorization"] = `Bearer ${_supabaseAuthToken}`;
+  }
+  return headers;
 }
 // ---- Supabase Storage helpers ----
 async function uploadAttachment(bucket, path, file) {
