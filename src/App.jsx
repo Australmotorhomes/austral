@@ -5268,7 +5268,11 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                     </div>
                   ))}
                   <div style={{ marginTop: 10 }}>
-                    <Btn variant="secondary" size="sm" onClick={() => mark(setMMilestones)([...mMilestones, { due:"",amount:"",invoice:"",paid:false }])}>+ Add milestone</Btn>
+                    <Btn variant="secondary" size="sm" onClick={() => {
+                      const scheduled = mMilestones.reduce((s, m) => s + (parseFloat(m.amount) || 0), 0);
+                      const remaining = Math.round(((activeMember.total || 0) - scheduled) * 100) / 100;
+                      mark(setMMilestones)([...mMilestones, { due:"", amount: remaining > 0 ? remaining : "", invoice:"", paid:false }]);
+                    }}>+ Add milestone</Btn>
                   </div>
                 </div>
               </Panel>
@@ -5662,7 +5666,11 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
               <Btn
                 variant="ghost"
                 size="sm"
-                onClick={() => setPaymentMilestones([...paymentMilestones, { due: "", amount: "", paid: false, paidDate: "" }])}
+                onClick={() => {
+                  const scheduled = paymentMilestones.reduce((s, m) => s + (parseFloat(m.amount) || 0), 0);
+                  const remaining = Math.round((total - scheduled) * 100) / 100;
+                  setPaymentMilestones([...paymentMilestones, { due: "", amount: remaining > 0 ? remaining : "", paid: false, paidDate: "" }]);
+                }}
               >
                 + Add payment
               </Btn>
@@ -6921,7 +6929,7 @@ function PaymentMilestonesModal({ doc, docType, onSave, onClose }) {
         <Btn
           variant="ghost"
           size="sm"
-          onClick={() => setMilestones([...milestones, { due: "", amount: "", paid: false, paidDate: "" }])}
+          onClick={() => setMilestones([...milestones, { due: "", amount: remaining > 0 ? remaining : "", paid: false, paidDate: "" }])}
         >
           + Add payment
         </Btn>
