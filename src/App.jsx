@@ -1627,10 +1627,11 @@ export default function App() {
     }
   }
 
-  // ---- Load from Supabase on mount ----
+  // ---- Load from Supabase once logged in, and again whenever the session changes (e.g. right after login) ----
   useEffect(() => {
+    if (!authSession) return; // wait until we have a real session so the request is authenticated
     loadFromSupabase(false);
-  }, []);
+  }, [authSession]);
 
   // ---- Initialize Supabase REST API polling on mount ----
   useEffect(() => {
