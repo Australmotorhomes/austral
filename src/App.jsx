@@ -1856,7 +1856,7 @@ export default function App() {
       <style>{globalCss}</style>
       <div className="app">
         <header className="top">
-          <div className="brand" style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, minWidth: 0 }}>
+          <div className="brand" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, minWidth: 0 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
               <img src={AUSTRAL_LOGO} alt="Austral Motorhomes" style={{ height: 40, width: "auto", objectFit: "contain", flexShrink: 0 }} />
               <div>
@@ -2287,13 +2287,12 @@ const appStyle = {
 
 const globalCss = `
   .app{max-width:1180px;margin:0 auto;padding:0 20px 80px;}
-  header.top{display:flex;align-items:center;justify-content:space-between;padding:22px 0 18px;border-bottom:3px solid #b5552b;margin-bottom:14px;flex-wrap:wrap;gap:10px;}
-  .brand{display:flex;align-items:center;gap:12px;}
+  header.top{display:flex;flex-direction:column;align-items:stretch;padding:22px 0 18px;border-bottom:3px solid #b5552b;margin-bottom:14px;gap:14px;}
+  .brand{display:flex;align-items:center;gap:12px;width:100%;}
   .brand .mark{width:42px;height:42px;border-radius:9px;background:linear-gradient(155deg,#b5552b,#8f3f1f);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:18px;font-family:Georgia,serif;letter-spacing:-1px;flex-shrink:0;}
   .brand h1{font-family:Georgia,serif;font-size:21px;margin:0;color:#4a3527;letter-spacing:.2px;}
   .brand .sub{font-size:12px;color:#8a7a66;margin-top:1px;letter-spacing:.3px;}
-  .header-utilities{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
-  @media (max-width:600px){.header-utilities{width:100%;justify-content:flex-start;}}
+  .header-utilities{display:flex;align-items:center;gap:10px;flex-wrap:wrap;width:100%;}
   @media (max-width:640px){
     .brand{flex-wrap:wrap;row-gap:10px;}
     .brand h1{font-size:17px;}
