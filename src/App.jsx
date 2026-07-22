@@ -10085,15 +10085,19 @@ function DashboardTab({ db, setTab, openRecord }) {
   const openPos = openPORows.length;
 
   // Amount owing on POs, grouped by the calendar month each unpaid payment
-  // milestone (schedule line) is actually due — not the PO's ETA.
+  // milestone (schedule line) is actually due — not the PO's ETA. Only POs
+  // still in Draft or Sent status count (Accepted/Paid/Received/Cancelled
+  // are excluded — those are either already settled or no longer pending).
   const nowForPOs = new Date();
   const thisMonthKey = `${nowForPOs.getFullYear()}-${String(nowForPOs.getMonth() + 1).padStart(2, "0")}`;
   const nextMonthDateForPOs = new Date(nowForPOs.getFullYear(), nowForPOs.getMonth() + 1, 1);
   const nextMonthKey = `${nextMonthDateForPOs.getFullYear()}-${String(nextMonthDateForPOs.getMonth() + 1).padStart(2, "0")}`;
+  const threeMonthsDateForPOs = new Date(nowForPOs.getFullYear(), nowForPOs.getMonth() + 3, 1);
+  const threeMonthsKey = `${threeMonthsDateForPOs.getFullYear()}-${String(threeMonthsDateForPOs.getMonth() + 1).padStart(2, "0")}`;
   const owingRowsForMonth = (monthKey) => {
     const rows = [];
     db.pos.forEach((po) => {
-      if (po.status === "Cancelled") return;
+      if (!["Draft", "Sent"].includes(po.status)) return;
       (po.paymentMilestones || []).forEach((m, i) => {
         if (m.paid) return;
         if ((m.due || "").slice(0, 7) !== monthKey) return;
@@ -10111,8 +10115,10 @@ function DashboardTab({ db, setTab, openRecord }) {
   };
   const owingThisMonthRows = owingRowsForMonth(thisMonthKey);
   const owingNextMonthRows = owingRowsForMonth(nextMonthKey);
+  const owingIn3MonthsRows = owingRowsForMonth(threeMonthsKey);
   const owingThisMonth = owingThisMonthRows.reduce((s, r) => s + r.amount, 0);
   const owingNextMonth = owingNextMonthRows.reduce((s, r) => s + r.amount, 0);
+  const owingIn3Months = owingIn3MonthsRows.reduce((s, r) => s + r.amount, 0);
 
   // Expected profit: accepted quotes revenue vs their line item costs
   const acceptedQuotes = db.quotes.filter((q) => q.status === "Accepted");
@@ -10482,6 +10488,7 @@ function DashboardTab({ db, setTab, openRecord }) {
               { label: "Open POs", value: openPos, color: "#4a7ba7", rows: openPORows, isMoney: false },
               { label: "POs owing this month", value: owingThisMonth, color: "#b5552b", rows: owingThisMonthRows, isMoney: true },
               { label: "POs owing next month", value: owingNextMonth, color: "#5c7a4f", rows: owingNextMonthRows, isMoney: true },
+              { label: "POs owing in 3 months", value: owingIn3Months, color: "#4a6b7a", rows: owingIn3MonthsRows, isMoney: true },
             ].map(r => (
               <div key={r.label} onClick={() => setPoStatusDrillDown({ title: r.label, rows: r.rows })}
                 style={{ ...card, display: "flex", justifyContent: "space-between", alignItems: "center", cursor: "pointer" }}>
@@ -10932,6 +10939,13 @@ function DashboardTab({ db, setTab, openRecord }) {
             >
               <span>POs owing next month</span>
               <strong>{fmtMoney(owingNextMonth, "AUD")}</strong>
+            </div>
+            <div
+              onClick={() => setPoStatusDrillDown({ title: "POs owing in 3 months", rows: owingIn3MonthsRows })}
+              style={{ display: "flex", justifyContent: "space-between", fontSize: 13, cursor: "pointer" }}
+            >
+              <span>POs owing in 3 months</span>
+              <strong>{fmtMoney(owingIn3Months, "AUD")}</strong>
             </div>
           </div>
         </Panel>
