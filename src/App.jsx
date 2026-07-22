@@ -7207,7 +7207,7 @@ function ContactsTab({ kind, db, update, showToast, nextNumber, pendingOpen, cle
         if (editing) {
           // Convert to Supabase format and PATCH (WITHOUT updatedAt since column doesn't exist)
           const updatePayload = toSupabaseFormat(payload, table);
-          const result = await supabaseREST("PATCH", `${table}?id=eq.${editing.id}`, updatePayload);
+          const result = await supabaseRESTWithSchemaFallback("PATCH", `${table}?id=eq.${editing.id}`, updatePayload);
           // Use the full returned row to update local state so JSONB fields
           // like `activities` that aren't part of the form payload are preserved.
           const savedRow = Array.isArray(result) && result[0] ? result[0] : null;
