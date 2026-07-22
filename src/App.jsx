@@ -10,17 +10,33 @@ import html2pdf from "html2pdf.js";
 // Supabase REST API Configuration (from environment variables)
 const SUPABASE_URL = process.env.REACT_APP_SUPABASE_URL || "https://dpapwmittcowsrwwsajo.supabase.co";
 const SUPABASE_ANON_KEY = process.env.REACT_APP_SUPABASE_ANON_KEY || "sb_publishable_0m-oMR8pDlxdij36m4Fj9w_yAVcVIVn";
-const SUPABASE_HEADERS = {
-  "Content-Type": "application/json",
-  "apikey": SUPABASE_ANON_KEY,
-  "Prefer": "return=representation",
-};
+
+// Holds the current logged-in user's Supabase Auth JWT (access_token from the OTP
+// login flow) so that every REST/Storage request below is made AS that authenticated
+// user rather than as the bare anon key. This is required for any RLS policy that
+// checks auth.uid()/auth.role()='authenticated' to actually apply. Set via
+// setSupabaseAuthToken() whenever the app's session is loaded/refreshed, and cleared
+// (passing null) on logout — after which requests fall back to the anon key, so
+// RLS policies must not grant read/write to the anon role for these tables.
+let _supabaseAuthToken = null;
+function setSupabaseAuthToken(token) {
+  _supabaseAuthToken = token || null;
+}
+function getSupabaseHeaders(extra = {}) {
+  return {
+    "Content-Type": "application/json",
+    "apikey": SUPABASE_ANON_KEY,
+    "Authorization": `Bearer ${_supabaseAuthToken || SUPABASE_ANON_KEY}`,
+    "Prefer": "return=representation",
+    ...extra,
+  };
+}
 // ---- Supabase Storage helpers ----
 async function uploadAttachment(bucket, path, file) {
   const url = `${SUPABASE_URL}/storage/v1/object/${bucket}/${path}`;
   const resp = await fetch(url, {
     method: "POST",
-    headers: { "apikey": SUPABASE_ANON_KEY, "Authorization": `Bearer ${SUPABASE_ANON_KEY}`, "Content-Type": file.type },
+    headers: getSupabaseHeaders({ "Content-Type": file.type }),
     body: file,
   });
   if (!resp.ok) { const e = await resp.json(); throw new Error(e.message || "Upload failed"); }
@@ -29,7 +45,7 @@ async function uploadAttachment(bucket, path, file) {
 
 async function deleteAttachment(bucket, path) {
   const url = `${SUPABASE_URL}/storage/v1/object/${bucket}/${path}`;
-  await fetch(url, { method: "DELETE", headers: { "apikey": SUPABASE_ANON_KEY, "Authorization": `Bearer ${SUPABASE_ANON_KEY}` } });
+  await fetch(url, { method: "DELETE", headers: getSupabaseHeaders() });
 }
 
 
@@ -48,12 +64,12 @@ async function supabaseREST(method, table, data = null, filter = null) {
     
     const options = {
       method,
-      headers: SUPABASE_HEADERS,
+      headers: getSupabaseHeaders(),
     };
     
     if (data && (method === "POST" || method === "PATCH")) {
       options.body = JSON.stringify(data);
-      console.log(`📤 ${method} ${table} request:`, { url, headers: SUPABASE_HEADERS, body: data });
+      console.log(`📤 ${method} ${table} request:`, { url, authenticated: !!_supabaseAuthToken, body: data });
     }
     
     const response = await fetch(url, options);
@@ -1426,6 +1442,12 @@ export default function App() {
       return s?.username || null;
     } catch { return null; }
   });
+
+  // Keep every Supabase REST/Storage call authenticated as the current user —
+  // covers initial page load, login, session refresh, and sign-out in one place.
+  useEffect(() => {
+    setSupabaseAuthToken(authSession?.access_token || null);
+  }, [authSession]);
 
   const handleSignOut = useCallback(() => {
     localStorage.removeItem("am_session");
