@@ -1794,14 +1794,17 @@ export default function App() {
       <style>{globalCss}</style>
       <div className="app">
         <header className="top">
-          <div className="brand">
-            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <img src={AUSTRAL_LOGO} alt="Austral Motorhomes" style={{ height: 40, width: "auto", objectFit: "contain" }} />
-              <img src={PLATINUM_LOGO} alt="Platinum Pontoons" style={{ height: 40, width: "auto", objectFit: "contain" }} />
+          <div className="brand" style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, minWidth: 0 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+              <img src={AUSTRAL_LOGO} alt="Austral Motorhomes" style={{ height: 40, width: "auto", objectFit: "contain", flexShrink: 0 }} />
+              <div>
+                <h1 style={{ margin: 0 }}>Austral Motorhomes</h1>
+                <div className="sub">Supplier Pricing &amp; Order Manager</div>
+              </div>
             </div>
-            <div>
-              <h1>Austral Motorhomes & Platinum Pontoons</h1>
-              <div className="sub">Supplier Pricing &amp; Order Manager</div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+              <h1 style={{ margin: 0, textAlign: "right" }}>Platinum Pontoons</h1>
+              <img src={PLATINUM_LOGO} alt="Platinum Pontoons" style={{ height: 40, width: "auto", objectFit: "contain", flexShrink: 0 }} />
             </div>
           </div>
           <div className="header-utilities">
@@ -2229,6 +2232,11 @@ const globalCss = `
   .brand .sub{font-size:12px;color:#8a7a66;margin-top:1px;letter-spacing:.3px;}
   .header-utilities{display:flex;align-items:center;gap:10px;flex-wrap:wrap;}
   @media (max-width:600px){.header-utilities{width:100%;justify-content:flex-start;}}
+  @media (max-width:640px){
+    .brand{flex-wrap:wrap;row-gap:10px;}
+    .brand h1{font-size:17px;}
+    .brand > div:last-child{align-self:flex-end;}
+  }
   nav.tabs{
     display:flex;gap:4px;background:#eee3d1;padding:4px;border-radius:11px;
     margin:0 0 22px;overflow-x:auto;-webkit-overflow-scrolling:touch;
