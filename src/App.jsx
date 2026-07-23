@@ -2362,6 +2362,8 @@ const globalCss = `
   .doc-paper .grand{font-weight:800;font-size:18px;border-top:2px solid #b5552b;border-bottom:1px solid #e3d8c6;margin-top:20px;padding:16px 0;}
   @media print{
     .no-print{display:none !important;}
+    .pdf-line-item-group{page-break-inside:avoid;break-inside:avoid;}
+    .doc-paper thead{display:table-header-group;}
   }
   @media (max-width:640px){
     .section-header{flex-direction:column;align-items:flex-start;gap:6px;}
@@ -6066,7 +6068,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                 image: { type: "jpeg", quality: 0.98 },
                 html2canvas: { scale: 2 },
                 jsPDF: { orientation: "portrait", unit: "mm", format: "a4" },
-                pagebreak: { mode: ["css", "legacy"] },
+                pagebreak: { mode: ["css", "avoid-all", "legacy"], avoid: ["tr", "img"] },
               }).from(html, "string").save();
             };
 
@@ -6411,30 +6413,28 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                           <th className="num">Line total</th>
                         </tr>
                       </thead>
-                      <tbody>
-                        {previewLines.map((li, idx) => (
-                          <React.Fragment key={idx}>
-                            <tr>
-                              <td>{li.desc || <span className="muted">(no description)</span>}</td>
-                              <td className="num">{li.qty}</td>
-                              <td className="num">{fmtMoney(li.price, li.currency || "AUD")}</td>
-                              <td className="num">{fmtMoney(lineAudTotal(li), "AUD")}</td>
-                            </tr>
-                            {li.lineNote && li.lineNote.trim() && (() => {
-                              const bullets = li.lineNote.split("\n").map(l => l.trim()).filter(Boolean);
-                              return (
-                                <tr>
-                                  <td colSpan={4} style={{ paddingLeft: 24, paddingTop: 4, paddingBottom: 8, borderTop: "none" }}>
-                                    <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12, color: "#6b5240", lineHeight: 1.7 }}>
-                                      {bullets.map((b, bi) => <li key={bi}>{b}</li>)}
-                                    </ul>
-                                  </td>
-                                </tr>
-                              );
-                            })()}
-                          </React.Fragment>
-                        ))}
-                      </tbody>
+                      {previewLines.map((li, idx) => (
+                        <tbody key={idx} className="pdf-line-item-group">
+                          <tr>
+                            <td>{li.desc || <span className="muted">(no description)</span>}</td>
+                            <td className="num">{li.qty}</td>
+                            <td className="num">{fmtMoney(li.price, li.currency || "AUD")}</td>
+                            <td className="num">{fmtMoney(lineAudTotal(li), "AUD")}</td>
+                          </tr>
+                          {li.lineNote && li.lineNote.trim() && (() => {
+                            const bullets = li.lineNote.split("\n").map(l => l.trim()).filter(Boolean);
+                            return (
+                              <tr>
+                                <td colSpan={4} style={{ paddingLeft: 24, paddingTop: 4, paddingBottom: 8, borderTop: "none" }}>
+                                  <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12, color: "#6b5240", lineHeight: 1.7 }}>
+                                    {bullets.map((b, bi) => <li key={bi}>{b}</li>)}
+                                  </ul>
+                                </td>
+                              </tr>
+                            );
+                          })()}
+                        </tbody>
+                      ))}
                     </table>
                   )}
 
@@ -6661,7 +6661,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                       };
 
                       const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>*{margin:0;padding:0;box-sizing:border-box;}body{font-family:Georgia,serif;color:#2b2018;padding:40px;line-height:1.7;}</style></head><body>${allPOsForPDF.map((po, idx) => pageHtml(po, idx)).join("")}</body></html>`;
-                      html2pdf().set({ margin: 12, filename: `ConsolidatedPO-${stripPONum(editing.number)}.pdf`, image: { type: "jpeg", quality: 0.98 }, html2canvas: { scale: 2 }, jsPDF: { orientation: "portrait", unit: "mm", format: "a4" }, pagebreak: { mode: ["css", "legacy"] } }).from(html, "string").save();
+                      html2pdf().set({ margin: 12, filename: `ConsolidatedPO-${stripPONum(editing.number)}.pdf`, image: { type: "jpeg", quality: 0.98 }, html2canvas: { scale: 2 }, jsPDF: { orientation: "portrait", unit: "mm", format: "a4" }, pagebreak: { mode: ["css", "avoid-all", "legacy"], avoid: ["tr", "img"] } }).from(html, "string").save();
                       return;
                     }
 
@@ -6692,6 +6692,8 @@ th { text-align: left; border-bottom: 2px solid #b5552b; padding: 12px 12px 12px
 th.num { text-align: right; padding-right: 0; }
 td { padding: 14px 12px 14px 0; border-bottom: 1px solid #e3d8c6; font-size: 14px; }
 td.num { text-align: right; padding-right: 0; }
+thead { display: table-header-group; }
+.pdf-line-item-group { page-break-inside: avoid; break-inside: avoid; }
 .totals { margin: 40px 0; }
 .totals-row { display: flex; justify-content: space-between; padding: 10px 0; font-size: 14px; }
 .grand { font-weight: 800; font-size: 18px; border-top: 2px solid #b5552b; border-bottom: 1px solid #b5552b; padding: 16px 0; margin-top: 20px; }
@@ -6712,6 +6714,7 @@ ${clone?.innerHTML || ""}
                       image: { type: "jpeg", quality: 0.98 },
                       html2canvas: { scale: 2 },
                       jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
+                      pagebreak: { mode: ["css", "avoid-all", "legacy"], avoid: [".pdf-line-item-group", "tr", "img"] },
                     }).from(html, "string");
 
                     if (isMobile) {
