@@ -6074,7 +6074,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                 image: { type: "jpeg", quality: 0.98 },
                 html2canvas: { scale: 2 },
                 jsPDF: { orientation: "portrait", unit: "mm", format: "a4" },
-                pagebreak: { mode: ["css", "avoid-all", "legacy"], avoid: ["tr", "img"] },
+                pagebreak: { mode: ["css", "legacy"], avoid: ["tr", "img"] },
               }).from(html, "string").save();
             };
 
@@ -6694,7 +6694,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                       };
 
                       const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>*{margin:0;padding:0;box-sizing:border-box;}body{font-family:Georgia,serif;color:#2b2018;padding:40px;line-height:1.7;}</style></head><body>${allPOsForPDF.map((po, idx) => pageHtml(po, idx)).join("")}</body></html>`;
-                      html2pdf().set({ margin: 12, filename: `ConsolidatedPO-${stripPONum(editing.number)}.pdf`, image: { type: "jpeg", quality: 0.98 }, html2canvas: { scale: 2 }, jsPDF: { orientation: "portrait", unit: "mm", format: "a4" }, pagebreak: { mode: ["css", "avoid-all", "legacy"], avoid: ["tr", "img"] } }).from(html, "string").save();
+                      html2pdf().set({ margin: 12, filename: `ConsolidatedPO-${stripPONum(editing.number)}.pdf`, image: { type: "jpeg", quality: 0.98 }, html2canvas: { scale: 2 }, jsPDF: { orientation: "portrait", unit: "mm", format: "a4" }, pagebreak: { mode: ["css", "legacy"], avoid: ["tr", "img"] } }).from(html, "string").save();
                       return;
                     }
 
@@ -6747,7 +6747,7 @@ ${clone?.innerHTML || ""}
                       image: { type: "jpeg", quality: 0.98 },
                       html2canvas: { scale: 2 },
                       jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
-                      pagebreak: { mode: ["css", "avoid-all", "legacy"], avoid: [".pdf-line-item-group", "tr", "img"] },
+                      pagebreak: { mode: ["css", "legacy"], avoid: [".pdf-line-item-group", "tr", "img"] },
                     }).from(html, "string");
 
                     if (isMobile) {
