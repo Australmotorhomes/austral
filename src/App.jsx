@@ -6008,6 +6008,14 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                 }).join("");
 
                 const sn = poSupplierNoteVal(po);
+                const isAustralPo = /austral/i.test(po.model || "") || poLines(po).some(li => /austral/i.test(li.desc || li.description || ""));
+                const brandHeaderHtml = isAustralPo
+                  ? `<img src="${AUSTRAL_LOGO}" alt="Austral Motorhomes" style="height:60px;width:auto;object-fit:contain;margin-bottom:4px;">
+                     <div style="font-family:Georgia,serif;font-weight:700;font-size:15px;color:#2b2018;margin-top:2px;">Austral Motorhomes</div>
+                     <div style="font-size:11px;color:#8a7a66;line-height:1.5;">Kunda Park, QLD<br>sales@australmotorhomes.com.au<br>www.australmotorhomes.com.au<br>1300 484 844</div>`
+                  : `<img src="${AUSTRAL_LOGO}" alt="Austral Motorhomes" style="height:40px;width:auto;object-fit:contain;margin-bottom:4px;">
+                     <img src="${PLATINUM_LOGO}" alt="Platinum Pontoons" style="height:40px;width:auto;object-fit:contain;margin-bottom:4px;">
+                     <div style="font-size:11px;color:#8a7a66;">Kunda Park, QLD</div>`;
 
                 return `
                   <div style="${idx > 0 ? "page-break-before:always;" : ""}padding-top:${idx > 0 ? "30px" : "0"}">
@@ -6019,9 +6027,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                         <div style="font-size:12px;color:#8a7a66;margin-top:2px;">${poDate(po)}</div>
                       </div>
                       <div style="text-align:right;">
-                        <img src="${AUSTRAL_LOGO}" alt="Austral Motorhomes" style="height:40px;width:auto;object-fit:contain;margin-bottom:4px;">
-                        <img src="${PLATINUM_LOGO}" alt="Platinum Pontoons" style="height:40px;width:auto;object-fit:contain;margin-bottom:4px;">
-                        <div style="font-size:11px;color:#8a7a66;">Kunda Park, QLD</div>
+                        ${brandHeaderHtml}
                       </div>
                     </div>
                     <!-- Meta -->
@@ -6317,6 +6323,14 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
               const previewDiscount = isConsolidated && activePo?.id !== editing?.id
                 ? (activePo?.discount || 0) : discountNum;
 
+              // Detect whether this quote/PO is for an Austral Motorhomes product —
+              // either the document's own Reference/model field names it, or one of
+              // its line items does (e.g. "Austral Savanna — 3000w inverter"). When
+              // true, show the full Austral letterhead (name, logo, address, email,
+              // website, phone) instead of the plain two-logo header.
+              const activeDocModel = (isConsolidated && activePo?.id !== editing?.id) ? (activePo?.model || "") : model;
+              const showAustralLetterhead = /austral/i.test(activeDocModel || "") || previewLines.some(l => /austral/i.test(l.desc || l.description || ""));
+
               return (
                 <>
                   <div className="doc-header">
@@ -6369,11 +6383,26 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                       </div>
                     </div>
                     <div style={{ textAlign: "right", display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 4 }}>
-                      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                        <img src={AUSTRAL_LOGO} alt="Austral Motorhomes" style={{ height: 36, width: "auto", objectFit: "contain" }} />
-                        <img src={PLATINUM_LOGO} alt="Platinum Pontoons" style={{ height: 36, width: "auto", objectFit: "contain" }} />
-                      </div>
-                      <span className="muted" style={{ fontSize: 11 }}>Kunda Park, QLD</span>
+                      {showAustralLetterhead ? (
+                        <>
+                          <img src={AUSTRAL_LOGO} alt="Austral Motorhomes" style={{ height: 60, width: "auto", objectFit: "contain" }} />
+                          <div style={{ fontFamily: "Georgia,serif", fontWeight: 700, fontSize: 15, color: "#2b2018", marginTop: 2 }}>Austral Motorhomes</div>
+                          <div className="muted" style={{ fontSize: 11, lineHeight: 1.5 }}>
+                            Kunda Park, QLD<br />
+                            sales@australmotorhomes.com.au<br />
+                            www.australmotorhomes.com.au<br />
+                            1300 484 844
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                            <img src={AUSTRAL_LOGO} alt="Austral Motorhomes" style={{ height: 36, width: "auto", objectFit: "contain" }} />
+                            <img src={PLATINUM_LOGO} alt="Platinum Pontoons" style={{ height: 36, width: "auto", objectFit: "contain" }} />
+                          </div>
+                          <span className="muted" style={{ fontSize: 11 }}>Kunda Park, QLD</span>
+                        </>
+                      )}
                     </div>
                   </div>
 
@@ -6633,13 +6662,17 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                           </tr>`;
                         }).join("");
                         const sn = pdfSupplierNote(po);
+                        const isAustralPo2 = /austral/i.test(po.model || "") || poLns.some(li => /austral/i.test(li.desc || li.description || ""));
+                        const brandHeaderHtml2 = isAustralPo2
+                          ? `<img src="${AUSTRAL_LOGO}" alt="Austral Motorhomes" style="height:60px;width:auto;object-fit:contain;display:block;margin-left:auto;"><div style="font-family:Georgia,serif;font-weight:700;font-size:15px;color:#2b2018;margin-top:2px;">Austral Motorhomes</div><div style="font-size:11px;color:#8a7a66;line-height:1.5;">Kunda Park, QLD<br>sales@australmotorhomes.com.au<br>www.australmotorhomes.com.au<br>1300 484 844</div>`
+                          : `<img src="${AUSTRAL_LOGO}" alt="Austral Motorhomes" style="height:38px;width:auto;object-fit:contain;display:block;margin-left:auto;"><img src="${PLATINUM_LOGO}" alt="Platinum Pontoons" style="height:38px;width:auto;object-fit:contain;display:block;margin-left:auto;"><div style="font-size:11px;color:#8a7a66;">Kunda Park, QLD</div>`;
                         return `<div style="${idx > 0 ? "page-break-before:always;padding-top:30px;" : ""}">
                           <div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #b5552b;padding-bottom:20px;margin-bottom:20px;">
                             <div><div style="font-size:26px;font-weight:700;color:#2b2018;margin-bottom:6px;">Purchase Order</div>
                               <div style="font-size:14px;font-weight:600;color:#6b5240;">PO-${stripPONum(po.number)}</div>
                               <div style="font-size:12px;color:#8a7a66;margin-top:2px;">${pdfDate(po)}</div>
                             </div>
-                            <div style="text-align:right;"><img src="${AUSTRAL_LOGO}" alt="Austral Motorhomes" style="height:38px;width:auto;object-fit:contain;display:block;margin-left:auto;"><img src="${PLATINUM_LOGO}" alt="Platinum Pontoons" style="height:38px;width:auto;object-fit:contain;display:block;margin-left:auto;"><div style="font-size:11px;color:#8a7a66;">Kunda Park, QLD</div></div>
+                            <div style="text-align:right;">${brandHeaderHtml2}</div>
                           </div>
                           <div style="font-size:13px;margin-bottom:20px;line-height:1.8;">${party ? `<span><b>Supplier:</b> ${party}</span>&nbsp;&nbsp;` : ""}${po.customer ? `<span><b>Customer:</b> ${po.customer}</span>&nbsp;&nbsp;` : ""}${model ? `<span><b>Reference:</b> ${model}</span>&nbsp;&nbsp;` : ""}${contact ? `<br><span><b>Contact:</b> ${contact}</span>&nbsp;&nbsp;` : ""}${eta ? `<span><b>ETA:</b> ${eta}</span>` : ""}</div>
                           <table style="width:100%;border-collapse:collapse;margin-bottom:20px;">
