@@ -6716,7 +6716,8 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
 <style>
 * { margin: 0; padding: 0; }
 body { font-family: Georgia, serif; color: #2b2018; padding: 40px; line-height: 1.7; }
-.doc-header { border-bottom: 3px solid #b5552b; padding-bottom: 30px; margin-bottom: 40px; }
+.doc-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; border-bottom: 3px solid #b5552b; padding-bottom: 30px; margin-bottom: 40px; }
+.doc-meta { display: flex; gap: 18px; flex-wrap: wrap; font-size: 12.5px; color: #8a7a66; margin-bottom: 14px; }
 h2 { font-size: 26px; font-weight: 700; margin-bottom: 8px; }
 .doc-info { margin: 20px 0; font-size: 14px; }
 .doc-info p { margin: 6px 0; }
