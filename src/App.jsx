@@ -10345,6 +10345,29 @@ function DashboardTab({ db, setTab, openRecord }) {
     .sort((a, b) => (a.eta || "9999").localeCompare(b.eta || "9999"));
   const intlShippingTotal = intlShippingRows.reduce((s, r) => s + r.value, 0);
 
+  // Domestic shipping — same shape as International shipping above, but for
+  // top-level POs / consolidated groups where NO PO in the group has a
+  // freight forwarding fee.
+  const domesticShippingRows = db.pos
+    .filter((po) => !po.consolidatedGroupId)
+    .map((po) => {
+      const members = (po.consolidatedMemberIds || []).length > 0
+        ? db.pos.filter((p) => (po.consolidatedMemberIds || []).includes(p.id))
+        : [];
+      const allPOs = members.length ? [po, ...members] : [po];
+      return { po, allPOs };
+    })
+    .filter(({ allPOs }) => !allPOs.some((p) => (parseFloat(p.customsClearance) || 0) > 0))
+    .map(({ po, allPOs }) => {
+      const stripPONum = (n) => String(n).replace(/^PO-?/i, "");
+      const poLabel = `PO-${stripPONum(po.number)}${allPOs.length > 1 ? `/${allPOs.slice(1).map((m) => stripPONum(m.number)).join("/")}` : ""}`;
+      const eta = allPOs.map((p) => p.eta).filter(Boolean).sort()[0] || null;
+      const value = allPOs.reduce((s, p) => s + (parseFloat(p.total) || 0), 0);
+      return { id: po.id, supplier: po.party || "Unknown", poLabel, eta, value };
+    })
+    .sort((a, b) => (a.eta || "9999").localeCompare(b.eta || "9999"));
+  const domesticShippingTotal = domesticShippingRows.reduce((s, r) => s + r.value, 0);
+
   // Expected profit: accepted quotes revenue vs their line item costs
   const acceptedQuotes = db.quotes.filter((q) => q.status === "Accepted");
   const acceptedQuotesTotal = acceptedQuotes.reduce((sum, q) => sum + (q.total || 0), 0);
@@ -10499,8 +10522,8 @@ function DashboardTab({ db, setTab, openRecord }) {
     const unpaidDepositRows = depositRows.filter(r => !r.paid);
     const paidDepositRows = depositRows.filter(r => r.paid);
 
-    const totalPages = 7 + mobileShipments.length;
-    const pageTitles = ["Sales Performance", "Deposits", "Stock", "Sales by Model", "Sales Funnel", "PO Status", "International Shipping",
+    const totalPages = 8 + mobileShipments.length;
+    const pageTitles = ["Sales Performance", "Deposits", "Stock", "Sales by Model", "Sales Funnel", "PO Status", "International Shipping", "Domestic Shipping",
       ...mobileShipments.map(g => g.supplier)];
 
     const handleTouchStart = (e) => { touchStartX.current = e.touches[0].clientX; };
@@ -10753,7 +10776,32 @@ function DashboardTab({ db, setTab, openRecord }) {
             </div>
           </div>
 
-          {/* PAGES 8+ — One page per supplier, all their POs scrollable */}
+          {/* PAGE 8 — Domestic shipping */}
+          <div style={page}>
+            {domesticShippingRows.length === 0 ? (
+              <p style={{ fontSize: 13, color: "#8a7a66", textAlign: "center" }}>No domestic shipments.</p>
+            ) : (
+              domesticShippingRows.map((r) => (
+                <div key={r.id} onClick={() => openRecord && openRecord("po", r.id)}
+                  style={{ ...card, display: "flex", justifyContent: "space-between", alignItems: "flex-start", cursor: "pointer" }}>
+                  <div>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: "#4a3527" }}>{r.supplier}</div>
+                    <div style={{ fontSize: 12, color: "#8a7a66", marginTop: 2 }}>{r.poLabel}</div>
+                  </div>
+                  <div style={{ textAlign: "right" }}>
+                    <div style={{ fontSize: 11, color: "#8a7a66" }}>ETA</div>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: "#4a3527" }}>{fmtD(r.eta)}</div>
+                  </div>
+                </div>
+              ))
+            )}
+            <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 4px", fontSize: 14, fontWeight: 700, color: "#4a3527", borderTop: "2px solid #b5552b", marginTop: 4 }}>
+              <span>Total value</span>
+              <span>{fmtMoney(domesticShippingTotal, "AUD")}</span>
+            </div>
+          </div>
+
+          {/* PAGES 9+ — One page per supplier, all their POs scrollable */}
           {mobileShipments.map(({ supplier, pos: supplierPOs }) => {
             const fmtD = (d) => d ? new Date(d).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" }) : "—";
             const stripPO = (n) => String(n).replace(/^PO-?/i, "");
@@ -11279,6 +11327,36 @@ function DashboardTab({ db, setTab, openRecord }) {
             <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, fontWeight: 700, paddingTop: 8, marginTop: 4, borderTop: "2px solid #b5552b" }}>
               <span>Total value</span>
               <strong>{fmtMoney(intlShippingTotal, "AUD")}</strong>
+            </div>
+          </div>
+        </Panel>
+
+        <Panel>
+          <h3 style={{ fontFamily: "Georgia,serif", fontSize: 16, color: "#4a3527", margin: "0 0 12px" }}>Domestic shipping</h3>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {domesticShippingRows.length === 0 ? (
+              <p className="muted" style={{ fontSize: 13, margin: 0 }}>No domestic shipments.</p>
+            ) : (
+              domesticShippingRows.map((r) => (
+                <div
+                  key={r.id}
+                  onClick={() => openRecord && openRecord("po", r.id)}
+                  style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", fontSize: 13, cursor: openRecord ? "pointer" : "default" }}
+                >
+                  <div>
+                    <div style={{ fontWeight: 600, color: "#4a3527" }}>{r.supplier}</div>
+                    <div style={{ fontSize: 11, color: "#8a7a66" }}>{r.poLabel}</div>
+                  </div>
+                  <div style={{ textAlign: "right" }}>
+                    <div style={{ fontSize: 11, color: "#8a7a66" }}>ETA</div>
+                    <div style={{ fontWeight: 600 }}>{r.eta ? new Date(r.eta).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" }) : "—"}</div>
+                  </div>
+                </div>
+              ))
+            )}
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, fontWeight: 700, paddingTop: 8, marginTop: 4, borderTop: "2px solid #b5552b" }}>
+              <span>Total value</span>
+              <strong>{fmtMoney(domesticShippingTotal, "AUD")}</strong>
             </div>
           </div>
         </Panel>
@@ -11884,7 +11962,8 @@ function ShipmentsTab({ db, update, showToast, openRecord }) {
   const [editingShipment, setEditingShipment] = useState(undefined);
   const isMobile = useIsMobile();
 
-  const allPOs = (db.pos || []).filter((po) => !po.consolidatedGroupId);  // Exclude member POs
+  const allPOs = (db.pos || []).filter((po) => !po.consolidatedGroupId && ["Sent", "Accepted", "Paid"].includes(po.status));  // Exclude member POs, and any not Sent/Accepted/Paid (Draft, Received, Cancelled)
+  const shipmentStatusLabel = (s) => s === "Accepted" ? "In Transit" : s;
   const shipmentsWithPayments = allPOs.map(po => {
     const paymentMilestones = po.paymentMilestones || [];
     const totalDue = paymentMilestones.reduce((sum, m) => sum + (parseFloat(m.amount) || 0), 0) || po.total || 0;
@@ -11925,7 +12004,7 @@ function ShipmentsTab({ db, update, showToast, openRecord }) {
                   <div>
                     <div style={{ fontSize: 14, fontWeight: 700, color: "#4a3527" }}>PO #{po.number} · {po.party}</div>
                     <div style={{ fontSize: 12, color: "#8a7a66", marginTop: 2 }}>
-                      {po.status} · {(po.totalDue || 0).toLocaleString("en-AU", { style: "currency", currency: "AUD" })}
+                      {shipmentStatusLabel(po.status)} · {(po.totalDue || 0).toLocaleString("en-AU", { style: "currency", currency: "AUD" })}
                     </div>
                   </div>
                   <span style={{ color: "#b5552b", fontSize: 18 }}>{editingShipment?.id === po.id ? "▾" : "›"}</span>
@@ -11935,7 +12014,7 @@ function ShipmentsTab({ db, update, showToast, openRecord }) {
                     {[
                       { label: "Supplier", value: po.party },
                       { label: "Customer", value: po.customer || "—" },
-                      { label: "Status", value: po.status },
+                      { label: "Status", value: shipmentStatusLabel(po.status) },
                       { label: "Total", value: (po.totalDue || 0).toLocaleString("en-AU", { style: "currency", currency: "AUD" }) },
                       { label: "Paid", value: (po.totalPaid || 0).toLocaleString("en-AU", { style: "currency", currency: "AUD" }) },
                       { label: "Owed", value: (po.amountOwed || 0).toLocaleString("en-AU", { style: "currency", currency: "AUD" }) },
@@ -12007,7 +12086,7 @@ function ShipmentsTab({ db, update, showToast, openRecord }) {
                         fontSize: "11px",
                         fontWeight: 600
                       }}>
-                        {po.status}
+                        {shipmentStatusLabel(po.status)}
                       </span>
                     </td>
                     <td style={{ padding: "12px 8px", fontSize: 13, color: "#4a3527" }}>
