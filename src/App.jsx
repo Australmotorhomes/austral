@@ -11962,7 +11962,11 @@ function ShipmentsTab({ db, update, showToast, openRecord }) {
   const [editingShipment, setEditingShipment] = useState(undefined);
   const isMobile = useIsMobile();
 
-  const allPOs = (db.pos || []).filter((po) => !po.consolidatedGroupId && ["Sent", "Accepted", "Paid"].includes(po.status));  // Exclude member POs, and any not Sent/Accepted/Paid (Draft, Received, Cancelled)
+  const allPOs = (db.pos || []).filter((po) =>
+    !po.consolidatedGroupId &&
+    ["Sent", "Accepted", "Paid"].includes(po.status) &&
+    (parseFloat(po.customsClearance) || 0) === 0
+  );  // Exclude member POs, non-Sent/Accepted/Paid POs, and anything with a freight forwarding fee (that's covered by the Shipping tab's International section)
   const shipmentStatusLabel = (s) => s === "Accepted" ? "In Transit" : s;
   const shipmentsWithPayments = allPOs.map(po => {
     const paymentMilestones = po.paymentMilestones || [];
@@ -11985,7 +11989,7 @@ function ShipmentsTab({ db, update, showToast, openRecord }) {
     <section>
       <div className="section-header">
         <h2 className="section-title">Shipments</h2>
-        <p className="section-desc">Track supplier purchase orders, delivery dates, and payment schedules</p>
+        <p className="section-desc">Domestic purchase orders (no freight forwarding fee) — delivery dates and payment schedules. International shipments are tracked on the Shipping tab.</p>
       </div>
 
       <div className="content-area">
@@ -12058,7 +12062,6 @@ function ShipmentsTab({ db, update, showToast, openRecord }) {
                   <th style={{ textAlign: "right", padding: "12px 8px", fontSize: 12, fontWeight: 700, borderBottom: "2px solid #b5552b" }}>Total</th>
                   <th style={{ textAlign: "right", padding: "12px 8px", fontSize: 12, fontWeight: 700, borderBottom: "2px solid #b5552b" }}>Paid</th>
                   <th style={{ textAlign: "right", padding: "12px 8px", fontSize: 12, fontWeight: 700, borderBottom: "2px solid #b5552b" }}>Owed</th>
-                  <th style={{ textAlign: "right", padding: "12px 8px", fontSize: 12, fontWeight: 700, borderBottom: "2px solid #b5552b" }}>Customs</th>
                 </tr>
               </thead>
               <tbody>
@@ -12100,9 +12103,6 @@ function ShipmentsTab({ db, update, showToast, openRecord }) {
                     </td>
                     <td style={{ padding: "12px 8px", fontSize: 13, color: po.amountOwed > 0 ? "#a3442e" : "#5c7a4f", textAlign: "right", fontWeight: 600 }}>
                       {(po.amountOwed || 0).toLocaleString('en-AU', { style: 'currency', currency: 'AUD' })}
-                    </td>
-                    <td style={{ padding: "12px 8px", fontSize: 13, color: "#4a3527", textAlign: "right" }}>
-                      {(po.customsClearance || 0).toLocaleString('en-AU', { style: 'currency', currency: 'AUD' })}
                     </td>
                   </tr>
                 ))}
