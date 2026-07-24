@@ -782,15 +782,16 @@ function fmtMoney(n, currency = "AUD") {
   const symbol = currency === "USD" ? "US$" : "$";
   return symbol + n.toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
-// POs used to have a status called "Accepted"; it's now called "In Transit"
-// (Quotes still have their own separate "Accepted" status — unaffected).
-// Existing PO records saved before this rename still have status:"Accepted"
+// POs used to have statuses called "Accepted" and "Sent"; both are now
+// merged into a single "In Transit" status (Quotes still have their own
+// separate "Accepted"/"Sent" statuses — unaffected). Existing PO records
+// saved before this rename still have status:"Accepted" or status:"Sent"
 // in the database, so every place that displays or filters a PO's status
 // should read it through this helper rather than comparing the raw field —
 // that way old records keep working correctly without a manual data fix,
 // and any PO status editor re-saves it as "In Transit" going forward.
 function normalizePOStatus(s) {
-  return s === "Accepted" ? "In Transit" : s;
+  return (s === "Accepted" || s === "Sent") ? "In Transit" : s;
 }
 function fmtDate(iso) {
   if (!iso) return "—";
@@ -3763,7 +3764,7 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
 
   const collection = isQuote ? db.quotes : db.pos;
 
-  const statusOptions = isQuote ? ["Draft", "Sent", "Accepted", "Declined", "Delivered"] : ["Draft", "Sent", "In Transit", "Paid", "Received", "Cancelled"];
+  const statusOptions = isQuote ? ["Draft", "Sent", "Accepted", "Declined", "Delivered"] : ["Draft", "Paid", "In Transit", "Received", "Cancelled"];
   // POs saved before the "Accepted" → "In Transit" rename still have the old
   // value in the database — read status through this so filtering/searching/
   // display all agree on the current name. Quotes are untouched.
@@ -5335,7 +5336,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                 </Field>
                 <Field label="Status">
                   <select style={inputStyle} value={mStatus} onChange={e => mark(setMStatus)(e.target.value)}>
-                    {["Draft","Sent","In Transit","Paid","Received","Cancelled"].map(s => <option key={s} value={s}>{s}</option>)}
+                    {["Draft","Paid","In Transit","Received","Cancelled"].map(s => <option key={s} value={s}>{s}</option>)}
                   </select>
                 </Field>
               </Panel>
@@ -10302,8 +10303,9 @@ function DashboardTab({ db, setTab, openRecord }) {
 
   // Amount owing on POs, grouped by the calendar month each unpaid payment
   // milestone (schedule line) is actually due — not the PO's ETA. Only POs
-  // still in Draft or Sent status count (Accepted/Paid/Received/Cancelled
-  // are excluded — those are either already settled or no longer pending).
+  // still in Draft status count (or legacy "Sent" records not yet resaved
+  // under the new status list) — In Transit/Paid/Received/Cancelled are
+  // excluded, since those are either already settled or no longer pending.
   const nowForPOs = new Date();
   const thisMonthKey = `${nowForPOs.getFullYear()}-${String(nowForPOs.getMonth() + 1).padStart(2, "0")}`;
   const nextMonthDateForPOs = new Date(nowForPOs.getFullYear(), nowForPOs.getMonth() + 1, 1);
@@ -11983,7 +11985,7 @@ function ShipmentsTab({ db, update, showToast, openRecord }) {
 
   const eligiblePOs = (db.pos || []).filter((po) =>
     !po.consolidatedGroupId &&
-    ["Sent", "In Transit", "Paid"].includes(normalizePOStatus(po.status))
+    ["In Transit", "Paid"].includes(normalizePOStatus(po.status))
   ); // Exclude member POs (shown under their consolidated parent) and non-active statuses
   const shipmentStatusLabel = normalizePOStatus;
 
