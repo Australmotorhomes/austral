@@ -782,6 +782,16 @@ function fmtMoney(n, currency = "AUD") {
   const symbol = currency === "USD" ? "US$" : "$";
   return symbol + n.toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
+// POs used to have a status called "Accepted"; it's now called "In Transit"
+// (Quotes still have their own separate "Accepted" status — unaffected).
+// Existing PO records saved before this rename still have status:"Accepted"
+// in the database, so every place that displays or filters a PO's status
+// should read it through this helper rather than comparing the raw field —
+// that way old records keep working correctly without a manual data fix,
+// and any PO status editor re-saves it as "In Transit" going forward.
+function normalizePOStatus(s) {
+  return s === "Accepted" ? "In Transit" : s;
+}
 function fmtDate(iso) {
   if (!iso) return "—";
   const d = new Date(iso);
@@ -929,6 +939,7 @@ function Badge({ children, tone = "model" }) {
     draft: { bg: "#ece4d6", fg: "#6b5240" },
     sent: { bg: "#e0e9f0", fg: "#3a5d78" },
     accepted: { bg: "#e3ecdc", fg: "#5c7a4f" },
+    "in transit": { bg: "#e3ecdc", fg: "#5c7a4f" },
     received: { bg: "#e3ecdc", fg: "#5c7a4f" },
     declined: { bg: "#f5e2dd", fg: "#a3442e" },
     cancelled: { bg: "#f5e2dd", fg: "#a3442e" },
@@ -3752,7 +3763,11 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
 
   const collection = isQuote ? db.quotes : db.pos;
 
-  const statusOptions = isQuote ? ["Draft", "Sent", "Accepted", "Declined", "Delivered"] : ["Draft", "Sent", "Accepted", "Paid", "Received", "Cancelled"];
+  const statusOptions = isQuote ? ["Draft", "Sent", "Accepted", "Declined", "Delivered"] : ["Draft", "Sent", "In Transit", "Paid", "Received", "Cancelled"];
+  // POs saved before the "Accepted" → "In Transit" rename still have the old
+  // value in the database — read status through this so filtering/searching/
+  // display all agree on the current name. Quotes are untouched.
+  const displayStatus = (d) => (isQuote ? d.status : normalizePOStatus(d.status));
 
   let list = collection.slice();
   // Hide individual POs that have been absorbed into a consolidated group
@@ -3766,7 +3781,7 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
         d.model,
         d.contact,
         d.notes,
-        d.status,
+        displayStatus(d),
         d.customer,
         ...(d.lines || []).map((l) => l.desc),
         ...(d.lines || []).map((l) => l.lineNote),
@@ -3782,7 +3797,7 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
   if (statusFilter === "archived") {
     list = list.filter((d) => d.archived);
   } else if (statusFilter && !search) {
-    list = list.filter((d) => d.status === statusFilter);
+    list = list.filter((d) => displayStatus(d) === statusFilter);
   }
 
   // Filter out archived unless searching or viewing archived filter
@@ -4646,7 +4661,7 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
                     )}
                   </div>
                   <div style={{ fontSize: 12, color: "#8a7a66", marginTop: 2, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                    <Badge tone={d.status.toLowerCase()}>{d.status}</Badge>
+                    <Badge tone={displayStatus(d).toLowerCase()}>{displayStatus(d)}</Badge>
                     <span>{fmtMoney(d.total)}</span>
                     {d.eta && <span>ETA {fmtDate(d.eta)}</span>}
                   </div>
@@ -4697,7 +4712,7 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
                     <td className="muted">{d.eta ? fmtDate(d.eta) : <span className="muted">—</span>}</td>
                     <td className="num">{fmtMoney(d.total)}</td>
                     <td>
-                      <Badge tone={d.status.toLowerCase()}>{d.status}</Badge>
+                      <Badge tone={displayStatus(d).toLowerCase()}>{displayStatus(d)}</Badge>
                     </td>
                     <td style={{ whiteSpace: "nowrap" }}>
                       <button
@@ -4738,7 +4753,7 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
                   #{d.number} · {d.party}
                 </div>
                 <div style={{ fontSize: 12, color: "#8a7a66", marginTop: 2, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-                  <Badge tone={d.status.toLowerCase()}>{d.status}</Badge>
+                  <Badge tone={displayStatus(d).toLowerCase()}>{displayStatus(d)}</Badge>
                   {d.model && <Badge tone="model">{d.model}</Badge>}
                   <span>{fmtMoney(d.total)}</span>
                 </div>
@@ -4787,7 +4802,7 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
                   <td className="muted">{fmtDate(d.date)}</td>
                   <td className="num">{fmtMoney(d.total)}</td>
                   <td>
-                    <Badge tone={d.status.toLowerCase()}>{d.status}</Badge>
+                    <Badge tone={displayStatus(d).toLowerCase()}>{displayStatus(d)}</Badge>
                     {!isQuote && d.consolidatedMemberIds?.length > 0 && (
                       <span style={{ marginLeft: 6, fontSize: 10, background: "#d4a574", color: "#fff", borderRadius: 3, padding: "1px 5px", fontWeight: 600 }}>
                         ⊕ {d.consolidatedMemberIds.length + 1} POs
@@ -4985,7 +5000,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
       ? JSON.parse(JSON.stringify(editing.lines)).map((l) => ({ currency: "AUD", ...l }))
       : []
   );
-  const [status, setStatusLocal] = useState(editing ? editing.status : "Draft");
+  const [status, setStatusLocal] = useState(editing ? (isQuote ? editing.status : normalizePOStatus(editing.status)) : "Draft");
   const [pickerValue, setPickerValue] = useState("");
   const [showQuickAddItem, setShowQuickAddItem] = useState(false);
   const [error, setError] = useState("");
@@ -5032,7 +5047,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
       setMParty(activeMember.party || "");
       setMContact(activeMember.contact || "");
       setMEta(activeMember.eta || "");
-      setMStatus(activeMember.status || "Draft");
+      setMStatus(normalizePOStatus(activeMember.status) || "Draft");
       setMMilestones(activeMember.paymentMilestones || []);
       setMNotes(activeMember.notes || "");
       setMDirty(false);
@@ -5320,7 +5335,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                 </Field>
                 <Field label="Status">
                   <select style={inputStyle} value={mStatus} onChange={e => mark(setMStatus)(e.target.value)}>
-                    {["Draft","Sent","Accepted","Paid","Received","Cancelled"].map(s => <option key={s} value={s}>{s}</option>)}
+                    {["Draft","Sent","In Transit","Paid","Received","Cancelled"].map(s => <option key={s} value={s}>{s}</option>)}
                   </select>
                 </Field>
               </Panel>
@@ -6871,7 +6886,7 @@ ${clone?.innerHTML || ""}
                         {po.customer && `Customer: ${po.customer}`}
                         {po.quoteNumber && ` · Quote ${po.quoteNumber}`}
                         {` · $${(po.total || 0).toLocaleString()}`}
-                        {` · ${po.status}`}
+                        {` · ${normalizePOStatus(po.status)}`}
                       </div>
                     </div>
                   </label>
@@ -10324,9 +10339,11 @@ function DashboardTab({ db, setTab, openRecord }) {
   // International shipping — top-level POs / consolidated groups that have a
   // freight forwarding fee anywhere in the group, for the Dashboard summary
   // panel. Unlike the full Shipping tab, a consolidated group collapses to a
-  // single row here (no separate constituent-PO detail).
+  // single row here (no separate constituent-PO detail). Received/Cancelled
+  // POs are excluded — once a shipment has arrived (or was cancelled) it's no
+  // longer "in shipping".
   const intlShippingRows = db.pos
-    .filter((po) => !po.consolidatedGroupId)
+    .filter((po) => !po.consolidatedGroupId && !["Received", "Cancelled"].includes(po.status))
     .map((po) => {
       const members = (po.consolidatedMemberIds || []).length > 0
         ? db.pos.filter((p) => (po.consolidatedMemberIds || []).includes(p.id))
@@ -10347,9 +10364,9 @@ function DashboardTab({ db, setTab, openRecord }) {
 
   // Domestic shipping — same shape as International shipping above, but for
   // top-level POs / consolidated groups where NO PO in the group has a
-  // freight forwarding fee.
+  // freight forwarding fee. Same Received/Cancelled exclusion as above.
   const domesticShippingRows = db.pos
-    .filter((po) => !po.consolidatedGroupId)
+    .filter((po) => !po.consolidatedGroupId && !["Received", "Cancelled"].includes(po.status))
     .map((po) => {
       const members = (po.consolidatedMemberIds || []).length > 0
         ? db.pos.filter((p) => (po.consolidatedMemberIds || []).includes(p.id))
@@ -11609,10 +11626,10 @@ function DashboardTab({ db, setTab, openRecord }) {
           <ToggleSwitch checked={!shipmentsDueCollapsed} onChange={() => setShipmentsDueCollapsed(v => !v)} label="Show Shipments due" />
         </div>
         {!shipmentsDueCollapsed && (() => {
-          // Show only POs with a Freight Forward fee — indicates containers arriving at port
+          // Show only POs with a Freight Forward fee, not yet received — indicates containers still arriving at port
           const shipments = (db.pos || []).filter((po) =>
             (po.customsClearance || 0) > 0 &&
-            po.status !== "Cancelled"
+            !["Cancelled", "Received"].includes(po.status)
           );
 
           if (shipments.length === 0) {
@@ -11867,9 +11884,11 @@ function ShippingTab({ db, openRecord }) {
 
   // Build one group per top-level PO (standalone or consolidated primary) —
   // members of a consolidated group are hidden from the main POs list, so we
-  // rebuild them here from consolidatedMemberIds.
+  // rebuild them here from consolidatedMemberIds. Received/Cancelled POs are
+  // excluded — once a shipment has arrived (or was cancelled) it's no longer
+  // "in shipping".
   const groups = db.pos
-    .filter((po) => !po.consolidatedGroupId)
+    .filter((po) => !po.consolidatedGroupId && !["Received", "Cancelled"].includes(po.status))
     .map((po) => {
       const members = (po.consolidatedMemberIds || []).length > 0
         ? db.pos.filter((p) => (po.consolidatedMemberIds || []).includes(p.id))
@@ -11962,19 +11981,19 @@ function ShipmentsTab({ db, update, showToast, openRecord }) {
   const [editingShipment, setEditingShipment] = useState(undefined);
   const isMobile = useIsMobile();
 
-  const allPOs = (db.pos || []).filter((po) =>
+  const eligiblePOs = (db.pos || []).filter((po) =>
     !po.consolidatedGroupId &&
-    ["Sent", "Accepted", "Paid"].includes(po.status) &&
-    (parseFloat(po.customsClearance) || 0) === 0
-  );  // Exclude member POs, non-Sent/Accepted/Paid POs, and anything with a freight forwarding fee (that's covered by the Shipping tab's International section)
-  const shipmentStatusLabel = (s) => s === "Accepted" ? "In Transit" : s;
-  const shipmentsWithPayments = allPOs.map(po => {
+    ["Sent", "In Transit", "Paid"].includes(normalizePOStatus(po.status))
+  ); // Exclude member POs (shown under their consolidated parent) and non-active statuses
+  const shipmentStatusLabel = normalizePOStatus;
+
+  const withPayments = (pos) => pos.map(po => {
     const paymentMilestones = po.paymentMilestones || [];
     const totalDue = paymentMilestones.reduce((sum, m) => sum + (parseFloat(m.amount) || 0), 0) || po.total || 0;
     const totalPaid = paymentMilestones.filter(m => m.paid).reduce((sum, m) => sum + (parseFloat(m.amount) || 0), 0);
     const amountOwed = totalDue - totalPaid;
     const nextPaymentDue = paymentMilestones.find(m => !m.paid && m.due);
-    
+
     return {
       ...po,
       totalDue,
@@ -11985,131 +12004,173 @@ function ShipmentsTab({ db, update, showToast, openRecord }) {
     };
   });
 
+  const allShipments = withPayments(eligiblePOs);
+  const domesticShipments = allShipments.filter((po) => (po.customsClearance || 0) === 0);
+
+  // Renders either the mobile card list or the desktop table for a given set
+  // of shipments. Each row shows a second, red "Freight Forwarding Fee" line
+  // (mobile: right under the summary line; desktop: its own table row) only
+  // when that PO actually has a fee — so the Domestic list below never shows
+  // one, since none of its POs have a fee by definition.
+  const renderShipmentsList = (items) => {
+    if (items.length === 0) {
+      return (
+        <Panel>
+          <p className="muted" style={{ fontSize: 13, margin: 0 }}>No purchase orders here yet.</p>
+        </Panel>
+      );
+    }
+
+    if (isMobile) {
+      return (
+        <div>
+          {items.map(po => (
+            <div key={po.id}>
+              <button
+                onClick={() => setEditingShipment(editingShipment?.id === po.id ? undefined : po)}
+                style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%", padding: "14px 4px", background: "none", border: "none", borderBottom: "1px solid #e3d8c6", cursor: "pointer", textAlign: "left" }}
+              >
+                <div>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: "#4a3527" }}>PO #{po.number} · {po.party}</div>
+                  <div style={{ fontSize: 12, color: "#8a7a66", marginTop: 2 }}>
+                    {shipmentStatusLabel(po.status)} · {(po.totalDue || 0).toLocaleString("en-AU", { style: "currency", currency: "AUD" })}
+                  </div>
+                  {po.customsClearance > 0 && (
+                    <div style={{ fontSize: 12, color: "#b5552b", fontWeight: 700, marginTop: 2 }}>
+                      Freight Forwarding Fee: {po.customsClearance.toLocaleString("en-AU", { style: "currency", currency: "AUD" })}
+                    </div>
+                  )}
+                </div>
+                <span style={{ color: "#b5552b", fontSize: 18 }}>{editingShipment?.id === po.id ? "▾" : "›"}</span>
+              </button>
+              {editingShipment?.id === po.id && (
+                <div style={{ padding: "12px 4px 16px", borderBottom: "2px solid #b5552b" }}>
+                  {[
+                    { label: "Supplier", value: po.party },
+                    { label: "Customer", value: po.customer || "—" },
+                    { label: "Status", value: shipmentStatusLabel(po.status) },
+                    { label: "Total", value: (po.totalDue || 0).toLocaleString("en-AU", { style: "currency", currency: "AUD" }) },
+                    { label: "Paid", value: (po.totalPaid || 0).toLocaleString("en-AU", { style: "currency", currency: "AUD" }) },
+                    { label: "Owed", value: (po.amountOwed || 0).toLocaleString("en-AU", { style: "currency", currency: "AUD" }) },
+                    po.customsClearance > 0 && { label: "Customs", value: po.customsClearance.toLocaleString("en-AU", { style: "currency", currency: "AUD" }) },
+                    po.nextPaymentDue && { label: "Next due", value: new Date(po.nextPaymentDue).toLocaleDateString("en-AU") },
+                  ].filter(Boolean).map((row, i) => (
+                    <div key={i} style={{ display: "flex", gap: 12, padding: "7px 0", borderBottom: "1px solid #f0e8d9" }}>
+                      <span style={{ fontSize: 12, fontWeight: 600, color: "#8a7a66", width: 68, flexShrink: 0 }}>{row.label}</span>
+                      <span style={{ fontSize: 13, color: "#4a3527" }}>{row.value}</span>
+                    </div>
+                  ))}
+                  {po.paymentMilestones?.length > 0 && (
+                    <div style={{ marginTop: 10 }}>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: "#6b5240", marginBottom: 4 }}>Payment Schedule</div>
+                      {po.paymentMilestones.map((m, i) => (
+                        <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, padding: "4px 0", color: m.paid ? "#5c7a4f" : "#4a3527" }}>
+                          <span>{m.paid ? "✓ " : ""}{m.due ? new Date(m.due).toLocaleDateString("en-AU") : "TBC"}</span>
+                          <span style={{ fontWeight: 600 }}>{(parseFloat(m.amount) || 0).toLocaleString("en-AU", { style: "currency", currency: "AUD" })}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <div style={{ display: "flex", gap: 10, marginTop: 14 }}>
+                    <Btn variant="primary" size="sm" onClick={() => openRecord && openRecord("po", po.id)}>Edit PO</Btn>
+                    <Btn variant="ghost" size="sm" onClick={() => setEditingShipment(undefined)}>Close</Btn>
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      );
+    }
+
+    return (
+      <div style={{ overflowX: "auto" }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 900 }}>
+          <thead>
+            <tr style={{ background: "#f9f7f2" }}>
+              <th style={{ textAlign: "left", padding: "12px 8px", fontSize: 12, fontWeight: 700, borderBottom: "2px solid #b5552b" }}>PO #</th>
+              <th style={{ textAlign: "left", padding: "12px 8px", fontSize: 12, fontWeight: 700, borderBottom: "2px solid #b5552b" }}>Supplier</th>
+              <th style={{ textAlign: "left", padding: "12px 8px", fontSize: 12, fontWeight: 700, borderBottom: "2px solid #b5552b" }}>Status</th>
+              <th style={{ textAlign: "left", padding: "12px 8px", fontSize: 12, fontWeight: 700, borderBottom: "2px solid #b5552b" }}>Next Payment Due</th>
+              <th style={{ textAlign: "right", padding: "12px 8px", fontSize: 12, fontWeight: 700, borderBottom: "2px solid #b5552b" }}>Total</th>
+              <th style={{ textAlign: "right", padding: "12px 8px", fontSize: 12, fontWeight: 700, borderBottom: "2px solid #b5552b" }}>Paid</th>
+              <th style={{ textAlign: "right", padding: "12px 8px", fontSize: 12, fontWeight: 700, borderBottom: "2px solid #b5552b" }}>Owed</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map(po => (
+              <React.Fragment key={po.id}>
+                <tr
+                  onClick={() => setEditingShipment(po)}
+                  style={{
+                    cursor: "pointer",
+                    borderBottom: po.customsClearance > 0 ? "none" : "1px solid #e3d8c6",
+                    background: editingShipment?.id === po.id ? "#ede8de" : "transparent"
+                  }}
+                  onMouseOver={(e) => e.currentTarget.style.background = "#f9f7f2"}
+                  onMouseOut={(e) => e.currentTarget.style.background = editingShipment?.id === po.id ? "#ede8de" : "transparent"}
+                >
+                  <td style={{ padding: "12px 8px", fontSize: 13, color: "#4a3527", fontWeight: 600 }}>#{po.number}</td>
+                  <td style={{ padding: "12px 8px", fontSize: 13, color: "#4a3527" }}>{po.party}</td>
+                  <td style={{ padding: "12px 8px", fontSize: 13, color: "#4a3527" }}>
+                    <span style={{
+                      display: "inline-block",
+                      background: po.status === "Received" ? "#e8f5e0" : "#fff3e0",
+                      color: po.status === "Received" ? "#5c7a4f" : "#8a6d3b",
+                      padding: "4px 8px",
+                      borderRadius: "4px",
+                      fontSize: "11px",
+                      fontWeight: 600
+                    }}>
+                      {shipmentStatusLabel(po.status)}
+                    </span>
+                  </td>
+                  <td style={{ padding: "12px 8px", fontSize: 13, color: "#4a3527" }}>
+                    {po.nextPaymentDue ? new Date(po.nextPaymentDue).toLocaleDateString() : "—"}
+                  </td>
+                  <td style={{ padding: "12px 8px", fontSize: 13, color: "#4a3527", textAlign: "right", fontWeight: 600 }}>
+                    {(po.totalDue || 0).toLocaleString('en-AU', { style: 'currency', currency: 'AUD' })}
+                  </td>
+                  <td style={{ padding: "12px 8px", fontSize: 13, color: "#5c7a4f", textAlign: "right" }}>
+                    {(po.totalPaid || 0).toLocaleString('en-AU', { style: 'currency', currency: 'AUD' })}
+                  </td>
+                  <td style={{ padding: "12px 8px", fontSize: 13, color: po.amountOwed > 0 ? "#a3442e" : "#5c7a4f", textAlign: "right", fontWeight: 600 }}>
+                    {(po.amountOwed || 0).toLocaleString('en-AU', { style: 'currency', currency: 'AUD' })}
+                  </td>
+                </tr>
+
+                {/* Second row: Freight Forwarding Fee — only when applicable */}
+                {po.customsClearance > 0 && (
+                  <tr
+                    onClick={() => setEditingShipment(po)}
+                    style={{ cursor: "pointer", borderBottom: "1px solid #e3d8c6", background: editingShipment?.id === po.id ? "#ede8de" : "transparent" }}
+                  >
+                    <td colSpan={3} style={{ padding: "2px 8px 8px 24px", color: "#b5552b", fontSize: 11, fontStyle: "italic" }}>
+                      Freight Forwarding Fee
+                    </td>
+                    <td></td>
+                    <td colSpan={3} style={{ padding: "2px 8px 8px", textAlign: "right", fontWeight: 700, color: "#b5552b" }}>
+                      {po.customsClearance.toLocaleString("en-AU", { style: "currency", currency: "AUD" })}
+                    </td>
+                  </tr>
+                )}
+              </React.Fragment>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+  };
+
   return (
     <section>
       <div className="section-header">
         <h2 className="section-title">Shipments</h2>
-        <p className="section-desc">Domestic purchase orders (no freight forwarding fee) — delivery dates and payment schedules. International shipments are tracked on the Shipping tab.</p>
+        <p className="section-desc">All active purchase orders — delivery dates and payment schedules, with the Freight Forwarding Fee called out for international shipments.</p>
       </div>
 
       <div className="content-area">
-        {shipmentsWithPayments.length === 0 ? (
-          <Panel>
-            <p className="muted" style={{ fontSize: 13, margin: 0 }}>No purchase orders yet. Create one in the Purchase Orders section.</p>
-          </Panel>
-        ) : isMobile ? (
-          <div>
-            {shipmentsWithPayments.map(po => (
-              <div key={po.id}>
-                <button
-                  onClick={() => setEditingShipment(editingShipment?.id === po.id ? undefined : po)}
-                  style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%", padding: "14px 4px", background: "none", border: "none", borderBottom: "1px solid #e3d8c6", cursor: "pointer", textAlign: "left" }}
-                >
-                  <div>
-                    <div style={{ fontSize: 14, fontWeight: 700, color: "#4a3527" }}>PO #{po.number} · {po.party}</div>
-                    <div style={{ fontSize: 12, color: "#8a7a66", marginTop: 2 }}>
-                      {shipmentStatusLabel(po.status)} · {(po.totalDue || 0).toLocaleString("en-AU", { style: "currency", currency: "AUD" })}
-                    </div>
-                  </div>
-                  <span style={{ color: "#b5552b", fontSize: 18 }}>{editingShipment?.id === po.id ? "▾" : "›"}</span>
-                </button>
-                {editingShipment?.id === po.id && (
-                  <div style={{ padding: "12px 4px 16px", borderBottom: "2px solid #b5552b" }}>
-                    {[
-                      { label: "Supplier", value: po.party },
-                      { label: "Customer", value: po.customer || "—" },
-                      { label: "Status", value: shipmentStatusLabel(po.status) },
-                      { label: "Total", value: (po.totalDue || 0).toLocaleString("en-AU", { style: "currency", currency: "AUD" }) },
-                      { label: "Paid", value: (po.totalPaid || 0).toLocaleString("en-AU", { style: "currency", currency: "AUD" }) },
-                      { label: "Owed", value: (po.amountOwed || 0).toLocaleString("en-AU", { style: "currency", currency: "AUD" }) },
-                      po.customsClearance > 0 && { label: "Customs", value: po.customsClearance.toLocaleString("en-AU", { style: "currency", currency: "AUD" }) },
-                      po.nextPaymentDue && { label: "Next due", value: new Date(po.nextPaymentDue).toLocaleDateString("en-AU") },
-                    ].filter(Boolean).map((row, i) => (
-                      <div key={i} style={{ display: "flex", gap: 12, padding: "7px 0", borderBottom: "1px solid #f0e8d9" }}>
-                        <span style={{ fontSize: 12, fontWeight: 600, color: "#8a7a66", width: 68, flexShrink: 0 }}>{row.label}</span>
-                        <span style={{ fontSize: 13, color: "#4a3527" }}>{row.value}</span>
-                      </div>
-                    ))}
-                    {po.paymentMilestones?.length > 0 && (
-                      <div style={{ marginTop: 10 }}>
-                        <div style={{ fontSize: 12, fontWeight: 600, color: "#6b5240", marginBottom: 4 }}>Payment Schedule</div>
-                        {po.paymentMilestones.map((m, i) => (
-                          <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, padding: "4px 0", color: m.paid ? "#5c7a4f" : "#4a3527" }}>
-                            <span>{m.paid ? "✓ " : ""}{m.due ? new Date(m.due).toLocaleDateString("en-AU") : "TBC"}</span>
-                            <span style={{ fontWeight: 600 }}>{(parseFloat(m.amount) || 0).toLocaleString("en-AU", { style: "currency", currency: "AUD" })}</span>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-                    <div style={{ display: "flex", gap: 10, marginTop: 14 }}>
-                      <Btn variant="primary" size="sm" onClick={() => openRecord && openRecord("po", po.id)}>Edit PO</Btn>
-                      <Btn variant="ghost" size="sm" onClick={() => setEditingShipment(undefined)}>Close</Btn>
-                    </div>
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 900 }}>
-              <thead>
-                <tr style={{ background: "#f9f7f2" }}>
-                  <th style={{ textAlign: "left", padding: "12px 8px", fontSize: 12, fontWeight: 700, borderBottom: "2px solid #b5552b" }}>PO #</th>
-                  <th style={{ textAlign: "left", padding: "12px 8px", fontSize: 12, fontWeight: 700, borderBottom: "2px solid #b5552b" }}>Supplier</th>
-                  <th style={{ textAlign: "left", padding: "12px 8px", fontSize: 12, fontWeight: 700, borderBottom: "2px solid #b5552b" }}>Status</th>
-                  <th style={{ textAlign: "left", padding: "12px 8px", fontSize: 12, fontWeight: 700, borderBottom: "2px solid #b5552b" }}>Next Payment Due</th>
-                  <th style={{ textAlign: "right", padding: "12px 8px", fontSize: 12, fontWeight: 700, borderBottom: "2px solid #b5552b" }}>Total</th>
-                  <th style={{ textAlign: "right", padding: "12px 8px", fontSize: 12, fontWeight: 700, borderBottom: "2px solid #b5552b" }}>Paid</th>
-                  <th style={{ textAlign: "right", padding: "12px 8px", fontSize: 12, fontWeight: 700, borderBottom: "2px solid #b5552b" }}>Owed</th>
-                </tr>
-              </thead>
-              <tbody>
-                {shipmentsWithPayments.map(po => (
-                  <tr 
-                    key={po.id}
-                    onClick={() => setEditingShipment(po)}
-                    style={{ 
-                      cursor: "pointer", 
-                      borderBottom: "1px solid #e3d8c6",
-                      background: editingShipment?.id === po.id ? "#ede8de" : "transparent"
-                    }}
-                    onMouseOver={(e) => e.currentTarget.style.background = "#f9f7f2"}
-                    onMouseOut={(e) => e.currentTarget.style.background = editingShipment?.id === po.id ? "#ede8de" : "transparent"}
-                  >
-                    <td style={{ padding: "12px 8px", fontSize: 13, color: "#4a3527", fontWeight: 600 }}>#{po.number}</td>
-                    <td style={{ padding: "12px 8px", fontSize: 13, color: "#4a3527" }}>{po.party}</td>
-                    <td style={{ padding: "12px 8px", fontSize: 13, color: "#4a3527" }}>
-                      <span style={{ 
-                        display: "inline-block",
-                        background: po.status === "Received" ? "#e8f5e0" : "#fff3e0",
-                        color: po.status === "Received" ? "#5c7a4f" : "#8a6d3b",
-                        padding: "4px 8px",
-                        borderRadius: "4px",
-                        fontSize: "11px",
-                        fontWeight: 600
-                      }}>
-                        {shipmentStatusLabel(po.status)}
-                      </span>
-                    </td>
-                    <td style={{ padding: "12px 8px", fontSize: 13, color: "#4a3527" }}>
-                      {po.nextPaymentDue ? new Date(po.nextPaymentDue).toLocaleDateString() : "—"}
-                    </td>
-                    <td style={{ padding: "12px 8px", fontSize: 13, color: "#4a3527", textAlign: "right", fontWeight: 600 }}>
-                      {(po.totalDue || 0).toLocaleString('en-AU', { style: 'currency', currency: 'AUD' })}
-                    </td>
-                    <td style={{ padding: "12px 8px", fontSize: 13, color: "#5c7a4f", textAlign: "right" }}>
-                      {(po.totalPaid || 0).toLocaleString('en-AU', { style: 'currency', currency: 'AUD' })}
-                    </td>
-                    <td style={{ padding: "12px 8px", fontSize: 13, color: po.amountOwed > 0 ? "#a3442e" : "#5c7a4f", textAlign: "right", fontWeight: 600 }}>
-                      {(po.amountOwed || 0).toLocaleString('en-AU', { style: 'currency', currency: 'AUD' })}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+        {renderShipmentsList(allShipments)}
 
         {editingShipment && !isMobile && (
           <Panel style={{ marginTop: 24 }}>
@@ -12187,6 +12248,12 @@ function ShipmentsTab({ db, update, showToast, openRecord }) {
             </div>
           </Panel>
         )}
+
+        <div style={{ marginTop: 32 }}>
+          <h3 style={{ fontFamily: "Georgia,serif", fontSize: 18, color: "#4a3527", margin: "0 0 4px" }}>Domestic Shipments</h3>
+          <p className="section-desc" style={{ marginTop: 0, marginBottom: 16 }}>Purchase orders with no Freight Forwarding Fee.</p>
+          {renderShipmentsList(domesticShipments)}
+        </div>
       </div>
     </section>
   );
