@@ -2041,6 +2041,7 @@ export default function App() {
               {[
                 ["crm", "Prospects"],
                 ["shipments", "Shipments"],
+                ["shipping", "Shipping"],
                 ["dashboard", "Dashboard"],
               ].map(([key, label]) => (
                 <button
@@ -2140,6 +2141,7 @@ export default function App() {
               {[
                 ["crm", "Prospects"],
                 ["shipments", "Shipments"],
+                ["shipping", "Shipping"],
                 ["dashboard", "Dashboard"],
               ].map(([key, label]) => (
                 <button
@@ -2250,6 +2252,9 @@ export default function App() {
         )}
         {tab === "shipments" && (
           <ShipmentsTab db={db} update={update} showToast={showToast} openRecord={openRecord} />
+        )}
+        {tab === "shipping" && (
+          <ShippingTab db={db} openRecord={openRecord} />
         )}
       </div>
       <Toast message={toast} />
@@ -10316,6 +10321,30 @@ function DashboardTab({ db, setTab, openRecord }) {
   const owingNextMonth = owingNextMonthRows.reduce((s, r) => s + r.amount, 0);
   const owingIn3Months = owingIn3MonthsRows.reduce((s, r) => s + r.amount, 0);
 
+  // International shipping — top-level POs / consolidated groups that have a
+  // freight forwarding fee anywhere in the group, for the Dashboard summary
+  // panel. Unlike the full Shipping tab, a consolidated group collapses to a
+  // single row here (no separate constituent-PO detail).
+  const intlShippingRows = db.pos
+    .filter((po) => !po.consolidatedGroupId)
+    .map((po) => {
+      const members = (po.consolidatedMemberIds || []).length > 0
+        ? db.pos.filter((p) => (po.consolidatedMemberIds || []).includes(p.id))
+        : [];
+      const allPOs = members.length ? [po, ...members] : [po];
+      return { po, allPOs };
+    })
+    .filter(({ allPOs }) => allPOs.some((p) => (parseFloat(p.customsClearance) || 0) > 0))
+    .map(({ po, allPOs }) => {
+      const stripPONum = (n) => String(n).replace(/^PO-?/i, "");
+      const poLabel = `PO-${stripPONum(po.number)}${allPOs.length > 1 ? `/${allPOs.slice(1).map((m) => stripPONum(m.number)).join("/")}` : ""}`;
+      const eta = allPOs.map((p) => p.eta).filter(Boolean).sort()[0] || null;
+      const value = allPOs.reduce((s, p) => s + (parseFloat(p.total) || 0), 0);
+      return { id: po.id, supplier: po.party || "Unknown", poLabel, eta, value };
+    })
+    .sort((a, b) => (a.eta || "9999").localeCompare(b.eta || "9999"));
+  const intlShippingTotal = intlShippingRows.reduce((s, r) => s + r.value, 0);
+
   // Expected profit: accepted quotes revenue vs their line item costs
   const acceptedQuotes = db.quotes.filter((q) => q.status === "Accepted");
   const acceptedQuotesTotal = acceptedQuotes.reduce((sum, q) => sum + (q.total || 0), 0);
@@ -10422,6 +10451,7 @@ function DashboardTab({ db, setTab, openRecord }) {
   if (isMobile) {
     const mobileShipments = (() => {
       const pos = (db.pos || []).filter((po) =>
+        !po.consolidatedGroupId &&
         (po.eta || (po.customsClearance || 0) > 0 || (po.consolidatedMemberIds || []).length > 0) &&
         po.status !== "Cancelled"
       );
@@ -10469,8 +10499,8 @@ function DashboardTab({ db, setTab, openRecord }) {
     const unpaidDepositRows = depositRows.filter(r => !r.paid);
     const paidDepositRows = depositRows.filter(r => r.paid);
 
-    const totalPages = 6 + mobileShipments.length;
-    const pageTitles = ["Sales Performance", "Deposits", "Stock", "Sales by Model", "Sales Funnel", "PO Status",
+    const totalPages = 7 + mobileShipments.length;
+    const pageTitles = ["Sales Performance", "Deposits", "Stock", "Sales by Model", "Sales Funnel", "PO Status", "International Shipping",
       ...mobileShipments.map(g => g.supplier)];
 
     const handleTouchStart = (e) => { touchStartX.current = e.touches[0].clientX; };
@@ -10489,11 +10519,11 @@ function DashboardTab({ db, setTab, openRecord }) {
     return (
       <div style={{ overflow: "hidden", userSelect: "none" }}>
         {/* Title + counter */}
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0 2px 10px" }}>
-          <span style={{ fontFamily: "Georgia,serif", fontSize: 17, fontWeight: 700, color: "#4a3527" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0 2px 10px", gap: 8 }}>
+          <span style={{ fontFamily: "Georgia,serif", fontSize: 17, fontWeight: 700, color: "#4a3527", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
             {pageTitles[mobilePage]}
           </span>
-          <span style={{ fontSize: 12, color: "#8a7a66" }}>{mobilePage + 1} / {totalPages}</span>
+          <span style={{ fontSize: 12, color: "#8a7a66", flexShrink: 0 }}>{mobilePage + 1} / {totalPages}</span>
         </div>
 
         {/* Dot indicators */}
@@ -10698,7 +10728,32 @@ function DashboardTab({ db, setTab, openRecord }) {
             <p style={{ fontSize: 11, color: "#8a7a66", textAlign: "center", marginTop: 4 }}>Tap any row to see the POs behind it</p>
           </div>
 
-          {/* PAGES 7+ — One page per supplier, all their POs scrollable */}
+          {/* PAGE 7 — International shipping */}
+          <div style={page}>
+            {intlShippingRows.length === 0 ? (
+              <p style={{ fontSize: 13, color: "#8a7a66", textAlign: "center" }}>No international shipments.</p>
+            ) : (
+              intlShippingRows.map((r) => (
+                <div key={r.id} onClick={() => openRecord && openRecord("po", r.id)}
+                  style={{ ...card, display: "flex", justifyContent: "space-between", alignItems: "flex-start", cursor: "pointer" }}>
+                  <div>
+                    <div style={{ fontSize: 14, fontWeight: 700, color: "#4a3527" }}>{r.supplier}</div>
+                    <div style={{ fontSize: 12, color: "#8a7a66", marginTop: 2 }}>{r.poLabel}</div>
+                  </div>
+                  <div style={{ textAlign: "right" }}>
+                    <div style={{ fontSize: 11, color: "#8a7a66" }}>ETA</div>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: "#4a3527" }}>{fmtD(r.eta)}</div>
+                  </div>
+                </div>
+              ))
+            )}
+            <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 4px", fontSize: 14, fontWeight: 700, color: "#4a3527", borderTop: "2px solid #b5552b", marginTop: 4 }}>
+              <span>Total value</span>
+              <span>{fmtMoney(intlShippingTotal, "AUD")}</span>
+            </div>
+          </div>
+
+          {/* PAGES 8+ — One page per supplier, all their POs scrollable */}
           {mobileShipments.map(({ supplier, pos: supplierPOs }) => {
             const fmtD = (d) => d ? new Date(d).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" }) : "—";
             const stripPO = (n) => String(n).replace(/^PO-?/i, "");
@@ -10709,7 +10764,7 @@ function DashboardTab({ db, setTab, openRecord }) {
               return da.localeCompare(db2);
             });
             return (
-              <div key={supplier} style={{ ...page, overflowY: "auto", maxHeight: "70vh" }}>
+              <div key={supplier} style={page}>
                 {sorted.map((po) => {
                   const members = (po.consolidatedMemberIds || []).length > 0
                     ? (db.pos || []).filter(p => (po.consolidatedMemberIds || []).includes(p.id)) : [];
@@ -10722,13 +10777,13 @@ function DashboardTab({ db, setTab, openRecord }) {
                     <div key={po.id} style={{ ...card, borderLeft: "4px solid #b5552b" }}>
                       {/* PO header - tappable */}
                       <div onClick={() => openRecord && openRecord("po", po.id)} style={{ cursor: "pointer", marginBottom: 10 }}>
-                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-                          <div>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+                          <div style={{ minWidth: 0 }}>
                             <div style={{ fontSize: 12, fontWeight: 700, color: "#b5552b" }}>{poLabel}</div>
-                            <div style={{ fontSize: 13, fontWeight: 700, color: "#4a3527", marginTop: 2 }}>{productName}</div>
+                            <div style={{ fontSize: 13, fontWeight: 700, color: "#4a3527", marginTop: 2, wordBreak: "break-word" }}>{productName}</div>
                           </div>
                           {po.eta && (
-                            <div style={{ textAlign: "right", fontSize: 11, color: "#8a7a66" }}>
+                            <div style={{ textAlign: "right", fontSize: 11, color: "#8a7a66", flexShrink: 0 }}>
                               <div style={{ fontWeight: 600 }}>ETA</div>
                               <div>{fmtD(po.eta)}</div>
                             </div>
@@ -11194,6 +11249,36 @@ function DashboardTab({ db, setTab, openRecord }) {
             >
               <span>Cost expected next 6 months</span>
               <strong>{fmtMoney(costNext6, "AUD")}</strong>
+            </div>
+          </div>
+        </Panel>
+
+        <Panel>
+          <h3 style={{ fontFamily: "Georgia,serif", fontSize: 16, color: "#4a3527", margin: "0 0 12px" }}>International shipping</h3>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            {intlShippingRows.length === 0 ? (
+              <p className="muted" style={{ fontSize: 13, margin: 0 }}>No international shipments.</p>
+            ) : (
+              intlShippingRows.map((r) => (
+                <div
+                  key={r.id}
+                  onClick={() => openRecord && openRecord("po", r.id)}
+                  style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", fontSize: 13, cursor: openRecord ? "pointer" : "default" }}
+                >
+                  <div>
+                    <div style={{ fontWeight: 600, color: "#4a3527" }}>{r.supplier}</div>
+                    <div style={{ fontSize: 11, color: "#8a7a66" }}>{r.poLabel}</div>
+                  </div>
+                  <div style={{ textAlign: "right" }}>
+                    <div style={{ fontSize: 11, color: "#8a7a66" }}>ETA</div>
+                    <div style={{ fontWeight: 600 }}>{r.eta ? new Date(r.eta).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" }) : "—"}</div>
+                  </div>
+                </div>
+              ))
+            )}
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, fontWeight: 700, paddingTop: 8, marginTop: 4, borderTop: "2px solid #b5552b" }}>
+              <span>Total value</span>
+              <strong>{fmtMoney(intlShippingTotal, "AUD")}</strong>
             </div>
           </div>
         </Panel>
@@ -11676,6 +11761,122 @@ function DashboardTab({ db, setTab, openRecord }) {
         </Modal>
       )}
     </>
+  );
+}
+
+// ── SHIPPING TAB ──────────────────────────────────────────────────────────
+// Two sections — International (Freight Forwarding Fee > $0) and Domestic
+// (Freight Forwarding Fee = $0) — each listing every top-level PO and
+// consolidated PO group. A consolidated group shows a heading line
+// (consolidated PO number / ETA / value) followed by one line per
+// constituent PO, each with its own Supplier / PO number / product / ETA /
+// amount owing, plus a small red freight-forwarding line. Every line drills
+// down to its own PO (or, for the heading, the consolidated PO).
+function ShippingTab({ db, openRecord }) {
+  if (!db || !db.pos) {
+    return (
+      <section>
+        <h2 className="section-title">Shipping</h2>
+        <p className="section-desc">Loading data...</p>
+      </section>
+    );
+  }
+
+  const stripPO = (n) => String(n).replace(/^PO-?/i, "");
+  const fmtD = (d) => d ? new Date(d).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" }) : "—";
+  const productName = (po) => po.model || (po.lines && po.lines[0] ? (po.lines[0].desc || po.lines[0].description) : null) || "—";
+  const owingAmount = (po) => (po.paymentMilestones || []).filter((m) => !m.paid).reduce((s, m) => s + (parseFloat(m.amount) || 0), 0);
+
+  // Build one group per top-level PO (standalone or consolidated primary) —
+  // members of a consolidated group are hidden from the main POs list, so we
+  // rebuild them here from consolidatedMemberIds.
+  const groups = db.pos
+    .filter((po) => !po.consolidatedGroupId)
+    .map((po) => {
+      const members = (po.consolidatedMemberIds || []).length > 0
+        ? db.pos.filter((p) => (po.consolidatedMemberIds || []).includes(p.id))
+        : [];
+      const allPOs = members.length ? [po, ...members] : [po];
+      const isInternational = allPOs.some((p) => (parseFloat(p.customsClearance) || 0) > 0);
+      const earliestEta = allPOs.map((p) => p.eta).filter(Boolean).sort()[0] || null;
+      const groupValue = allPOs.reduce((s, p) => s + (parseFloat(p.total) || 0), 0);
+      return { primary: po, members, allPOs, isInternational, earliestEta, groupValue };
+    });
+
+  const sortByEta = (a, b) => (a.earliestEta || "9999").localeCompare(b.earliestEta || "9999");
+  const international = groups.filter((g) => g.isInternational).sort(sortByEta);
+  const domestic = groups.filter((g) => !g.isInternational).sort(sortByEta);
+
+  const renderPoLine = (po) => (
+    <div
+      key={po.id}
+      onClick={() => openRecord && openRecord("po", po.id)}
+      style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, padding: "10px 14px", borderBottom: "1px solid #f0e8d9", cursor: openRecord ? "pointer" : "default" }}
+    >
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: "#4a3527" }}>
+          {po.party || "Unknown supplier"} <span style={{ color: "#8a7a66", fontWeight: 400 }}>· PO-{stripPO(po.number)}</span>
+        </div>
+        <div style={{ fontSize: 12, color: "#6b5240", marginTop: 2 }}>{productName(po)}</div>
+        <div style={{ fontSize: 11, fontWeight: 700, color: "#a3442e", marginTop: 4 }}>
+          Freight forwarding: {fmtMoney(po.customsClearance || 0, "AUD")}
+        </div>
+      </div>
+      <div style={{ textAlign: "right", flexShrink: 0 }}>
+        <div style={{ fontSize: 11, color: "#8a7a66" }}>ETA</div>
+        <div style={{ fontSize: 13, fontWeight: 600, color: "#4a3527" }}>{fmtD(po.eta)}</div>
+        <div style={{ fontSize: 11, color: "#8a7a66", marginTop: 6 }}>Owing</div>
+        <div style={{ fontSize: 13, fontWeight: 700, color: "#4a3527" }}>{fmtMoney(owingAmount(po), "AUD")}</div>
+      </div>
+    </div>
+  );
+
+  const renderGroup = (g) => {
+    const { primary, members, allPOs, earliestEta, groupValue } = g;
+    const consolidatedNumber = members.length
+      ? `PO${stripPO(primary.number)}/${members.map((m) => stripPO(m.number)).join("/")}`
+      : null;
+    return (
+      <div key={primary.id} style={{ border: "1px solid #e3d8c6", borderRadius: 8, marginBottom: 14, overflow: "hidden", background: "#fff" }}>
+        {members.length > 0 && (
+          <div
+            onClick={() => openRecord && openRecord("po", primary.id)}
+            style={{ padding: "12px 14px", background: "#f9f5f0", borderBottom: "2px solid #b5552b", cursor: openRecord ? "pointer" : "default" }}
+          >
+            <div style={{ fontFamily: "Georgia,serif", fontWeight: 700, fontSize: 14, color: "#4a3527" }}>{consolidatedNumber}</div>
+            <div style={{ fontSize: 12, color: "#6b5240", marginTop: 2 }}>
+              ETA {fmtD(earliestEta)} · {fmtMoney(groupValue, "AUD")}
+            </div>
+          </div>
+        )}
+        {allPOs.map((p) => renderPoLine(p))}
+      </div>
+    );
+  };
+
+  return (
+    <section>
+      <h2 className="section-title">Shipping</h2>
+      <p className="section-desc">Purchase orders grouped by freight forwarding — international shipments carry a freight forwarding fee, domestic shipments don't. Click any line to open the PO.</p>
+
+      <div style={{ marginBottom: 32 }}>
+        <h3 style={{ fontFamily: "Georgia,serif", fontSize: 18, color: "#4a3527", margin: "0 0 12px" }}>International shipping</h3>
+        {international.length === 0 ? (
+          <p className="muted" style={{ fontSize: 13 }}>No international shipments.</p>
+        ) : (
+          international.map(renderGroup)
+        )}
+      </div>
+
+      <div>
+        <h3 style={{ fontFamily: "Georgia,serif", fontSize: 18, color: "#4a3527", margin: "0 0 12px" }}>Domestic shipping</h3>
+        {domestic.length === 0 ? (
+          <p className="muted" style={{ fontSize: 13 }}>No domestic shipments.</p>
+        ) : (
+          domestic.map(renderGroup)
+        )}
+      </div>
+    </section>
   );
 }
 
