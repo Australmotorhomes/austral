@@ -319,6 +319,14 @@ function toSupabaseFormat(data, table) {
         copy.invoice_month_1st = copy.invoiceMonth1st;
         delete copy.invoiceMonth1st;
       }
+      if (copy.invoiceMonth2nd !== undefined) {
+        copy.invoice_month_2nd = copy.invoiceMonth2nd;
+        delete copy.invoiceMonth2nd;
+      }
+      if (copy.invoiceMonth3rd !== undefined) {
+        copy.invoice_month_3rd = copy.invoiceMonth3rd;
+        delete copy.invoiceMonth3rd;
+      }
       if (copy.archived !== undefined) {
         copy.is_archived = copy.archived;
         delete copy.archived;
@@ -498,6 +506,8 @@ function fromSupabaseFormat(data, table) {
       if (copy.invoice_amount_3rd !== undefined) copy.invoiceAmount3rd = parseFloat(copy.invoice_amount_3rd) || 0;
       if (copy.invoice_date_1st !== undefined) copy.invoiceDate1st = copy.invoice_date_1st || "";
       if (copy.invoice_month_1st !== undefined) copy.invoiceMonth1st = copy.invoice_month_1st || "";
+      if (copy.invoice_month_2nd !== undefined) copy.invoiceMonth2nd = copy.invoice_month_2nd || "";
+      if (copy.invoice_month_3rd !== undefined) copy.invoiceMonth3rd = copy.invoice_month_3rd || "";
       if (copy.last_quote_number !== undefined) copy.lastQuoteNumber = copy.last_quote_number;
       if (copy.last_quote_value !== undefined) copy.lastQuoteValue = copy.last_quote_value;
       if (copy.is_archived !== undefined) copy.archived = copy.is_archived;
@@ -7957,6 +7967,8 @@ function ContactModal({ kind, editing, onCancel, onSave, onCreateQuote, onArchiv
   const [invoiceAmount3rd, setInvoiceAmount3rd] = useState(!isSupplier ? (editing?.invoiceAmount3rd || 0) : 0);
   const [invoiceDate1st, setInvoiceDate1st] = useState(!isSupplier ? (editing?.invoiceDate1st || "") : "");
   const [invoiceMonth1st, setInvoiceMonth1st] = useState(!isSupplier ? (editing?.invoiceMonth1st || "") : "");
+  const [invoiceMonth2nd, setInvoiceMonth2nd] = useState(!isSupplier ? (editing?.invoiceMonth2nd || "") : "");
+  const [invoiceMonth3rd, setInvoiceMonth3rd] = useState(!isSupplier ? (editing?.invoiceMonth3rd || "") : "");
   const [lastQuoteNumber, setLastQuoteNumber] = useState(!isSupplier ? String(editing?.lastQuoteNumber || "") : "");
   const [lastQuoteValue, setLastQuoteValue] = useState(!isSupplier ? String(editing?.lastQuoteValue || "") : "");
   const [notes, setNotes] = useState(editing ? editing.notes || "" : "");
@@ -7986,6 +7998,8 @@ function ContactModal({ kind, editing, onCancel, onSave, onCreateQuote, onArchiv
         ...(!isSupplier && { invoiceAmount3rd: parseFloat(invoiceAmount3rd) || 0 }),
         ...(!isSupplier && { invoiceDate1st: invoiceDate1st || "" }),
         ...(!isSupplier && { invoiceMonth1st: invoiceMonth1st || "" }),
+        ...(!isSupplier && { invoiceMonth2nd: invoiceMonth2nd || "" }),
+        ...(!isSupplier && { invoiceMonth3rd: invoiceMonth3rd || "" }),
         notes: notes.trim(),
         attachments,
       },
@@ -8241,29 +8255,32 @@ function ContactModal({ kind, editing, onCancel, onSave, onCreateQuote, onArchiv
               <input style={inputStyle} type="number" step="0.01" min="0" placeholder="0.00"
                 value={invoiceAmount1st || ""}
                 onChange={(e) => setInvoiceAmount1st(parseFloat(e.target.value) || 0)} />
+              <input style={{ ...inputStyle, marginTop: 6 }} type="month"
+                value={invoiceMonth1st || ""}
+                onChange={(e) => setInvoiceMonth1st(e.target.value)} />
             </Field>
             <Field label="Payment 2 (AUD)">
               <input style={inputStyle} type="number" step="0.01" min="0" placeholder="0.00"
                 value={invoiceAmount2nd || ""}
                 onChange={(e) => setInvoiceAmount2nd(parseFloat(e.target.value) || 0)} />
+              <input style={{ ...inputStyle, marginTop: 6 }} type="month"
+                value={invoiceMonth2nd || ""}
+                onChange={(e) => setInvoiceMonth2nd(e.target.value)} />
             </Field>
             <Field label="Payment 3 (AUD)">
               <input style={inputStyle} type="number" step="0.01" min="0" placeholder="0.00"
                 value={invoiceAmount3rd || ""}
                 onChange={(e) => setInvoiceAmount3rd(parseFloat(e.target.value) || 0)} />
+              <input style={{ ...inputStyle, marginTop: 6 }} type="month"
+                value={invoiceMonth3rd || ""}
+                onChange={(e) => setInvoiceMonth3rd(e.target.value)} />
             </Field>
           </div>
-          <div style={{ marginTop: 10 }}>
-            <Field label="Month sold (used for FY reporting)">
-              <input style={inputStyle} type="month"
-                value={invoiceMonth1st || ""}
-                onChange={(e) => setInvoiceMonth1st(e.target.value)} />
-            </Field>
-            <p style={{ fontSize: 11, color: "#8a7a66", margin: "4px 0 0" }}>
-              The three payments above are totalled and placed in the financial year this month falls in —
-              use the month the sale was made, even if delivery happened later.
-            </p>
-          </div>
+          <p style={{ fontSize: 11, color: "#8a7a66", margin: "6px 0 0" }}>
+            Each payment is placed in the financial year its own month falls in — use the month that
+            payment was actually sold/invoiced in, even if delivery happened later. Payments in the same
+            month are added together; payments in different months are kept separate.
+          </p>
         </div>
       )}
 
@@ -9535,11 +9552,14 @@ function isInDateRange(invoiceMonth, startDate, endDate) {
 // EXCEPT "Canceled" — i.e. all real income (Deposit + Paid + Delivered combined).
 // If `status` is provided, filters to that exact status only (legacy behaviour).
 // Historical customers (bulk-imported, mostly FY2023–FY2026) don't use the
-// "invoices" payment-schedule array — instead they carry a flat total split
-// across invoiceAmount1st/2nd/3rd. The month they were SOLD in (which is what
-// FY reporting should use, even though delivery often happens months later)
-// lives in invoice_month_1st. invoiceDate1st is kept as a fallback in case a
-// full date ever gets entered instead of just a month.
+// "invoices" payment-schedule array — instead they carry up to 3 flat
+// payments, each with its OWN sale month: invoiceAmount1st/invoiceMonth1st,
+// invoiceAmount2nd/invoiceMonth2nd, invoiceAmount3rd/invoiceMonth3rd. These
+// are 3 separate payments and must land in 3 separate month buckets unless
+// two of them genuinely share the same month — never lumped into month 1's
+// bucket just because that's the only field that used to exist.
+// invoiceDate1st is kept as a fallback only for payment 1, in case a full
+// date was entered there instead of a month before invoiceMonth1st existed.
 function getCustomerSaleMonth(c) {
   if (c.invoiceMonth1st) return c.invoiceMonth1st.slice(0, 7);
   if (c.invoiceDate1st) return c.invoiceDate1st.slice(0, 7);
@@ -9548,10 +9568,16 @@ function getCustomerSaleMonth(c) {
 
 function getCustomerInvoicesForCalc(c) {
   const base = Array.isArray(c.invoices) ? c.invoices : [];
-  const legacyTotal = (parseFloat(c.invoiceAmount1st) || 0) + (parseFloat(c.invoiceAmount2nd) || 0) + (parseFloat(c.invoiceAmount3rd) || 0);
-  const saleMonth = getCustomerSaleMonth(c);
-  if (saleMonth && legacyTotal > 0) {
-    return [...base, { amount: legacyTotal, invoiceMonth: saleMonth }];
+  const legacyPairs = [
+    { amount: parseFloat(c.invoiceAmount1st) || 0, month: getCustomerSaleMonth(c) },
+    { amount: parseFloat(c.invoiceAmount2nd) || 0, month: c.invoiceMonth2nd ? c.invoiceMonth2nd.slice(0, 7) : null },
+    { amount: parseFloat(c.invoiceAmount3rd) || 0, month: c.invoiceMonth3rd ? c.invoiceMonth3rd.slice(0, 7) : null },
+  ];
+  const legacyEntries = legacyPairs
+    .filter((p) => p.amount > 0 && p.month)
+    .map((p) => ({ amount: p.amount, invoiceMonth: p.month }));
+  if (legacyEntries.length) {
+    return [...base, ...legacyEntries];
   }
   return base;
 }
@@ -9559,8 +9585,7 @@ function getCustomerInvoicesForCalc(c) {
 function calculatePeriodSales(customers, startDate, endDate, status) {
   const filtered = customers.filter((c) => {
     const hasInvoices = Array.isArray(c.invoices) && c.invoices.length > 0;
-    const legacyTotal = (parseFloat(c.invoiceAmount1st) || 0) + (parseFloat(c.invoiceAmount2nd) || 0) + (parseFloat(c.invoiceAmount3rd) || 0);
-    const hasLegacyInvoice = !!getCustomerSaleMonth(c) && legacyTotal > 0;
+    const hasLegacyInvoice = getCustomerInvoicesForCalc(c).length > (hasInvoices ? c.invoices.length : 0);
     if (!hasInvoices && !hasLegacyInvoice) return false;
     const s = (c.status || "").trim();
     if (status) return s === status.trim();
