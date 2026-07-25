@@ -9594,7 +9594,26 @@ function getCustomerInvoicesForCalc(c) {
   return base;
 }
 
+// Safety net for duplicate ROWS in the customers table (not duplicate fields
+// within one row — that's handled above). If the exact same invoice number
+// appears on more than one customer record, keep only the first and drop
+// the rest, so a duplicated row can't double-count a real sale. Records
+// with no invoice number are left alone (nothing reliable to dedupe on).
+function dedupeCustomerRows(customers) {
+  const seen = new Set();
+  const result = [];
+  for (const c of customers || []) {
+    const invNum = (c.invoiceNumber || "").trim();
+    if (!invNum) { result.push(c); continue; }
+    if (seen.has(invNum)) continue;
+    seen.add(invNum);
+    result.push(c);
+  }
+  return result;
+}
+
 function calculatePeriodSales(customers, startDate, endDate, status) {
+  customers = dedupeCustomerRows(customers);
   const filtered = customers.filter((c) => {
     const hasInvoices = Array.isArray(c.invoices) && c.invoices.length > 0;
     const hasLegacyInvoice = getCustomerInvoicesForCalc(c).length > (hasInvoices ? c.invoices.length : 0);
@@ -9627,7 +9646,7 @@ function calculatePeriodSales(customers, startDate, endDate, status) {
 // distinct invoice number per payment).
 function getTransactionsForMonth(customers, monthKey) {
   const rows = [];
-  (customers || []).forEach((c) => {
+  (dedupeCustomerRows(customers) || []).forEach((c) => {
     const s = (c.status || "").trim().toLowerCase();
     if (s === "canceled") return;
     getCustomerInvoicesForCalc(c).forEach((inv) => {
@@ -9648,7 +9667,7 @@ function getTransactionsForMonth(customers, monthKey) {
 
 // Helper: Count distinct products sold in period
 function countProductsSold(customers, startDate, endDate, status) {
-  const filtered = customers.filter((c) => (c.status || "").trim() === status.trim() && c.product);
+  const filtered = dedupeCustomerRows(customers).filter((c) => (c.status || "").trim() === status.trim() && c.product);
   const productCounts = {};
   filtered.forEach((c) => {
     const hasInvoiceInPeriod = getCustomerInvoicesForCalc(c).some((inv) => inv && inv.invoiceMonth && isInDateRange(inv.invoiceMonth, startDate, endDate));
@@ -9763,7 +9782,7 @@ function computeSalesByModel(db, fyRange) {
   const skippedNoDate = []; // has product + a paid amount, but no sale month — invisible in every FY until that's set
   const fyStartMonth = fyRange.start.slice(0, 7);
   const fyEndMonth = fyRange.end.slice(0, 7);
-  (db.customers || []).forEach(c => {
+  (dedupeCustomerRows(db.customers) || []).forEach(c => {
     if (countedCustomerIds.has(c.id)) return;
     const legacyTotal = (parseFloat(c.invoiceAmount1st) || 0) + (parseFloat(c.invoiceAmount2nd) || 0) + (parseFloat(c.invoiceAmount3rd) || 0);
     if (legacyTotal <= 0) return;
