@@ -3741,6 +3741,8 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
   const [linkingQuotes, setLinkingQuotes] = useState(false);
   const [linkPOsConfirm, setLinkPOsConfirm] = useState(false);
   const [linkingPOs, setLinkingPOs] = useState(false);
+  const [sortBy, setSortBy] = useState(null);   // column key, or null = default sort
+  const [sortDir, setSortDir] = useState("asc");
 
   // Cross-tab navigation: if another tab asked to open a specific quote/PO, do it.
   useEffect(() => {
@@ -3806,8 +3808,26 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
     list = list.filter((d) => !d.archived);
   }
   
-  // Sort: POs by ETA (newest to oldest), Quotes by createdAt (newest to oldest)
-  if (!isQuote) {
+  // Sort: user-selected column (via clickable header) takes priority; otherwise
+  // default to POs by ETA (newest to oldest) / Quotes by createdAt (newest to oldest).
+  const sortAccessors = {
+    number: (d) => String(d.number || ""),
+    party: (d) => (d.party || "").toLowerCase(),
+    model: (d) => (d.model || "").toLowerCase(),
+    date: (d) => d.date || "",
+    eta: (d) => d.eta || "",
+    total: (d) => parseFloat(d.total) || 0,
+    status: (d) => displayStatus(d) || "",
+  };
+  if (sortBy && sortAccessors[sortBy]) {
+    const get = sortAccessors[sortBy];
+    const dir = sortDir === "asc" ? 1 : -1;
+    list.sort((a, b) => {
+      const va = get(a), vb = get(b);
+      if (typeof va === "number" && typeof vb === "number") return (va - vb) * dir;
+      return String(va).localeCompare(String(vb)) * dir;
+    });
+  } else if (!isQuote) {
     list.sort((a, b) => {
       const etaA = a.eta || "";
       const etaB = b.eta || "";
@@ -3816,6 +3836,24 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
   } else {
     list.sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || "") || String(b.number).localeCompare(String(a.number)));
   }
+  const toggleSort = (key) => {
+    if (sortBy === key) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortBy(key);
+      setSortDir("asc");
+    }
+  };
+  const SortTh = ({ col, children, className }) => (
+    <th
+      className={className}
+      onClick={() => toggleSort(col)}
+      style={{ cursor: "pointer", userSelect: "none", whiteSpace: "nowrap" }}
+      title="Click to sort"
+    >
+      {children}{sortBy === col ? (sortDir === "asc" ? " \u25B2" : " \u25BC") : ""}
+    </th>
+  );
 
   function saveMilestones(doc, milestones) {
     (async () => {
@@ -4688,13 +4726,13 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
             <table>
               <thead>
                 <tr>
-                  <th>PO #</th>
-                  <th>Supplier</th>
-                  <th>Reference</th>
-                  <th>Date</th>
-                  <th>ETA</th>
-                  <th className="num">Total (AUD)</th>
-                  <th>Status</th>
+                  <SortTh col="number">PO #</SortTh>
+                  <SortTh col="party">Supplier</SortTh>
+                  <SortTh col="model">Reference</SortTh>
+                  <SortTh col="date">Date</SortTh>
+                  <SortTh col="eta">ETA</SortTh>
+                  <SortTh col="total" className="num">Total (AUD)</SortTh>
+                  <SortTh col="status">Status</SortTh>
                   <th></th>
                 </tr>
               </thead>
@@ -4781,12 +4819,12 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
           <table>
             <thead>
               <tr>
-                <th>Quote #</th>
-                <th>Customer</th>
-                <th>Model</th>
-                <th>Date</th>
-                <th className="num">Total (AUD)</th>
-                <th>Status</th>
+                <SortTh col="number">Quote #</SortTh>
+                <SortTh col="party">Customer</SortTh>
+                <SortTh col="model">Model</SortTh>
+                <SortTh col="date">Date</SortTh>
+                <SortTh col="total" className="num">Total (AUD)</SortTh>
+                <SortTh col="status">Status</SortTh>
                 <th></th>
               </tr>
             </thead>
