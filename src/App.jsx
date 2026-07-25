@@ -9573,9 +9573,21 @@ function getCustomerInvoicesForCalc(c) {
     { amount: parseFloat(c.invoiceAmount2nd) || 0, month: c.invoiceMonth2nd ? c.invoiceMonth2nd.slice(0, 7) : null },
     { amount: parseFloat(c.invoiceAmount3rd) || 0, month: c.invoiceMonth3rd ? c.invoiceMonth3rd.slice(0, 7) : null },
   ];
-  const legacyEntries = legacyPairs
-    .filter((p) => p.amount > 0 && p.month)
-    .map((p) => ({ amount: p.amount, invoiceMonth: p.month }));
+  // If two of the three slots have the exact same amount AND the exact same
+  // month, that's not two separate payments — it's the same payment showing
+  // up twice (e.g. a new column that got backfilled from an existing one
+  // rather than left blank). Keep only the first occurrence of each
+  // distinct amount+month combination so a real payment is never counted
+  // twice just because it appears in more than one slot.
+  const seen = new Set();
+  const legacyEntries = [];
+  for (const p of legacyPairs) {
+    if (p.amount <= 0 || !p.month) continue;
+    const dedupeKey = `${p.amount}|${p.month}`;
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+    legacyEntries.push({ amount: p.amount, invoiceMonth: p.month });
+  }
   if (legacyEntries.length) {
     return [...base, ...legacyEntries];
   }
