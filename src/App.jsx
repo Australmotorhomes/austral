@@ -354,6 +354,10 @@ function toSupabaseFormat(data, table) {
         copy.value = copy.salesValue;  // ← salesValue → value
         delete copy.salesValue;
       }
+      if (copy.nextAction !== undefined) {
+        copy.next_action = copy.nextAction;
+        delete copy.nextAction;
+      }
       // Remove non-existent columns
       delete copy.createdAt;
       delete copy.updatedAt;
@@ -509,6 +513,7 @@ function fromSupabaseFormat(data, table) {
       if (copy.expected_order_eta_month !== undefined) copy.expectedOrderEtaMonth = copy.expected_order_eta_month;
       if (copy.enquiry_product !== undefined) copy.enquiryProduct = copy.enquiry_product;
       copy.salesValue = parseFloat(copy.sales_value || copy.value) || 0;
+      if (copy.next_action !== undefined) { copy.nextAction = copy.next_action; delete copy.next_action; }
       copy.activities = parseActivities(copy.activities);
       copy.attachments = Array.isArray(copy.attachments) ? copy.attachments : [];
       break;
@@ -8503,6 +8508,7 @@ function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOp
         p.enquiryProduct,
         p.currentStatus,
         p.notes,
+        p.nextAction,
         p.expectedOrderEtaMonth,
         ...(p.activities || []).map((a) => a.notes),
         ...(p.activities || []).map((a) => a.type),
@@ -8833,7 +8839,21 @@ function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOp
                 }}
               >
                 <div style={{ minWidth: 0 }}>
-                  <div style={{ fontSize: 14, fontWeight: 600, color: "#4a3527" }}>{p.name}</div>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                    <div style={{ fontSize: 14, fontWeight: 600, color: "#4a3527" }}>{p.name}</div>
+                    {p.nextAction && (
+                      <span
+                        title={p.nextAction}
+                        style={{
+                          background: "#fef2e0", color: "#a68d4a", border: "1px solid #eddcb0",
+                          borderRadius: 999, padding: "2px 8px", fontSize: 11, fontWeight: 600,
+                          maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                        }}
+                      >
+                        📌 {p.nextAction}
+                      </span>
+                    )}
+                  </div>
                   <div style={{ fontSize: 12, color: "#8a7a66", marginTop: 2, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                     <span>{(p.currentStatus || "call").toUpperCase()}</span>
                     {p.enquiryProduct && <span>· {p.enquiryProduct}</span>}
@@ -8905,6 +8925,18 @@ function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOp
                     <div style={{ minWidth: 160, flex: "0 0 160px" }}>
                       <div style={{ fontSize: 14, fontWeight: 700, color: "#4a3527", lineHeight: 1.3 }}>{p.name}</div>
                     </div>
+                    {p.nextAction && (
+                      <span
+                        title={p.nextAction}
+                        style={{
+                          background: "#fef2e0", color: "#a68d4a", border: "1px solid #eddcb0",
+                          borderRadius: 999, padding: "3px 10px", fontSize: 11, fontWeight: 600,
+                          flex: "0 1 220px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                        }}
+                      >
+                        📌 {p.nextAction}
+                      </span>
+                    )}
                     {p.phone && (
                       <div style={{ fontSize: 12, color: "#6b5240", display: "flex", alignItems: "center", gap: 4, flex: "0 0 auto" }}>
                         <span style={{ opacity: 0.6, fontSize: 11 }}>📞</span>
@@ -9092,6 +9124,7 @@ function CRMModal({ editing, db, onCancel, onSave, openRecord, onLogActivity, on
   const [expectedOrderEtaMonth, setExpectedOrderEtaMonth] = useState(editing ? editing.expectedOrderEtaMonth || "" : "");
   const [salesValue, setSalesValue] = useState(editing ? String(editing.salesValue || "") : "");
   const [notes, setNotes] = useState(editing ? editing.notes || "" : "");
+  const [nextAction, setNextAction] = useState(editing ? editing.nextAction || "" : "");
   const [attachments, setAttachments] = useState(editing ? editing.attachments || [] : []);
   const [error, setError] = useState("");
 
@@ -9141,6 +9174,7 @@ function CRMModal({ editing, db, onCancel, onSave, openRecord, onLogActivity, on
         expectedOrderEtaMonth: expectedOrderEtaMonth || null,
         salesValue: parseFloat(salesValue) || 0,
         notes: notes.trim(),
+        nextAction: nextAction.trim(),
         attachments,
         // activities is managed separately via logActivity — don't overwrite here
       },
@@ -9280,6 +9314,15 @@ function CRMModal({ editing, db, onCancel, onSave, openRecord, onLogActivity, on
           style={{ ...inputStyle, minHeight: 64, resize: "vertical" }}
           value={notes}
           onChange={(e) => setNotes(e.target.value)}
+        />
+      </Field>
+
+      <Field label="Next action / reminder">
+        <input
+          style={inputStyle}
+          placeholder="e.g. Call back Friday about deposit"
+          value={nextAction}
+          onChange={(e) => setNextAction(e.target.value)}
         />
       </Field>
 
