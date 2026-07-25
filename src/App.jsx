@@ -9603,7 +9603,7 @@ function dedupeCustomerRows(customers) {
   const seen = new Set();
   const result = [];
   for (const c of customers || []) {
-    const invNum = (c.invoiceNumber || "").trim();
+    const invNum = String(c.invoiceNumber || "").trim();
     if (!invNum) { result.push(c); continue; }
     if (seen.has(invNum)) continue;
     seen.add(invNum);
