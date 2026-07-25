@@ -8188,7 +8188,9 @@ function ContactModal({ kind, editing, onCancel, onSave, onCreateQuote, onArchiv
             {invoices.length === 0 && (
               <p style={{ fontSize: 12, color: "#8a7a66", margin: 0 }}>No payments recorded yet.</p>
             )}
-            {invoices.map((inv, idx) => (
+            {invoices.map((rawInv, idx) => {
+              const inv = rawInv || { amount: "", invoiceMonth: "" };
+              return (
               <div key={idx} style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 8, marginBottom: 6, alignItems: "end" }}>
                 <Field label={`Invoice ${idx + 1} amount (AUD)`}>
                   <input
@@ -8225,7 +8227,8 @@ function ContactModal({ kind, editing, onCancel, onSave, onCreateQuote, onArchiv
                   ×
                 </button>
               </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
