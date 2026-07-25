@@ -969,6 +969,47 @@ function Badge({ children, tone = "model" }) {
     </span>
   );
 }
+// Compact indicator for a prospect's "next action / reminder" text. Shows
+// just a small pin icon so it never disrupts the row layout; the actual
+// text only appears in a popover on hover (desktop) or tap (mobile/touch).
+function ActionBubble({ text }) {
+  const [open, setOpen] = useState(false);
+  if (!text) return null;
+  return (
+    <span
+      style={{ position: "relative", display: "inline-flex", flexShrink: 0 }}
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+    >
+      <span
+        onClick={(e) => { e.stopPropagation(); setOpen((o) => !o); }}
+        title={text}
+        style={{
+          display: "inline-flex", alignItems: "center", justifyContent: "center",
+          width: 22, height: 22, borderRadius: "50%",
+          background: "#fef2e0", border: "1px solid #eddcb0",
+          fontSize: 12, cursor: "pointer", flexShrink: 0,
+        }}
+      >
+        📌
+      </span>
+      {open && (
+        <span
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            position: "absolute", top: "calc(100% + 6px)", left: 0, zIndex: 30,
+            background: "#4a3527", color: "#fff", padding: "7px 11px", borderRadius: 7,
+            fontSize: 12, fontWeight: 600, lineHeight: 1.4, whiteSpace: "normal",
+            width: "max-content", maxWidth: 220,
+            boxShadow: "0 4px 14px rgba(0,0,0,0.25)",
+          }}
+        >
+          {text}
+        </span>
+      )}
+    </span>
+  );
+}
 
 function Btn({ children, onClick, variant = "ghost", size = "md", style, ...rest }) {
   const [isPressed, setIsPressed] = useState(false);
@@ -8841,18 +8882,7 @@ function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOp
                 <div style={{ minWidth: 0 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                     <div style={{ fontSize: 14, fontWeight: 600, color: "#4a3527" }}>{p.name}</div>
-                    {p.nextAction && (
-                      <span
-                        title={p.nextAction}
-                        style={{
-                          background: "#fef2e0", color: "#a68d4a", border: "1px solid #eddcb0",
-                          borderRadius: 999, padding: "2px 8px", fontSize: 11, fontWeight: 600,
-                          maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                        }}
-                      >
-                        📌 {p.nextAction}
-                      </span>
-                    )}
+                    <ActionBubble text={p.nextAction} />
                   </div>
                   <div style={{ fontSize: 12, color: "#8a7a66", marginTop: 2, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                     <span>{(p.currentStatus || "call").toUpperCase()}</span>
@@ -8922,21 +8952,10 @@ function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOp
                 >
                   {/* Row 1: name, phone, email, product, value, status, chance */}
                   <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
-                    <div style={{ minWidth: 160, flex: "0 0 160px" }}>
+                    <div style={{ minWidth: 160, flex: "0 0 160px", display: "flex", alignItems: "center", gap: 6 }}>
                       <div style={{ fontSize: 14, fontWeight: 700, color: "#4a3527", lineHeight: 1.3 }}>{p.name}</div>
+                      <ActionBubble text={p.nextAction} />
                     </div>
-                    {p.nextAction && (
-                      <span
-                        title={p.nextAction}
-                        style={{
-                          background: "#fef2e0", color: "#a68d4a", border: "1px solid #eddcb0",
-                          borderRadius: 999, padding: "3px 10px", fontSize: 11, fontWeight: 600,
-                          flex: "0 1 220px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
-                        }}
-                      >
-                        📌 {p.nextAction}
-                      </span>
-                    )}
                     {p.phone && (
                       <div style={{ fontSize: 12, color: "#6b5240", display: "flex", alignItems: "center", gap: 4, flex: "0 0 auto" }}>
                         <span style={{ opacity: 0.6, fontSize: 11 }}>📞</span>
