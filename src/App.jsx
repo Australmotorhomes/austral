@@ -7938,6 +7938,39 @@ function AttachmentsPanel({ recordId, recordType, attachments, onAttachmentsChan
   );
 }
 
+// Legacy customer records store up to 3 payments in flat fields —
+// invoiceAmount1st/2nd/3rd + invoiceMonth1st/2nd/3rd (invoiceDate1st as a
+// fallback month for payment 1) — while newer records use a single
+// unbounded "invoices" array (see getCustomerInvoicesForCalc below, which
+// still merges both for reporting). The modal used to show BOTH as separate
+// editable sections, which duplicated the same data in two places. Instead,
+// fold any legacy payments into the invoices array once, here, so the modal
+// only ever presents ONE payment schedule. handleSave then clears the
+// legacy fields on the next save, so the record is fully migrated and the
+// legacy values won't reappear or double-count on a future edit.
+function mergeLegacyPaymentsIntoInvoices(c) {
+  if (!c) return [];
+  const base = (Array.isArray(c.invoices) ? c.invoices : []).filter(Boolean);
+  const legacyMonth1st = c.invoiceMonth1st || (c.invoiceDate1st ? c.invoiceDate1st.slice(0, 7) : "");
+  const legacyPairs = [
+    { amount: parseFloat(c.invoiceAmount1st) || 0, invoiceMonth: legacyMonth1st || "" },
+    { amount: parseFloat(c.invoiceAmount2nd) || 0, invoiceMonth: c.invoiceMonth2nd || "" },
+    { amount: parseFloat(c.invoiceAmount3rd) || 0, invoiceMonth: c.invoiceMonth3rd || "" },
+  ].filter((p) => p.amount > 0 || p.invoiceMonth);
+  const seen = new Set(
+    base.map((inv) => `${parseFloat(inv.amount) || 0}|${(inv.invoiceMonth || "").slice(0, 7)}`)
+  );
+  const merged = [...base];
+  legacyPairs.forEach((p) => {
+    const key = `${p.amount}|${(p.invoiceMonth || "").slice(0, 7)}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      merged.push({ amount: p.amount || "", invoiceMonth: p.invoiceMonth || "" });
+    }
+  });
+  return merged;
+}
+
 function ContactModal({ kind, editing, onCancel, onSave, onCreateQuote, onArchive, onLogActivity, onEditActivity, db, openRecord }) {
   const isSupplier = kind === "supplier";
   const [name, setName] = useState(editing ? editing.name : "");
@@ -7960,15 +7993,8 @@ function ContactModal({ kind, editing, onCancel, onSave, onCreateQuote, onArchiv
     ? CUSTOMER_STATUS_OPTIONS.find((o) => o.toLowerCase() === String(editing.status).toLowerCase())
     : null;
   const [status, setStatus] = useState(!isSupplier ? normalizedExistingStatus || editing?.status || "Deposit" : "");
-  const [invoices, setInvoices] = useState(!isSupplier ? (editing?.invoices || []) : []);
+  const [invoices, setInvoices] = useState(!isSupplier ? mergeLegacyPaymentsIntoInvoices(editing) : []);
   const [product, setProduct] = useState(!isSupplier ? (editing?.product || "") : "");
-  const [invoiceAmount1st, setInvoiceAmount1st] = useState(!isSupplier ? (editing?.invoiceAmount1st || 0) : 0);
-  const [invoiceAmount2nd, setInvoiceAmount2nd] = useState(!isSupplier ? (editing?.invoiceAmount2nd || 0) : 0);
-  const [invoiceAmount3rd, setInvoiceAmount3rd] = useState(!isSupplier ? (editing?.invoiceAmount3rd || 0) : 0);
-  const [invoiceDate1st, setInvoiceDate1st] = useState(!isSupplier ? (editing?.invoiceDate1st || "") : "");
-  const [invoiceMonth1st, setInvoiceMonth1st] = useState(!isSupplier ? (editing?.invoiceMonth1st || "") : "");
-  const [invoiceMonth2nd, setInvoiceMonth2nd] = useState(!isSupplier ? (editing?.invoiceMonth2nd || "") : "");
-  const [invoiceMonth3rd, setInvoiceMonth3rd] = useState(!isSupplier ? (editing?.invoiceMonth3rd || "") : "");
   const [lastQuoteNumber, setLastQuoteNumber] = useState(!isSupplier ? String(editing?.lastQuoteNumber || "") : "");
   const [lastQuoteValue, setLastQuoteValue] = useState(!isSupplier ? String(editing?.lastQuoteValue || "") : "");
   const [notes, setNotes] = useState(editing ? editing.notes || "" : "");
@@ -7992,14 +8018,21 @@ function ContactModal({ kind, editing, onCancel, onSave, onCreateQuote, onArchiv
         ...(!isSupplier && invoiceNumber && { invoiceNumber: invoiceNumber.trim() }),
         ...(!isSupplier && { status }),
         ...(!isSupplier && { product: product.trim() }),
-        ...(!isSupplier && { invoices: invoices.filter(inv => inv.amount || inv.invoiceMonth) }),
-        ...(!isSupplier && { invoiceAmount1st: parseFloat(invoiceAmount1st) || 0 }),
-        ...(!isSupplier && { invoiceAmount2nd: parseFloat(invoiceAmount2nd) || 0 }),
-        ...(!isSupplier && { invoiceAmount3rd: parseFloat(invoiceAmount3rd) || 0 }),
-        ...(!isSupplier && { invoiceDate1st: invoiceDate1st || "" }),
-        ...(!isSupplier && { invoiceMonth1st: invoiceMonth1st || "" }),
-        ...(!isSupplier && { invoiceMonth2nd: invoiceMonth2nd || "" }),
-        ...(!isSupplier && { invoiceMonth3rd: invoiceMonth3rd || "" }),
+        ...(!isSupplier && { invoices: invoices.filter(inv => inv && (inv.amount || inv.invoiceMonth)) }),
+        // Legacy payment fields (invoiceAmount1st/2nd/3rd, invoiceMonth1st/2nd/3rd,
+        // invoiceDate1st) are no longer edited directly — any values they held were
+        // folded into the invoices array above when the modal opened (see
+        // mergeLegacyPaymentsIntoInvoices). Clear them here so the migration sticks:
+        // once a record is saved from this modal, its payments live in exactly one
+        // place, and getCustomerInvoicesForCalc won't double-add them from the
+        // legacy columns on a future load.
+        ...(!isSupplier && { invoiceAmount1st: 0 }),
+        ...(!isSupplier && { invoiceAmount2nd: 0 }),
+        ...(!isSupplier && { invoiceAmount3rd: 0 }),
+        ...(!isSupplier && { invoiceDate1st: "" }),
+        ...(!isSupplier && { invoiceMonth1st: "" }),
+        ...(!isSupplier && { invoiceMonth2nd: "" }),
+        ...(!isSupplier && { invoiceMonth3rd: "" }),
         notes: notes.trim(),
         attachments,
       },
@@ -8185,6 +8218,17 @@ function ContactModal({ kind, editing, onCancel, onSave, onCreateQuote, onArchiv
                 + Add payment
               </button>
             </div>
+            {(() => {
+              const totalPaid = invoices.reduce((s, inv) => s + (parseFloat(inv && inv.amount) || 0), 0);
+              return totalPaid > 0 ? (
+                <p style={{ fontSize: 11, color: "#8a7a66", margin: "0 0 10px" }}>
+                  Amount paid — total from all payments received
+                  <strong style={{ color: "#4a3527", marginLeft: 6 }}>
+                    ${totalPaid.toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </strong>
+                </p>
+              ) : null;
+            })()}
             {invoices.length === 0 && (
               <p style={{ fontSize: 12, color: "#8a7a66", margin: 0 }}>No payments recorded yet.</p>
             )}
@@ -8229,13 +8273,20 @@ function ContactModal({ kind, editing, onCancel, onSave, onCreateQuote, onArchiv
               </div>
               );
             })}
+            {invoices.length > 0 && (
+              <p style={{ fontSize: 11, color: "#8a7a66", margin: "6px 0 0" }}>
+                Each payment is placed in the financial year its own month falls in — use the month
+                that payment was actually sold/invoiced in, even if delivery happened later. Payments
+                in the same month are added together; payments in different months are kept separate.
+              </p>
+            )}
           </div>
         </div>
       )}
 
       {!isSupplier && (
         <div style={{ borderTop: "1px solid #e3d8c6", paddingTop: 14, marginTop: 14 }}>
-          <h4 style={{ fontSize: 13, fontWeight: 600, color: "#6b5240", margin: "0 0 12px" }}>Product & Payments</h4>
+          <h4 style={{ fontSize: 13, fontWeight: 600, color: "#6b5240", margin: "0 0 12px" }}>Product</h4>
           <Field label="Product (model / description)">
             <input
               style={inputStyle}
@@ -8245,45 +8296,6 @@ function ContactModal({ kind, editing, onCancel, onSave, onCreateQuote, onArchiv
               onChange={(e) => setProduct(e.target.value)}
             />
           </Field>
-          <p style={{ fontSize: 11, color: "#8a7a66", margin: "0 0 10px" }}>
-            Amount paid — total from all payments received
-            {invoiceAmount1st + invoiceAmount2nd + invoiceAmount3rd > 0 && (
-              <strong style={{ color: "#4a3527", marginLeft: 6 }}>
-                ${(invoiceAmount1st + invoiceAmount2nd + invoiceAmount3rd).toLocaleString("en-AU", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-              </strong>
-            )}
-          </p>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
-            <Field label="Payment 1 (AUD)">
-              <input style={inputStyle} type="number" step="0.01" min="0" placeholder="0.00"
-                value={invoiceAmount1st || ""}
-                onChange={(e) => setInvoiceAmount1st(parseFloat(e.target.value) || 0)} />
-              <input style={{ ...inputStyle, marginTop: 6 }} type="month"
-                value={invoiceMonth1st || ""}
-                onChange={(e) => setInvoiceMonth1st(e.target.value)} />
-            </Field>
-            <Field label="Payment 2 (AUD)">
-              <input style={inputStyle} type="number" step="0.01" min="0" placeholder="0.00"
-                value={invoiceAmount2nd || ""}
-                onChange={(e) => setInvoiceAmount2nd(parseFloat(e.target.value) || 0)} />
-              <input style={{ ...inputStyle, marginTop: 6 }} type="month"
-                value={invoiceMonth2nd || ""}
-                onChange={(e) => setInvoiceMonth2nd(e.target.value)} />
-            </Field>
-            <Field label="Payment 3 (AUD)">
-              <input style={inputStyle} type="number" step="0.01" min="0" placeholder="0.00"
-                value={invoiceAmount3rd || ""}
-                onChange={(e) => setInvoiceAmount3rd(parseFloat(e.target.value) || 0)} />
-              <input style={{ ...inputStyle, marginTop: 6 }} type="month"
-                value={invoiceMonth3rd || ""}
-                onChange={(e) => setInvoiceMonth3rd(e.target.value)} />
-            </Field>
-          </div>
-          <p style={{ fontSize: 11, color: "#8a7a66", margin: "6px 0 0" }}>
-            Each payment is placed in the financial year its own month falls in — use the month that
-            payment was actually sold/invoiced in, even if delivery happened later. Payments in the same
-            month are added together; payments in different months are kept separate.
-          </p>
         </div>
       )}
 
