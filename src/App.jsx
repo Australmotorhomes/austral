@@ -9573,25 +9573,27 @@ function getCustomerInvoicesForCalc(c) {
     { amount: parseFloat(c.invoiceAmount2nd) || 0, month: c.invoiceMonth2nd ? c.invoiceMonth2nd.slice(0, 7) : null },
     { amount: parseFloat(c.invoiceAmount3rd) || 0, month: c.invoiceMonth3rd ? c.invoiceMonth3rd.slice(0, 7) : null },
   ];
-  // If two of the three slots have the exact same amount AND the exact same
-  // month, that's not two separate payments — it's the same payment showing
-  // up twice (e.g. a new column that got backfilled from an existing one
-  // rather than left blank). Keep only the first occurrence of each
-  // distinct amount+month combination so a real payment is never counted
-  // twice just because it appears in more than one slot.
+  const legacyEntries = legacyPairs
+    .filter((p) => p.amount > 0 && p.month)
+    .map((p) => ({ amount: p.amount, invoiceMonth: p.month }));
+  // Dedupe the FULL combined list (the real invoices array plus the legacy
+  // fields together) by amount+month. Two payments of the exact same amount
+  // landing in the exact same month is not something that happens by
+  // coincidence across every customer in the data — every case we've traced
+  // has turned out to be the same payment appearing more than once (inside
+  // the invoices array itself, between the array and the legacy fields, or
+  // across the three legacy slots). Keep only the first occurrence of each
+  // distinct amount+month pair so a real payment is never counted twice.
   const seen = new Set();
-  const legacyEntries = [];
-  for (const p of legacyPairs) {
-    if (p.amount <= 0 || !p.month) continue;
-    const dedupeKey = `${p.amount}|${p.month}`;
+  const combined = [];
+  for (const inv of [...base, ...legacyEntries]) {
+    if (!inv || !inv.invoiceMonth) continue;
+    const dedupeKey = `${parseFloat(inv.amount) || 0}|${inv.invoiceMonth.slice(0, 7)}`;
     if (seen.has(dedupeKey)) continue;
     seen.add(dedupeKey);
-    legacyEntries.push({ amount: p.amount, invoiceMonth: p.month });
+    combined.push(inv);
   }
-  if (legacyEntries.length) {
-    return [...base, ...legacyEntries];
-  }
-  return base;
+  return combined;
 }
 
 // Safety net for duplicate ROWS in the customers table (not duplicate fields
