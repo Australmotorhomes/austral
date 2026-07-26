@@ -613,6 +613,18 @@ async function loadAllData() {
       supabaseREST("GET", "categories"),
     ]);
 
+    // app_settings is a small key/value table (added for things like the
+    // Dashboard's user-adjustable section order) that may not exist yet in
+    // every deployment until its migration is run. Fetch it separately so a
+    // missing table can't fail the Promise.all above and break data loading
+    // for everything else.
+    let appSettings = [];
+    try {
+      appSettings = await supabaseREST("GET", "app_settings");
+    } catch (settingsErr) {
+      console.warn("app_settings not available yet (fine if its migration hasn't been run):", settingsErr);
+    }
+
     return {
       items: items || [],
       quotes: quotes || [],
@@ -621,6 +633,7 @@ async function loadAllData() {
       suppliers: suppliers || [],
       crm: crm || [],
       categories: categories || [],
+      appSettings: appSettings || [],
     };
   } catch (err) {
     console.error('Load data error:', err);
@@ -10680,6 +10693,60 @@ function ToggleSwitch({ checked, onChange, label }) {
   );
 }
 
+// Wraps a single Dashboard section with a small drag handle + up/down buttons
+// so the user can reorder sections. The section's own JSX (title, collapse
+// toggle, table, everything) is passed through unchanged as children — this
+// only adds the reordering chrome around the outside.
+function DashboardSectionWrapper({
+  label, isDragOver, onDragStart, onDragEnd, onDragOver, onDragLeave, onDrop,
+  onMoveUp, onMoveDown, canMoveUp, canMoveDown, children,
+}) {
+  return (
+    <div
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+      style={{
+        outline: isDragOver ? "2px dashed #b5552b" : "none",
+        outlineOffset: 4,
+        borderRadius: 10,
+      }}
+    >
+      <div
+        draggable
+        onDragStart={onDragStart}
+        onDragEnd={onDragEnd}
+        title={`Drag to reorder "${label}"`}
+        style={{
+          display: "flex", alignItems: "center", gap: 6, width: "fit-content",
+          padding: "2px 6px 2px 2px", marginBottom: 4, borderRadius: 5,
+          cursor: "grab", userSelect: "none",
+        }}
+      >
+        <span style={{ fontSize: 13, color: "#b3a58e", letterSpacing: "-1px" }}>⠿⠿</span>
+        <span style={{ fontSize: 11, color: "#8a7a66", fontWeight: 700, letterSpacing: "0.02em" }}>{label}</span>
+        <button
+          onClick={onMoveUp}
+          disabled={!canMoveUp}
+          title="Move section up"
+          style={{ background: "none", border: "none", fontSize: 12, color: canMoveUp ? "#6b5240" : "#d4c4b0", cursor: canMoveUp ? "pointer" : "default", padding: "0 3px" }}
+        >
+          ▲
+        </button>
+        <button
+          onClick={onMoveDown}
+          disabled={!canMoveDown}
+          title="Move section down"
+          style={{ background: "none", border: "none", fontSize: 12, color: canMoveDown ? "#6b5240" : "#d4c4b0", cursor: canMoveDown ? "pointer" : "default", padding: "0 3px" }}
+        >
+          ▼
+        </button>
+      </div>
+      {children}
+    </div>
+  );
+}
+
 function DashboardTab({ db, setTab, openRecord }) {
   const isMobile = useIsMobile();
   // Each column is a fiscal year ending June 30 of fyYear
@@ -10713,6 +10780,66 @@ function DashboardTab({ db, setTab, openRecord }) {
   const [funnelDrillDown, setFunnelDrillDown] = React.useState(null); // { title, kind: "prospects" | "quotes", rows }
   const [mobilePage, setMobilePage] = React.useState(0);
   const touchStartX = React.useRef(0);
+
+  // ── Editable dashboard layout ──────────────────────────────────────────
+  // The three top-level sections below (Sales Dashboard, Stock Movement,
+  // Sales by Model) can be dragged into whatever order the user prefers.
+  // The order is saved to the app_settings table so it persists across
+  // sessions/devices, not just this browser tab.
+  const DEFAULT_SECTION_ORDER = ["salesDashboard", "stockMovement", "salesByModel", "shipmentsDue"];
+  const SECTION_LABELS = {
+    salesDashboard: "Sales Dashboard",
+    stockMovement: "Stock Movement",
+    salesByModel: "Sales by Model",
+    shipmentsDue: "Shipments Due",
+  };
+  const savedSectionOrder = (db.appSettings || []).find((s) => s.key === "dashboard_section_order")?.value;
+  const [sectionOrder, setSectionOrder] = React.useState(
+    Array.isArray(savedSectionOrder) && savedSectionOrder.length
+      // Guard against a saved order that's missing a section (e.g. after an
+      // app update adds a new one) by appending any keys it doesn't have yet.
+      ? [...savedSectionOrder, ...DEFAULT_SECTION_ORDER.filter((k) => !savedSectionOrder.includes(k))]
+      : DEFAULT_SECTION_ORDER
+  );
+  const [draggingSectionKey, setDraggingSectionKey] = React.useState(null);
+  const [dragOverSectionKey, setDragOverSectionKey] = React.useState(null);
+
+  function persistSectionOrder(newOrder) {
+    setSectionOrder(newOrder);
+    (async () => {
+      try {
+        await fetch(`${SUPABASE_URL}/rest/v1/app_settings`, {
+          method: "POST",
+          headers: getSupabaseHeaders({ Prefer: "resolution=merge-duplicates,return=minimal" }),
+          body: JSON.stringify({ key: "dashboard_section_order", value: newOrder, updated_at: new Date().toISOString() }),
+        });
+      } catch (err) {
+        // Non-fatal — the new order still applies for this session via local
+        // state, it just won't be remembered next time. Log for diagnosis.
+        console.error("Failed to save dashboard section order:", err);
+      }
+    })();
+  }
+
+  function moveSection(key, direction) {
+    const idx = sectionOrder.indexOf(key);
+    const newIdx = idx + direction;
+    if (idx === -1 || newIdx < 0 || newIdx >= sectionOrder.length) return;
+    const newOrder = sectionOrder.slice();
+    [newOrder[idx], newOrder[newIdx]] = [newOrder[newIdx], newOrder[idx]];
+    persistSectionOrder(newOrder);
+  }
+
+  function reorderSectionsByDrag(draggedKey, targetKey) {
+    if (!draggedKey || draggedKey === targetKey) return;
+    const newOrder = sectionOrder.slice();
+    const fromIdx = newOrder.indexOf(draggedKey);
+    const toIdx = newOrder.indexOf(targetKey);
+    if (fromIdx === -1 || toIdx === -1) return;
+    newOrder.splice(fromIdx, 1);
+    newOrder.splice(toIdx, 0, draggedKey);
+    persistSectionOrder(newOrder);
+  }
 
   const getFYRange = (fyEndYear) => ({
     start: `${fyEndYear - 1}-07-01`,
@@ -11439,9 +11566,8 @@ function DashboardTab({ db, setTab, openRecord }) {
   }
   // ── END MOBILE DASHBOARD ──────────────────────────────────────────────────
 
-  return (
-    <>
-      {/* ── SALES DASHBOARD (merged: Sales Performance + Pipeline/PO/Margin) ── */}
+  // ── SALES DASHBOARD (merged: Sales Performance + Pipeline/PO/Margin) ──
+  const salesDashboardSection = (
       <section style={{ marginBottom: 32, padding: 20, background: "#f9f5f0", borderRadius: 8, border: "1px solid #e3d8c6" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: salesDashboardCollapsed ? 0 : 4 }}>
           <h2 className="section-title" style={{ margin: 0 }}>Sales Dashboard</h2>
@@ -11956,8 +12082,10 @@ function DashboardTab({ db, setTab, openRecord }) {
         </>
         )}
       </section>
+  );
 
-      {/* ── STOCK MOVEMENT TABLE ── */}
+  // ── STOCK MOVEMENT TABLE ──
+  const stockMovementSection = (
       <section style={{ marginBottom: 32, padding: 20, background: "#f4faf6", borderRadius: 8, border: "1px solid #c0d8c8" }}>
         <StockMovementTable
           db={db}
@@ -11970,8 +12098,10 @@ function DashboardTab({ db, setTab, openRecord }) {
           EARLIEST_FY_END={EARLIEST_FY_END}
         />
       </section>
+  );
 
-      {/* ── SALES BY MODEL TABLE ── */}
+  // ── SALES BY MODEL TABLE ──
+  const salesByModelSection = (
       <section style={{ marginBottom: 32, padding: 20, background: "#f6f1e7", borderRadius: 8, border: "1px solid #e3d8c6" }}>
         {(() => {
           const MODELS = SALES_MODELS;
@@ -12114,19 +12244,11 @@ function DashboardTab({ db, setTab, openRecord }) {
           );
         })()}
       </section>
+  );
 
-      <SalesByModelModals
-        drillDown={salesModelDrillDown}
-        setDrillDown={setSalesModelDrillDown}
-        unmatchedInfo={salesModelUnmatched}
-        setUnmatchedInfo={setSalesModelUnmatched}
-        skippedNoDate={salesModelSkippedNoDate}
-        setSkippedNoDate={setSalesModelSkippedNoDate}
-        openRecord={openRecord}
-      />
-
-      {/* Shipments due */}
-      <Panel style={{ marginTop: 24 }}>
+  // ── SHIPMENTS DUE ──
+  const shipmentsDueSection = (
+      <Panel style={{ marginTop: 0 }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: shipmentsDueCollapsed ? 0 : 16 }}>
           <h3 style={{ fontFamily: "Georgia,serif", fontSize: 16, color: "#4a3527", margin: 0 }}>Shipments due</h3>
           <ToggleSwitch checked={!shipmentsDueCollapsed} onChange={() => setShipmentsDueCollapsed(v => !v)} label="Show Shipments due" />
@@ -12301,7 +12423,53 @@ function DashboardTab({ db, setTab, openRecord }) {
           }
         })()}
       </Panel>
+  );
 
+  const sectionsByKey = {
+    salesDashboard: salesDashboardSection,
+    stockMovement: stockMovementSection,
+    salesByModel: salesByModelSection,
+    shipmentsDue: shipmentsDueSection,
+  };
+
+  return (
+    <>
+      {sectionOrder.map((key, idx) => (
+        <DashboardSectionWrapper
+          key={key}
+          label={SECTION_LABELS[key]}
+          isDragOver={dragOverSectionKey === key}
+          onDragStart={(e) => {
+            e.dataTransfer.setData("text/dashboard-section-key", key);
+            setDraggingSectionKey(key);
+          }}
+          onDragEnd={() => { setDraggingSectionKey(null); setDragOverSectionKey(null); }}
+          onDragOver={(e) => { e.preventDefault(); setDragOverSectionKey(key); }}
+          onDragLeave={() => setDragOverSectionKey((prev) => (prev === key ? null : prev))}
+          onDrop={(e) => {
+            e.preventDefault();
+            setDragOverSectionKey(null);
+            const draggedKey = e.dataTransfer.getData("text/dashboard-section-key") || draggingSectionKey;
+            reorderSectionsByDrag(draggedKey, key);
+          }}
+          onMoveUp={() => moveSection(key, -1)}
+          onMoveDown={() => moveSection(key, 1)}
+          canMoveUp={idx > 0}
+          canMoveDown={idx < sectionOrder.length - 1}
+        >
+          {sectionsByKey[key]}
+        </DashboardSectionWrapper>
+      ))}
+
+      <SalesByModelModals
+        drillDown={salesModelDrillDown}
+        setDrillDown={setSalesModelDrillDown}
+        unmatchedInfo={salesModelUnmatched}
+        setUnmatchedInfo={setSalesModelUnmatched}
+        skippedNoDate={salesModelSkippedNoDate}
+        setSkippedNoDate={setSalesModelSkippedNoDate}
+        openRecord={openRecord}
+      />
       {drillDown && (
         <Modal onClose={() => setDrillDown(null)} width={620}>
           <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: "0 0 4px", fontSize: 19 }}>
