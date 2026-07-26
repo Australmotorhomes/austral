@@ -8425,10 +8425,155 @@ function ContactModal({ kind, editing, onCancel, onSave, onCreateQuote, onArchiv
    CRM TAB
    ============================================================ */
 
+// Shared stage config for the prospect pipeline — used by both the Kanban
+// board columns and (colour-wise) the list view's status badges. Keys match
+// the currentStatus values used throughout the CRM (see CRMModal's status
+// select), so a prospect always lands in exactly one column.
+const PROSPECT_STAGES = [
+  { key: "call", label: "Call" },
+  { key: "quote", label: "Quote" },
+  { key: "deposit", label: "Deposit received" },
+  { key: "delivered", label: "Delivered" },
+  { key: "lost", label: "Lost" },
+];
+const PROSPECT_STAGE_COLORS = {
+  call: { bg: "#fef2e0", color: "#a68d4a" },
+  quote: { bg: "#e8f0fb", color: "#3a5fa0" },
+  deposit: { bg: "#e3ecdc", color: "#5c7a4f" },
+  delivered: { bg: "#dff0ea", color: "#2f7d68" },
+  lost: { bg: "#fbeae5", color: "#a3442e" },
+};
+
+// Kanban view of the prospect pipeline. Cards are draggable between columns
+// (desktop) and also carry a small stage <select> on every card as a
+// touch-friendly fallback, since native HTML5 drag-and-drop doesn't fire on
+// mobile. `list` is expected to already be filtered (search / show-lost) by
+// the caller — this component only groups it by stage.
+function ProspectKanbanBoard({ list, onOpen, onMove, onDelete }) {
+  const [dragOverStage, setDragOverStage] = useState(null);
+
+  const byStage = {};
+  PROSPECT_STAGES.forEach((s) => (byStage[s.key] = []));
+  list.forEach((p) => {
+    const key = (p.currentStatus || "call").toLowerCase();
+    (byStage[key] || byStage.call).push(p);
+  });
+
+  return (
+    <div style={{ display: "flex", gap: 12, overflowX: "auto", paddingBottom: 8 }}>
+      {PROSPECT_STAGES.map((stage) => {
+        const cards = byStage[stage.key] || [];
+        const stageColor = PROSPECT_STAGE_COLORS[stage.key] || { bg: "#f0e8d9", color: "#6b5240" };
+        const totalValue = cards.reduce((s, p) => s + (parseFloat(p.salesValue) || 0), 0);
+        const isDragOver = dragOverStage === stage.key;
+
+        return (
+          <div
+            key={stage.key}
+            onDragOver={(e) => { e.preventDefault(); setDragOverStage(stage.key); }}
+            onDragLeave={() => setDragOverStage((prev) => (prev === stage.key ? null : prev))}
+            onDrop={(e) => {
+              e.preventDefault();
+              setDragOverStage(null);
+              const id = e.dataTransfer.getData("text/prospect-id");
+              const prospect = list.find((p) => p.id === id);
+              if (prospect) onMove(prospect, stage.key);
+            }}
+            style={{
+              flex: "0 0 260px",
+              width: 260,
+              background: isDragOver ? "#faf3ea" : "#faf7f2",
+              border: isDragOver ? "1px dashed #b5552b" : "1px solid #f0e8d9",
+              borderRadius: 8,
+              display: "flex",
+              flexDirection: "column",
+              maxHeight: 640,
+            }}
+          >
+            <div style={{ padding: "10px 12px", borderBottom: "2px solid " + stageColor.color, flexShrink: 0 }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <span style={{ background: stageColor.bg, color: stageColor.color, padding: "3px 8px", borderRadius: 5, fontSize: 11, fontWeight: 700, letterSpacing: "0.04em" }}>
+                  {stage.label.toUpperCase()}
+                </span>
+                <span style={{ fontSize: 11, color: "#8a7a66", fontWeight: 600 }}>{cards.length}</span>
+              </div>
+              {totalValue > 0 && (
+                <div style={{ fontSize: 12, color: "#4a3527", fontWeight: 700, marginTop: 4 }}>
+                  {fmtMoney(totalValue, "AUD")}
+                </div>
+              )}
+            </div>
+
+            <div style={{ padding: 8, overflowY: "auto", flex: 1, display: "flex", flexDirection: "column", gap: 8 }}>
+              {cards.length === 0 && (
+                <div style={{ fontSize: 12, color: "#b3a58e", textAlign: "center", padding: "16px 4px" }}>No prospects</div>
+              )}
+              {cards.map((p) => {
+                const chance = p.chanceOfClosing || 0;
+                const chanceColor = chance >= 70 ? "#5c7a4f" : chance >= 30 ? "#a68d4a" : "#a3442e";
+                const chanceBg = chance >= 70 ? "#e3ecdc" : chance >= 30 ? "#fef2e0" : "#fbeae5";
+                return (
+                  <div
+                    key={p.id}
+                    draggable
+                    onDragStart={(e) => e.dataTransfer.setData("text/prospect-id", p.id)}
+                    onClick={() => onOpen(p)}
+                    style={{
+                      background: "#fff",
+                      border: "1px solid #f0e8d9",
+                      borderRadius: 6,
+                      padding: 10,
+                      cursor: "grab",
+                      boxShadow: "0 1px 2px rgba(74,53,39,0.06)",
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: "#4a3527", flex: 1, minWidth: 0 }}>{p.name}</div>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); onDelete(p); }}
+                        title="Delete"
+                        style={{ background: "none", border: "none", color: "#a3442e", cursor: "pointer", fontSize: 13, padding: 2, opacity: 0.6, flexShrink: 0 }}
+                      >
+                        ✕
+                      </button>
+                    </div>
+                    {p.enquiryProduct && (
+                      <div style={{ fontSize: 11, color: "#6b5240", marginTop: 3 }}>{p.enquiryProduct}</div>
+                    )}
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 6 }}>
+                      {p.salesValue > 0 ? (
+                        <span style={{ fontSize: 12, fontWeight: 700, color: "#4a3527" }}>{fmtMoney(p.salesValue, "AUD")}</span>
+                      ) : <span />}
+                      <span style={{ background: chanceBg, color: chanceColor, padding: "2px 6px", borderRadius: 5, fontSize: 10, fontWeight: 700 }}>
+                        {chance}%
+                      </span>
+                    </div>
+                    <select
+                      value={stage.key}
+                      onClick={(e) => e.stopPropagation()}
+                      onChange={(e) => onMove(p, e.target.value)}
+                      style={{ width: "100%", marginTop: 8, fontSize: 11, padding: "4px 6px", borderRadius: 4, border: "1px solid #e3d8c6", background: "#faf7f2", color: "#6b5240" }}
+                    >
+                      {PROSPECT_STAGES.map((s) => (
+                        <option key={s.key} value={s.key}>Move to: {s.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOpen, openRecord }) {
   const isMobile = useIsMobile();
   const [search, setSearch] = useState("");
   const [showLost, setShowLost] = useState(false);
+  const [viewMode, setViewMode] = useState("list"); // "list" | "kanban"
   const [editingProspect, setEditingProspect] = useState(undefined);
   const [loggingActivityFor, setLoggingActivityFor] = useState(null);
   const [importData, setImportData] = useState(null); // Data ready to import
@@ -8759,6 +8904,24 @@ function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOp
     })();
   }
 
+  function moveProspectStage(prospect, newStage) {
+    if (!prospect || (prospect.currentStatus || "call").toLowerCase() === newStage) return;
+    (async () => {
+      try {
+        await supabaseREST("PATCH", `crm_prospects?id=eq.${prospect.id}`, { current_status: newStage });
+        update((next) => {
+          const target = next.crm.find((p) => p.id === prospect.id);
+          if (target) target.currentStatus = newStage;
+        });
+        const stageLabel = PROSPECT_STAGES.find((s) => s.key === newStage)?.label || newStage;
+        showToast(`${prospect.name} moved to ${stageLabel}`);
+      } catch (err) {
+        console.error("Move prospect stage error:", err);
+        showToast(`Error updating stage: ${err.message}`);
+      }
+    })();
+  }
+
   function deleteProspect(prospect) {
     setPendingDelete(prospect);
   }
@@ -8895,10 +9058,39 @@ function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOp
             <input type="checkbox" checked={showLost} onChange={(e) => setShowLost(e.target.checked)} />
             Show Lost
           </label>
+          <div style={{ display: "flex", border: "1px solid #e3d8c6", borderRadius: 6, overflow: "hidden", flexShrink: 0 }}>
+            <button
+              onClick={() => setViewMode("list")}
+              style={{
+                padding: "6px 12px", fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer",
+                background: viewMode === "list" ? "#b5552b" : "#fff",
+                color: viewMode === "list" ? "#fff" : "#6b5240",
+              }}
+            >
+              ☰ List
+            </button>
+            <button
+              onClick={() => setViewMode("kanban")}
+              style={{
+                padding: "6px 12px", fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer",
+                background: viewMode === "kanban" ? "#b5552b" : "#fff",
+                color: viewMode === "kanban" ? "#fff" : "#6b5240",
+              }}
+            >
+              ▤ Kanban
+            </button>
+          </div>
         </div>
 
         {list.length === 0 ? (
           <Empty icon="📞" text="No prospects yet. Add one to start tracking." />
+        ) : viewMode === "kanban" ? (
+          <ProspectKanbanBoard
+            list={list}
+            onOpen={setEditingProspect}
+            onMove={moveProspectStage}
+            onDelete={deleteProspect}
+          />
         ) : isMobile ? (
           // ── Compact clickable list for mobile ──
           <div style={{ display: "flex", flexDirection: "column" }}>
