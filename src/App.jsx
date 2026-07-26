@@ -8453,6 +8453,14 @@ const PROSPECT_STAGE_COLORS = {
   quote: { bg: "#e8f0fb", color: "#3a5fa0" },
   lost: { bg: "#fbeae5", color: "#a3442e" },
 };
+// The Kanban board only shows the active working stages as columns — Lost is
+// a terminal/filed-away state, not something you drag a card into visually.
+// It's still a selectable status everywhere else (the modal dropdown, and
+// each card's "Move to" fallback select below), so a prospect can still be
+// marked Lost — it just then drops out of the board entirely rather than
+// getting its own column. The "Include Lost" checkbox next to search still
+// controls whether Lost prospects show up in the List view.
+const PROSPECT_KANBAN_COLUMNS = PROSPECT_STAGES.filter((s) => s.key !== "lost");
 
 // Kanban view of the prospect pipeline. Cards are draggable between columns
 // (desktop) and also carry a small stage <select> on every card as a
@@ -8480,12 +8488,53 @@ function followUpUrgencyColor(monthStr) {
   return { bg: "#f0e8d9", color: "#6b5240" }; // further out
 }
 
-function ProspectKanbanBoard({ list, onOpen, onMove, onDelete }) {
+function ProspectKanbanBoard({ list, onOpen, onMove, onDelete, showLost }) {
   const [dragOverStage, setDragOverStage] = useState(null);
   const [sortBy, setSortBy] = useState("default"); // "default" | "followUpMonth"
 
+  // Column widths are user-adjustable via the drag handle between columns —
+  // stored per stage key so each column can be sized independently. Session
+  // only (resets on reload); not persisted anywhere.
+  const DEFAULT_COLUMN_WIDTH = 240;
+  const MIN_COLUMN_WIDTH = 190;
+  const MAX_COLUMN_WIDTH = 520;
+  const [columnWidths, setColumnWidths] = useState({});
+  const resizingRef = useRef(null);
+
+  function getColumnWidth(key) {
+    return columnWidths[key] || DEFAULT_COLUMN_WIDTH;
+  }
+
+  useEffect(() => {
+    function handleMouseMove(e) {
+      if (!resizingRef.current) return;
+      const { key, startX, startWidth } = resizingRef.current;
+      const next = Math.max(MIN_COLUMN_WIDTH, Math.min(MAX_COLUMN_WIDTH, startWidth + (e.clientX - startX)));
+      setColumnWidths((w) => ({ ...w, [key]: next }));
+    }
+    function handleMouseUp() {
+      resizingRef.current = null;
+    }
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, []);
+
+  function startResize(e, key) {
+    e.preventDefault();
+    resizingRef.current = { key, startX: e.clientX, startWidth: getColumnWidth(key) };
+  }
+
+  // Lost prospects clutter the board when they're not being actively worked —
+  // the column only appears when "Show Lost" (next to search) is checked,
+  // which is the same checkbox that already includes/excludes them from `list`.
+  const stagesToShow = showLost ? PROSPECT_STAGES : PROSPECT_STAGES.filter((s) => s.key !== "lost");
+
   const byStage = {};
-  PROSPECT_STAGES.forEach((s) => (byStage[s.key] = []));
+  stagesToShow.forEach((s) => (byStage[s.key] = []));
   list.forEach((p) => {
     const key = (p.currentStatus || "call").toLowerCase();
     (byStage[key] || byStage.call).push(p);
@@ -8517,16 +8566,16 @@ function ProspectKanbanBoard({ list, onOpen, onMove, onDelete }) {
           <option value="followUpMonth">Follow-up month</option>
         </select>
       </div>
-      <div style={{ display: "flex", gap: 12, overflowX: "auto", paddingBottom: 8 }}>
-      {PROSPECT_STAGES.map((stage) => {
+      <div style={{ display: "flex", gap: 10, overflowX: "auto", paddingBottom: 8, width: "100%" }}>
+      {stagesToShow.map((stage) => {
         const cards = byStage[stage.key] || [];
         const stageColor = PROSPECT_STAGE_COLORS[stage.key] || { bg: "#f0e8d9", color: "#6b5240" };
         const totalValue = cards.reduce((s, p) => s + (parseFloat(p.salesValue) || 0), 0);
         const isDragOver = dragOverStage === stage.key;
 
         return (
+          <React.Fragment key={stage.key}>
           <div
-            key={stage.key}
             onDragOver={(e) => { e.preventDefault(); setDragOverStage(stage.key); }}
             onDragLeave={() => setDragOverStage((prev) => (prev === stage.key ? null : prev))}
             onDrop={(e) => {
@@ -8537,17 +8586,17 @@ function ProspectKanbanBoard({ list, onOpen, onMove, onDelete }) {
               if (prospect) onMove(prospect, stage.key);
             }}
             style={{
-              flex: "0 0 260px",
-              width: 260,
+              flex: "0 0 auto",
+              width: getColumnWidth(stage.key),
               background: isDragOver ? "#faf3ea" : "#faf7f2",
               border: isDragOver ? "1px dashed #b5552b" : "1px solid #f0e8d9",
               borderRadius: 8,
               display: "flex",
               flexDirection: "column",
-              maxHeight: 640,
+              maxHeight: "calc(100vh - 300px)",
             }}
           >
-            <div style={{ padding: "10px 12px", borderBottom: "2px solid " + stageColor.color, flexShrink: 0 }}>
+            <div style={{ padding: "8px 10px", borderBottom: "2px solid " + stageColor.color, flexShrink: 0 }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                 <span style={{ background: stageColor.bg, color: stageColor.color, padding: "3px 8px", borderRadius: 5, fontSize: 11, fontWeight: 700, letterSpacing: "0.04em" }}>
                   {stage.label.toUpperCase()}
@@ -8561,7 +8610,7 @@ function ProspectKanbanBoard({ list, onOpen, onMove, onDelete }) {
               )}
             </div>
 
-            <div style={{ padding: 8, overflowY: "auto", flex: 1, display: "flex", flexDirection: "column", gap: 8 }}>
+            <div style={{ padding: 6, overflowY: "auto", flex: 1, display: "flex", flexDirection: "column", gap: 6 }}>
               {cards.length === 0 && (
                 <div style={{ fontSize: 12, color: "#b3a58e", textAlign: "center", padding: "16px 4px" }}>No prospects</div>
               )}
@@ -8580,7 +8629,7 @@ function ProspectKanbanBoard({ list, onOpen, onMove, onDelete }) {
                       background: "#fff",
                       border: "1px solid #f0e8d9",
                       borderRadius: 6,
-                      padding: 10,
+                      padding: 8,
                       cursor: "grab",
                       boxShadow: "0 1px 2px rgba(74,53,39,0.06)",
                     }}
@@ -8629,6 +8678,22 @@ function ProspectKanbanBoard({ list, onOpen, onMove, onDelete }) {
               })}
             </div>
           </div>
+          <div
+            onMouseDown={(e) => startResize(e, stage.key)}
+            onDoubleClick={() => setColumnWidths((w) => ({ ...w, [stage.key]: DEFAULT_COLUMN_WIDTH }))}
+            title="Drag to resize column (double-click to reset)"
+            style={{
+              flex: "0 0 auto",
+              width: 10,
+              cursor: "col-resize",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <div style={{ width: 3, height: 36, borderRadius: 2, background: "#e3d8c6" }} />
+          </div>
+          </React.Fragment>
         );
       })}
       </div>
@@ -9160,6 +9225,7 @@ function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOp
             onOpen={setEditingProspect}
             onMove={moveProspectStage}
             onDelete={deleteProspect}
+            showLost={showLost}
           />
         ) : isMobile ? (
           // ── Compact clickable list for mobile ──
