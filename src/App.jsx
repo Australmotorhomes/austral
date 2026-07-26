@@ -354,6 +354,10 @@ function toSupabaseFormat(data, table) {
         copy.expected_order_eta_month = copy.expectedOrderEtaMonth;
         delete copy.expectedOrderEtaMonth;
       }
+      if (copy.followUpMonth !== undefined) {
+        copy.follow_up_month = copy.followUpMonth;
+        delete copy.followUpMonth;
+      }
       if (copy.enquiryProduct !== undefined) {
         copy.enquiry_product = copy.enquiryProduct;
         delete copy.enquiryProduct;
@@ -521,6 +525,7 @@ function fromSupabaseFormat(data, table) {
       if (copy.first_contact_date !== undefined) copy.firstContactDate = copy.first_contact_date;
       if (copy.last_contact_date !== undefined) copy.lastContactDate = copy.last_contact_date;
       if (copy.expected_order_eta_month !== undefined) copy.expectedOrderEtaMonth = copy.expected_order_eta_month;
+      if (copy.follow_up_month !== undefined) copy.followUpMonth = copy.follow_up_month;
       if (copy.enquiry_product !== undefined) copy.enquiryProduct = copy.enquiry_product;
       copy.salesValue = parseFloat(copy.sales_value || copy.value) || 0;
       if (copy.next_action !== undefined) { copy.nextAction = copy.next_action; delete copy.next_action; }
@@ -8454,8 +8459,30 @@ const PROSPECT_STAGE_COLORS = {
 // touch-friendly fallback, since native HTML5 drag-and-drop doesn't fire on
 // mobile. `list` is expected to already be filtered (search / show-lost) by
 // the caller — this component only groups it by stage.
+function formatFollowUpMonth(monthStr) {
+  if (!monthStr) return "";
+  const [y, m] = monthStr.split("-").map(Number);
+  if (!y || !m) return monthStr;
+  return new Date(y, m - 1, 1).toLocaleDateString("en-AU", { month: "short", year: "numeric" });
+}
+
+// Returns a color for a follow-up month badge based on urgency relative to
+// the current month: overdue/due-this-month reads as urgent (red), next
+// month as a heads-up (amber), anything further out as neutral (gray).
+function followUpUrgencyColor(monthStr) {
+  if (!monthStr) return null;
+  const now = new Date();
+  const currentKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+  const nextMonthDate = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+  const nextKey = `${nextMonthDate.getFullYear()}-${String(nextMonthDate.getMonth() + 1).padStart(2, "0")}`;
+  if (monthStr <= currentKey) return { bg: "#fbeae5", color: "#a3442e" }; // due now / overdue
+  if (monthStr === nextKey) return { bg: "#fef2e0", color: "#a68d4a" }; // due soon
+  return { bg: "#f0e8d9", color: "#6b5240" }; // further out
+}
+
 function ProspectKanbanBoard({ list, onOpen, onMove, onDelete }) {
   const [dragOverStage, setDragOverStage] = useState(null);
+  const [sortBy, setSortBy] = useState("default"); // "default" | "followUpMonth"
 
   const byStage = {};
   PROSPECT_STAGES.forEach((s) => (byStage[s.key] = []));
@@ -8464,8 +8491,33 @@ function ProspectKanbanBoard({ list, onOpen, onMove, onDelete }) {
     (byStage[key] || byStage.call).push(p);
   });
 
+  if (sortBy === "followUpMonth") {
+    Object.keys(byStage).forEach((key) => {
+      byStage[key] = byStage[key].slice().sort((a, b) => {
+        // Prospects with no follow-up month sort to the bottom, since they
+        // aren't waiting on a scheduled date the way the others are.
+        if (!a.followUpMonth && !b.followUpMonth) return 0;
+        if (!a.followUpMonth) return 1;
+        if (!b.followUpMonth) return -1;
+        return a.followUpMonth.localeCompare(b.followUpMonth);
+      });
+    });
+  }
+
   return (
-    <div style={{ display: "flex", gap: 12, overflowX: "auto", paddingBottom: 8 }}>
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+        <label style={{ fontSize: 12, color: "#6b5240", fontWeight: 600 }}>Sort by:</label>
+        <select
+          value={sortBy}
+          onChange={(e) => setSortBy(e.target.value)}
+          style={{ fontSize: 12, padding: "4px 8px", borderRadius: 5, border: "1px solid #e3d8c6", background: "#fff", color: "#4a3527" }}
+        >
+          <option value="default">Last contact (default)</option>
+          <option value="followUpMonth">Follow-up month</option>
+        </select>
+      </div>
+      <div style={{ display: "flex", gap: 12, overflowX: "auto", paddingBottom: 8 }}>
       {PROSPECT_STAGES.map((stage) => {
         const cards = byStage[stage.key] || [];
         const stageColor = PROSPECT_STAGE_COLORS[stage.key] || { bg: "#f0e8d9", color: "#6b5240" };
@@ -8517,6 +8569,7 @@ function ProspectKanbanBoard({ list, onOpen, onMove, onDelete }) {
                 const chance = p.chanceOfClosing || 0;
                 const chanceColor = chance >= 70 ? "#5c7a4f" : chance >= 30 ? "#a68d4a" : "#a3442e";
                 const chanceBg = chance >= 70 ? "#e3ecdc" : chance >= 30 ? "#fef2e0" : "#fbeae5";
+                const followUpColor = followUpUrgencyColor(p.followUpMonth);
                 return (
                   <div
                     key={p.id}
@@ -8534,6 +8587,7 @@ function ProspectKanbanBoard({ list, onOpen, onMove, onDelete }) {
                   >
                     <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                       <div style={{ fontSize: 13, fontWeight: 700, color: "#4a3527", flex: 1, minWidth: 0 }}>{p.name}</div>
+                      {p.nextAction && <ActionBubble text={p.nextAction} />}
                       <button
                         onClick={(e) => { e.stopPropagation(); onDelete(p); }}
                         title="Delete"
@@ -8553,6 +8607,13 @@ function ProspectKanbanBoard({ list, onOpen, onMove, onDelete }) {
                         {chance}%
                       </span>
                     </div>
+                    {followUpColor && (
+                      <div style={{ marginTop: 6 }}>
+                        <span style={{ background: followUpColor.bg, color: followUpColor.color, padding: "2px 6px", borderRadius: 5, fontSize: 10, fontWeight: 700 }}>
+                          📌 Follow up: {formatFollowUpMonth(p.followUpMonth)}
+                        </span>
+                      </div>
+                    )}
                     <select
                       value={stage.key}
                       onClick={(e) => e.stopPropagation()}
@@ -8570,6 +8631,7 @@ function ProspectKanbanBoard({ list, onOpen, onMove, onDelete }) {
           </div>
         );
       })}
+      </div>
     </div>
   );
 }
@@ -8639,6 +8701,7 @@ function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOp
             firstContactDate: row.firstContactDate?.trim() || "",
             lastContactDate: row.lastContactDate?.trim() || "",
             expectedOrderEtaMonth: row.expectedOrderEtaMonth?.trim() || "",
+            followUpMonth: row.followUpMonth?.trim() || "",
             notes: row.notes?.trim() || "",
           }))
           .filter((row) => row.name); // Require name
@@ -8681,6 +8744,7 @@ function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOp
               first_contact_date: row.firstContactDate || row.first_contact_date || null,
               last_contact_date: row.lastContactDate || row.last_contact_date || null,
               expected_order_eta_month: row.expectedOrderEtaMonth || row.expected_order_eta_month || null,
+              follow_up_month: row.followUpMonth || row.follow_up_month || null,
               sales_value: row.salesValue || row.sales_value || 0,
               notes: row.notes || "",
             };
@@ -8732,6 +8796,7 @@ function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOp
         p.currentStatus,
         p.notes,
         p.nextAction,
+        p.followUpMonth,
         p.expectedOrderEtaMonth,
         ...(p.activities || []).map((a) => a.notes),
         ...(p.activities || []).map((a) => a.type),
@@ -9366,6 +9431,7 @@ function CRMModal({ editing, db, onCancel, onSave, openRecord, onLogActivity, on
   const [salesValue, setSalesValue] = useState(editing ? String(editing.salesValue || "") : "");
   const [notes, setNotes] = useState(editing ? editing.notes || "" : "");
   const [nextAction, setNextAction] = useState(editing ? editing.nextAction || "" : "");
+  const [followUpMonth, setFollowUpMonth] = useState(editing ? editing.followUpMonth || "" : "");
   const [attachments, setAttachments] = useState(editing ? editing.attachments || [] : []);
   const [error, setError] = useState("");
 
@@ -9416,6 +9482,7 @@ function CRMModal({ editing, db, onCancel, onSave, openRecord, onLogActivity, on
         salesValue: parseFloat(salesValue) || 0,
         notes: notes.trim(),
         nextAction: nextAction.trim(),
+        followUpMonth: followUpMonth || null,
         attachments,
         // activities is managed separately via logActivity — don't overwrite here
       },
@@ -9556,14 +9623,24 @@ function CRMModal({ editing, db, onCancel, onSave, openRecord, onLogActivity, on
         />
       </Field>
 
-      <Field label="Next action / reminder">
-        <input
-          style={inputStyle}
-          placeholder="e.g. Call back Friday about deposit"
-          value={nextAction}
-          onChange={(e) => setNextAction(e.target.value)}
-        />
-      </Field>
+      <div className="grid2">
+        <Field label="Next action / reminder">
+          <input
+            style={inputStyle}
+            placeholder="e.g. Call back Friday about deposit"
+            value={nextAction}
+            onChange={(e) => setNextAction(e.target.value)}
+          />
+        </Field>
+        <Field label="Follow up (month)">
+          <input
+            style={inputStyle}
+            type="month"
+            value={followUpMonth}
+            onChange={(e) => setFollowUpMonth(e.target.value)}
+          />
+        </Field>
+      </div>
 
       {editing && (
         <div style={{ borderTop: "1px solid #e3d8c6", paddingTop: 14, marginTop: 14 }}>
