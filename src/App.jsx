@@ -4544,8 +4544,13 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
           }
           matchedProspect = (db.crm || []).find((p) => p.name === doc.party);
           if (matchedProspect) {
+            // "Deposit received" was removed from the prospect stage set — a
+            // deposit belongs on the customer record, which is what
+            // convertProspectToCustomer creates. Keep the prospect at "quote"
+            // (its terminal stage) until that conversion happens and deletes
+            // this prospect row.
             await supabaseREST("PATCH", `crm_prospects?id=eq.${matchedProspect.id}`, {
-              current_status: "deposit",
+              current_status: "quote",
             });
           }
         }
@@ -4572,10 +4577,12 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
               customer.lastQuoteValue = doc.total || 0;
             }
           }
-          // Advance the linked prospect's funnel stage to Deposit
+          // Advance the linked prospect's funnel stage to Quote (its terminal
+          // stage — "Deposit received" no longer applies to prospects; that
+          // now lives on the customer record created by convertProspectToCustomer).
           if (isQuote && status === "Accepted" && matchedProspect) {
             const prospect = next.crm?.find((p) => p.id === matchedProspect.id);
-            if (prospect) prospect.currentStatus = "deposit";
+            if (prospect) prospect.currentStatus = "quote";
           }
         });
         
@@ -8431,16 +8438,14 @@ function ContactModal({ kind, editing, onCancel, onSave, onCreateQuote, onArchiv
 // select), so a prospect always lands in exactly one column.
 const PROSPECT_STAGES = [
   { key: "call", label: "Call" },
+  { key: "meeting", label: "Meeting" },
   { key: "quote", label: "Quote" },
-  { key: "deposit", label: "Deposit received" },
-  { key: "delivered", label: "Delivered" },
   { key: "lost", label: "Lost" },
 ];
 const PROSPECT_STAGE_COLORS = {
   call: { bg: "#fef2e0", color: "#a68d4a" },
+  meeting: { bg: "#f3eafc", color: "#7a4fa0" },
   quote: { bg: "#e8f0fb", color: "#3a5fa0" },
-  deposit: { bg: "#e3ecdc", color: "#5c7a4f" },
-  delivered: { bg: "#dff0ea", color: "#2f7d68" },
   lost: { bg: "#fbeae5", color: "#a3442e" },
 };
 
@@ -9148,15 +9153,8 @@ function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOp
               const chance = p.chanceOfClosing || 0;
               const chanceColor = chance >= 70 ? "#5c7a4f" : chance >= 30 ? "#a68d4a" : "#a3442e";
               const chanceBg   = chance >= 70 ? "#e3ecdc" : chance >= 30 ? "#fef2e0" : "#fbeae5";
-              const statusColors = {
-                lost:    { bg: "#fbeae5", color: "#a3442e" },
-                deposit: { bg: "#e3ecdc", color: "#5c7a4f" },
-                quote:   { bg: "#e8f0fb", color: "#3a5fa0" },
-                call:    { bg: "#fef2e0", color: "#a68d4a" },
-                email:   { bg: "#f3eafc", color: "#7a4fa0" },
-              };
               const statusKey = (p.currentStatus || "call").toLowerCase();
-              const statusStyle = statusColors[statusKey] || { bg: "#f0e8d9", color: "#6b5240" };
+              const statusStyle = PROSPECT_STAGE_COLORS[statusKey] || { bg: "#f0e8d9", color: "#6b5240" };
 
               const acts = (p.activities || []).slice().sort((a, b) => (b.date || "").localeCompare(a.date || ""));
               const lastAct = acts[0];
@@ -9513,11 +9511,9 @@ function CRMModal({ editing, db, onCancel, onSave, openRecord, onLogActivity, on
         </Field>
         <Field label="Current status">
           <select style={inputStyle} value={currentStatus} onChange={(e) => setCurrentStatus(e.target.value)}>
-            <option value="call">Call</option>
-            <option value="quote">Quote</option>
-            <option value="deposit">Deposit received</option>
-            <option value="delivered">Delivered</option>
-            <option value="lost">Lost</option>
+            {PROSPECT_STAGES.map((s) => (
+              <option key={s.key} value={s.key}>{s.label}</option>
+            ))}
           </select>
         </Field>
       </div>
