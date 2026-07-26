@@ -2364,7 +2364,7 @@ const appStyle = {
 };
 
 const globalCss = `
-  .app{max-width:1180px;margin:0 auto;padding:0 20px 80px;}
+  .app{max-width:min(1800px, 96vw);margin:0 auto;padding:0 20px 80px;}
   header.top{display:flex;flex-direction:column;align-items:stretch;padding:22px 0 18px;border-bottom:3px solid #b5552b;margin-bottom:14px;gap:14px;}
   .brand{display:flex;align-items:center;gap:12px;width:100%;}
   .brand .mark{width:42px;height:42px;border-radius:9px;background:linear-gradient(155deg,#b5552b,#8f3f1f);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:18px;font-family:Georgia,serif;letter-spacing:-1px;flex-shrink:0;}
@@ -8497,7 +8497,7 @@ function ProspectKanbanBoard({ list, onOpen, onMove, onDelete, showLost }) {
   // only (resets on reload); not persisted anywhere.
   const DEFAULT_COLUMN_WIDTH = 240;
   const MIN_COLUMN_WIDTH = 190;
-  const MAX_COLUMN_WIDTH = 520;
+  const MAX_COLUMN_WIDTH = 1000;
   const [columnWidths, setColumnWidths] = useState({});
   const resizingRef = useRef(null);
 
@@ -8610,9 +8610,9 @@ function ProspectKanbanBoard({ list, onOpen, onMove, onDelete, showLost }) {
               )}
             </div>
 
-            <div style={{ padding: 6, overflowY: "auto", flex: 1, display: "flex", flexDirection: "column", gap: 6 }}>
+            <div style={{ padding: 6, overflowY: "auto", flex: 1, display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(190px, 1fr))", gap: 6, alignContent: "start" }}>
               {cards.length === 0 && (
-                <div style={{ fontSize: 12, color: "#b3a58e", textAlign: "center", padding: "16px 4px" }}>No prospects</div>
+                <div style={{ fontSize: 12, color: "#b3a58e", textAlign: "center", padding: "16px 4px", gridColumn: "1 / -1" }}>No prospects</div>
               )}
               {cards.map((p) => {
                 const chance = p.chanceOfClosing || 0;
