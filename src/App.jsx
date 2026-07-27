@@ -44,6 +44,29 @@ function getSupabaseHeaders(extra = {}) {
   }
   return headers;
 }
+
+// Generic key/value upsert into the app_settings table — used for any saved
+// UI preference (dashboard section order, CRM view mode, Kanban column
+// widths, etc.) so each one doesn't need to reimplement the same fetch call.
+// Fire-and-forget: failures are logged but don't block the UI, since the
+// local state change has already applied regardless of whether it persists.
+async function saveAppSetting(key, value) {
+  try {
+    await fetch(`${SUPABASE_URL}/rest/v1/app_settings`, {
+      method: "POST",
+      headers: getSupabaseHeaders({ Prefer: "resolution=merge-duplicates,return=minimal" }),
+      body: JSON.stringify({ key, value, updated_at: new Date().toISOString() }),
+    });
+  } catch (err) {
+    console.error(`Failed to save app setting "${key}":`, err);
+  }
+}
+
+function getAppSetting(db, key, fallback) {
+  const found = (db?.appSettings || []).find((s) => s.key === key);
+  return found ? found.value : fallback;
+}
+
 // Exchanges a stored refresh_token for a brand-new access_token (Supabase Auth
 // tokens expire after ~1 hour). Without this, a session left open for a few
 // hours goes stale: requests keep sending the old JWT, RLS silently returns
@@ -8501,17 +8524,19 @@ function followUpUrgencyColor(monthStr) {
   return { bg: "#f0e8d9", color: "#6b5240" }; // further out
 }
 
-function ProspectKanbanBoard({ list, onOpen, onMove, onDelete, showLost }) {
+function ProspectKanbanBoard({ list, onOpen, onMove, onDelete, showLost, db }) {
   const [dragOverStage, setDragOverStage] = useState(null);
   const [sortBy, setSortBy] = useState("default"); // "default" | "followUpMonth"
 
   // Column widths are user-adjustable via the drag handle between columns —
-  // stored per stage key so each column can be sized independently. Session
-  // only (resets on reload); not persisted anywhere.
+  // stored per stage key so each column can be sized independently, and
+  // persisted to app_settings so the layout sticks across sessions instead
+  // of resetting to the default every time the page loads.
   const DEFAULT_COLUMN_WIDTH = 240;
   const MIN_COLUMN_WIDTH = 190;
   const MAX_COLUMN_WIDTH = 1000;
-  const [columnWidths, setColumnWidths] = useState({});
+  const [columnWidths, setColumnWidths] = useState(() => getAppSetting(db, "crm_kanban_column_widths", {}));
+  const columnWidthsRef = useRef(columnWidths);
   const resizingRef = useRef(null);
 
   function getColumnWidth(key) {
@@ -8523,10 +8548,18 @@ function ProspectKanbanBoard({ list, onOpen, onMove, onDelete, showLost }) {
       if (!resizingRef.current) return;
       const { key, startX, startWidth } = resizingRef.current;
       const next = Math.max(MIN_COLUMN_WIDTH, Math.min(MAX_COLUMN_WIDTH, startWidth + (e.clientX - startX)));
-      setColumnWidths((w) => ({ ...w, [key]: next }));
+      setColumnWidths((w) => {
+        const updated = { ...w, [key]: next };
+        columnWidthsRef.current = updated;
+        return updated;
+      });
     }
     function handleMouseUp() {
-      resizingRef.current = null;
+      if (resizingRef.current) {
+        resizingRef.current = null;
+        // Save once the drag finishes, not on every pixel of movement.
+        saveAppSetting("crm_kanban_column_widths", columnWidthsRef.current);
+      }
     }
     window.addEventListener("mousemove", handleMouseMove);
     window.addEventListener("mouseup", handleMouseUp);
@@ -8539,6 +8572,13 @@ function ProspectKanbanBoard({ list, onOpen, onMove, onDelete, showLost }) {
   function startResize(e, key) {
     e.preventDefault();
     resizingRef.current = { key, startX: e.clientX, startWidth: getColumnWidth(key) };
+  }
+
+  function resetColumnWidth(key) {
+    const updated = { ...columnWidths, [key]: DEFAULT_COLUMN_WIDTH };
+    setColumnWidths(updated);
+    columnWidthsRef.current = updated;
+    saveAppSetting("crm_kanban_column_widths", updated);
   }
 
   // Lost prospects clutter the board when they're not being actively worked —
@@ -8693,7 +8733,7 @@ function ProspectKanbanBoard({ list, onOpen, onMove, onDelete, showLost }) {
           </div>
           <div
             onMouseDown={(e) => startResize(e, stage.key)}
-            onDoubleClick={() => setColumnWidths((w) => ({ ...w, [stage.key]: DEFAULT_COLUMN_WIDTH }))}
+            onDoubleClick={() => resetColumnWidth(stage.key)}
             title="Drag to resize column (double-click to reset)"
             style={{
               flex: "0 0 auto",
@@ -8718,7 +8758,11 @@ function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOp
   const isMobile = useIsMobile();
   const [search, setSearch] = useState("");
   const [showLost, setShowLost] = useState(false);
-  const [viewMode, setViewMode] = useState("list"); // "list" | "kanban"
+  const [viewMode, setViewModeState] = useState(getAppSetting(db, "crm_view_mode", "list"));
+  function setViewMode(mode) {
+    setViewModeState(mode);
+    saveAppSetting("crm_view_mode", mode);
+  }
   const [editingProspect, setEditingProspect] = useState(undefined);
   const [loggingActivityFor, setLoggingActivityFor] = useState(null);
   const [importData, setImportData] = useState(null); // Data ready to import
@@ -9239,6 +9283,7 @@ function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOp
             onMove={moveProspectStage}
             onDelete={deleteProspect}
             showLost={showLost}
+            db={db}
           />
         ) : isMobile ? (
           // ── Compact clickable list for mobile ──
@@ -10806,19 +10851,7 @@ function DashboardTab({ db, setTab, openRecord }) {
 
   function persistSectionOrder(newOrder) {
     setSectionOrder(newOrder);
-    (async () => {
-      try {
-        await fetch(`${SUPABASE_URL}/rest/v1/app_settings`, {
-          method: "POST",
-          headers: getSupabaseHeaders({ Prefer: "resolution=merge-duplicates,return=minimal" }),
-          body: JSON.stringify({ key: "dashboard_section_order", value: newOrder, updated_at: new Date().toISOString() }),
-        });
-      } catch (err) {
-        // Non-fatal — the new order still applies for this session via local
-        // state, it just won't be remembered next time. Log for diagnosis.
-        console.error("Failed to save dashboard section order:", err);
-      }
-    })();
+    saveAppSetting("dashboard_section_order", newOrder);
   }
 
   function moveSection(key, direction) {
