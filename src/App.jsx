@@ -7311,6 +7311,9 @@ function ContactsTab({ kind, db, update, showToast, nextNumber, pendingOpen, cle
   
   // Move all hooks to TOP, before any conditional returns (React Hook Rules)
   const [search, setSearch] = useState("");
+  const [showArchived, setShowArchived] = useState(false);
+  const [sortField, setSortField] = useState("name"); // "name" | "product"
+  const [sortDir, setSortDir] = useState("asc");
   const [editingContact, setEditingContact] = useState(undefined);
   const [importData, setImportData] = useState(null);
   const [pendingDelete, setPendingDelete] = useState(null);
@@ -7450,11 +7453,25 @@ function ContactsTab({ kind, db, update, showToast, nextNumber, pendingOpen, cle
     })();
   }
 
-  let list = collection.slice().sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+  function toggleSort(field) {
+    if (sortField === field) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortField(field);
+      setSortDir("asc");
+    }
+  }
+
+  let list = collection.slice().sort((a, b) => {
+    const field = sortField === "product" && !isSupplier ? "product" : "name";
+    const cmp = (a[field] || "").localeCompare(b[field] || "");
+    return sortDir === "asc" ? cmp : -cmp;
+  });
   // Archived customers are hidden from the plain list by default, but still
   // findable — as soon as a search term is typed, archived customers are
-  // included in the results too. Suppliers don't have this field.
-  if (!isSupplier && !search) {
+  // included in the results too. The "Show Archived" checkbox reveals them
+  // outright. Suppliers don't have this field.
+  if (!isSupplier && !showArchived && !search) {
     list = list.filter((c) => !c.archived);
   }
   if (search) {
@@ -7700,16 +7717,24 @@ function ContactsTab({ kind, db, update, showToast, nextNumber, pendingOpen, cle
       </div>
 
       <Panel>
-        <input
-          style={{ ...inputStyle, marginBottom: !isSupplier ? 4 : 14 }}
-          type="text"
-          placeholder="Search name, email, phone, notes, address…"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-        />
+        <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: !isSupplier ? 4 : 14, flexWrap: "wrap" }}>
+          <input
+            style={{ ...inputStyle, flex: 1, minWidth: 200, marginBottom: 0 }}
+            type="text"
+            placeholder="Search name, email, phone, notes, address…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+          {!isSupplier && (
+            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "#6b5240", whiteSpace: "nowrap", cursor: "pointer" }}>
+              <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />
+              Show Archived
+            </label>
+          )}
+        </div>
         {!isSupplier && (
           <p style={{ fontSize: 11, color: "#8a7a66", margin: "0 0 14px" }}>
-            Archived customers are hidden here by default, but will show up (marked "ARCHIVED") if your search matches them.
+            Archived customers are hidden here by default, but will show up (marked "ARCHIVED") if your search matches them or "Show Archived" is checked.
           </p>
         )}
 
@@ -7764,8 +7789,15 @@ function ContactsTab({ kind, db, update, showToast, nextNumber, pendingOpen, cle
           <table>
             <thead>
               <tr>
-                <th>Name</th>
+                <th onClick={() => toggleSort("name")} style={{ cursor: "pointer" }}>
+                  Name {sortField === "name" && (sortDir === "asc" ? "▲" : "▼")}
+                </th>
                 {isSupplier && <th>Contact</th>}
+                {!isSupplier && (
+                  <th onClick={() => toggleSort("product")} style={{ cursor: "pointer" }}>
+                    Product {sortField === "product" && (sortDir === "asc" ? "▲" : "▼")}
+                  </th>
+                )}
                 <th>Email</th>
                 <th>Phone</th>
                 <th></th>
@@ -7784,6 +7816,7 @@ function ContactsTab({ kind, db, update, showToast, nextNumber, pendingOpen, cle
                     {c.notes && <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>{c.notes.substring(0, 60)}</div>}
                   </td>
                   {isSupplier && <td className="muted">{c.contactPerson || "—"}</td>}
+                  {!isSupplier && <td className="muted">{c.product || "—"}</td>}
                   <td className="muted">{c.email || "—"}</td>
                   <td className="muted">{c.phone || "—"}</td>
                   <td style={{ whiteSpace: "nowrap" }}>
