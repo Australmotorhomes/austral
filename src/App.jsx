@@ -7806,19 +7806,23 @@ function ContactsTab({ kind, db, update, showToast, nextNumber, pendingOpen, cle
             <tbody>
               {list.map((c) => (
                 <tr key={c.id} onClick={() => setEditingContact(c)} style={{ cursor: "pointer" }}>
-                  <td>
+                  <td style={{ paddingRight: 20 }}>
                     <strong>{c.name}</strong>
                     {c.archived && (
                       <span style={{ marginLeft: 8, fontSize: 10, fontWeight: 700, color: "#a3442e", background: "#fbeae5", padding: "2px 6px", borderRadius: 5 }}>
                         ARCHIVED
                       </span>
                     )}
-                    {c.notes && <div className="muted" style={{ fontSize: 12, marginTop: 2 }}>{c.notes.substring(0, 60)}</div>}
+                    {c.notes && (
+                      <div className="muted" style={{ fontSize: 12, marginTop: 2, whiteSpace: "normal", wordBreak: "break-word" }}>
+                        {c.notes}
+                      </div>
+                    )}
                   </td>
-                  {isSupplier && <td className="muted">{c.contactPerson || "—"}</td>}
-                  {!isSupplier && <td className="muted">{c.product || "—"}</td>}
-                  <td className="muted">{c.email || "—"}</td>
-                  <td className="muted">{c.phone || "—"}</td>
+                  {isSupplier && <td className="muted" style={{ whiteSpace: "nowrap" }}>{c.contactPerson || "—"}</td>}
+                  {!isSupplier && <td className="muted" style={{ whiteSpace: "nowrap" }}>{c.product || "—"}</td>}
+                  <td className="muted" style={{ whiteSpace: "nowrap" }}>{c.email || "—"}</td>
+                  <td className="muted" style={{ whiteSpace: "nowrap" }}>{c.phone || "—"}</td>
                   <td style={{ whiteSpace: "nowrap" }}>
                     <button
                       onClick={(e) => {
