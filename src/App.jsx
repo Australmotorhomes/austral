@@ -5117,6 +5117,93 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
   );
 }
 
+// Full-text search over the price book, opened from the quote/PO line-item
+// editor. Selecting a result adds it as a line and keeps the modal open
+// (search stays put) so several items can be added back-to-back without
+// reopening it each time — closes only via the Done button or the X.
+function PriceBookSearchModal({ items, isQuote, calcSellPrice, onSelect, onClose }) {
+  const [search, setSearch] = useState("");
+  const [justAddedId, setJustAddedId] = useState(null);
+
+  const s = search.trim().toLowerCase();
+  const filtered = !s
+    ? items
+    : items.filter((i) => {
+        const haystack = [i.productCode, i.model, i.name, i.itemDescription, i.supplier]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        return haystack.includes(s);
+      });
+
+  const handlePick = (item) => {
+    onSelect(item);
+    setJustAddedId(item.id);
+    setTimeout(() => setJustAddedId((id) => (id === item.id ? null : id)), 900);
+  };
+
+  return (
+    <Modal onClose={onClose} width={600}>
+      <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: "0 0 12px", fontSize: 19 }}>
+        Add from price book
+      </h3>
+      <input
+        autoFocus
+        style={{
+          width: "100%", boxSizing: "border-box", padding: "10px 12px", fontSize: 14,
+          border: "1px solid #d8c9ae", borderRadius: 8, background: "#fffdf9",
+        }}
+        placeholder="Search by model, name, code, description…"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+      />
+      <div style={{ maxHeight: 420, overflowY: "auto", marginTop: 12, border: "1px solid #e3d8c6", borderRadius: 8 }}>
+        {filtered.length === 0 ? (
+          <p style={{ padding: 18, fontSize: 13, color: "#8a7a66", textAlign: "center", margin: 0 }}>
+            No items match "{search}".
+          </p>
+        ) : (
+          filtered.map((i) => {
+            const displayPrice = isQuote ? (i.sellPrice != null ? i.sellPrice : calcSellPrice(i.cost)) : i.cost;
+            const justAdded = justAddedId === i.id;
+            return (
+              <div
+                key={i.id}
+                onClick={() => handlePick(i)}
+                style={{
+                  padding: "10px 14px", borderBottom: "1px solid #f0e8d9", cursor: "pointer",
+                  display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10,
+                  background: justAdded ? "#eaf3e6" : "transparent",
+                  transition: "background 0.15s",
+                }}
+                onMouseOver={(e) => { if (!justAdded) e.currentTarget.style.background = "#f9f5f0"; }}
+                onMouseOut={(e) => { if (!justAdded) e.currentTarget.style.background = "transparent"; }}
+              >
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: "#4a3527" }}>
+                    {i.productCode ? `[${i.productCode}] ` : ""}{i.model} · {i.name}
+                  </div>
+                  {i.itemDescription && (
+                    <div style={{ fontSize: 11, color: "#8a7a66", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {i.itemDescription}
+                    </div>
+                  )}
+                </div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: "#4a3527", flexShrink: 0 }}>
+                  {justAdded ? "Added ✓" : `${fmtMoney(displayPrice, i.currency || "AUD")}${(i.currency || "AUD") === "USD" ? " (USD)" : ""}`}
+                </div>
+              </div>
+            );
+          })
+        )}
+      </div>
+      <div style={{ marginTop: 16, display: "flex", justifyContent: "flex-end" }}>
+        <Btn variant="ghost" onClick={onClose}>Done</Btn>
+      </div>
+    </Modal>
+  );
+}
+
 function DocModal({ kind, editing, db, items, models, categories, fx, statusOptions, onCancel, onSave, onSaveMilestones, onAddItem, onAddModel, onAddCategory, onStatusChange, onDelete, onGeneratePOs, onCreateCustomsPO, onConsolidatePOs, onReverseConsolidation, onSplitCustoms, openRecord, showToast, update }) {
   const isQuote = kind === "quote";
   const isMobile = useIsMobile();
@@ -5145,6 +5232,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
   );
   const [status, setStatusLocal] = useState(editing ? (isQuote ? editing.status : normalizePOStatus(editing.status)) : "Draft");
   const [pickerValue, setPickerValue] = useState("");
+  const [showPriceBookSearch, setShowPriceBookSearch] = useState(false);
   const [showQuickAddItem, setShowQuickAddItem] = useState(false);
   const [error, setError] = useState("");
   const [showPaymentModal, setShowPaymentModal] = useState(false);
@@ -5275,6 +5363,13 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
   function removeLine(idx) {
     setLines((prev) => prev.filter((_, i) => i !== idx));
   }
+  function addItemToLines(item) {
+    const defaultPrice = isQuote ? (item.sellPrice != null ? item.sellPrice : calcSellPrice(item.cost)) : item.cost;
+    setLines((prev) => [
+      ...prev,
+      { desc: `${item.model} — ${item.name}`, qty: 1, price: defaultPrice, currency: item.currency || "AUD", itemId: item.id, cost: item.cost || 0, lineNote: item.itemDescription || "" },
+    ]);
+  }
   function addFromPicker() {
     if (!pickerValue) {
       setError("Please select an item from the dropdown first.");
@@ -5286,11 +5381,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
       return;
     }
     setError("");
-    const defaultPrice = isQuote ? (item.sellPrice != null ? item.sellPrice : calcSellPrice(item.cost)) : item.cost;
-    setLines((prev) => [
-      ...prev,
-      { desc: `${item.model} — ${item.name}`, qty: 1, price: defaultPrice, currency: item.currency || "AUD", itemId: item.id, cost: item.cost || 0, lineNote: item.itemDescription || "" },
-    ]);
+    addItemToLines(item);
     setPickerValue("");
   }
   function addBlankLine() {
@@ -5759,38 +5850,58 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
             <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: "0 0 14px", fontSize: 16 }}>
               Add from price book
             </h3>
-            <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
-              <select style={{ ...inputStyle, flex: 1 }} value={pickerValue} onChange={(e) => setPickerValue(e.target.value)}>
-                <option value="">— choose an item —</option>
-                {sortedItems
-                  .filter((i) => {
-                    // Show all items regardless of supplier — the supplier on the item
-                    // is informational only and should not restrict the PO picker
-                    return true;
-                  })
-                  .map((i) => {
-                    const displayPrice = isQuote ? (i.sellPrice != null ? i.sellPrice : calcSellPrice(i.cost)) : i.cost;
-                    return (
-                      <option key={i.id} value={i.id}>
-                        {i.productCode ? `[${i.productCode}] ` : ""}{i.model} · {i.name} — {fmtMoney(displayPrice, i.currency || "AUD")}
-                        {(i.currency || "AUD") === "USD" ? " (USD)" : ""}
-                      </option>
-                    );
-                  })}
-              </select>
-              <Btn variant="ghost" size="sm" onClick={addFromPicker}>
-                Add
-              </Btn>
-            </div>
-            <Btn variant="ghost" size="sm" onClick={addBlankLine}>
-              + Add blank line
+            <Btn variant="primary" size="sm" onClick={() => setShowPriceBookSearch(true)} style={{ marginBottom: 10 }}>
+              🔍 Search price book
             </Btn>
-            {onAddItem && (
-              <Btn variant="ghost" size="sm" onClick={() => setShowQuickAddItem(true)} style={{ marginLeft: 8 }}>
-                + New price book item
+            <details style={{ marginBottom: 4 }}>
+              <summary style={{ fontSize: 12, color: "#8a7a66", cursor: "pointer", userSelect: "none" }}>
+                Or pick from the dropdown
+              </summary>
+              <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                <select style={{ ...inputStyle, flex: 1 }} value={pickerValue} onChange={(e) => setPickerValue(e.target.value)}>
+                  <option value="">— choose an item —</option>
+                  {sortedItems
+                    .filter((i) => {
+                      // Show all items regardless of supplier — the supplier on the item
+                      // is informational only and should not restrict the PO picker
+                      return true;
+                    })
+                    .map((i) => {
+                      const displayPrice = isQuote ? (i.sellPrice != null ? i.sellPrice : calcSellPrice(i.cost)) : i.cost;
+                      return (
+                        <option key={i.id} value={i.id}>
+                          {i.productCode ? `[${i.productCode}] ` : ""}{i.model} · {i.name} — {fmtMoney(displayPrice, i.currency || "AUD")}
+                          {(i.currency || "AUD") === "USD" ? " (USD)" : ""}
+                        </option>
+                      );
+                    })}
+                </select>
+                <Btn variant="ghost" size="sm" onClick={addFromPicker}>
+                  Add
+                </Btn>
+              </div>
+            </details>
+            <div style={{ marginTop: 10 }}>
+              <Btn variant="ghost" size="sm" onClick={addBlankLine}>
+                + Add blank line
               </Btn>
-            )}
+              {onAddItem && (
+                <Btn variant="ghost" size="sm" onClick={() => setShowQuickAddItem(true)} style={{ marginLeft: 8 }}>
+                  + New price book item
+                </Btn>
+              )}
+            </div>
           </Panel>
+
+          {showPriceBookSearch && (
+            <PriceBookSearchModal
+              items={sortedItems}
+              isQuote={isQuote}
+              calcSellPrice={calcSellPrice}
+              onSelect={(item) => addItemToLines(item)}
+              onClose={() => setShowPriceBookSearch(false)}
+            />
+          )}
 
           <Panel>
             <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: "0 0 14px", fontSize: 16 }}>
