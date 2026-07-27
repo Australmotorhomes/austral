@@ -12811,22 +12811,24 @@ function ShippingTab({ db, openRecord }) {
       <h2 className="section-title">Shipping</h2>
       <p className="section-desc">Purchase orders grouped by freight forwarding — international shipments carry a freight forwarding fee, domestic shipments don't. Click any line to open the PO.</p>
 
-      <div style={{ marginBottom: 32 }}>
-        <h3 style={{ fontFamily: "Georgia,serif", fontSize: 18, color: "#4a3527", margin: "0 0 12px" }}>International shipping</h3>
-        {international.length === 0 ? (
-          <p className="muted" style={{ fontSize: 13 }}>No international shipments.</p>
-        ) : (
-          international.map(renderGroup)
-        )}
-      </div>
+      <div className="grid2" style={{ alignItems: "start" }}>
+        <div>
+          <h3 style={{ fontFamily: "Georgia,serif", fontSize: 18, color: "#4a3527", margin: "0 0 12px" }}>International shipping</h3>
+          {international.length === 0 ? (
+            <p className="muted" style={{ fontSize: 13 }}>No international shipments.</p>
+          ) : (
+            international.map(renderGroup)
+          )}
+        </div>
 
-      <div>
-        <h3 style={{ fontFamily: "Georgia,serif", fontSize: 18, color: "#4a3527", margin: "0 0 12px" }}>Domestic shipping</h3>
-        {domestic.length === 0 ? (
-          <p className="muted" style={{ fontSize: 13 }}>No domestic shipments.</p>
-        ) : (
-          domestic.map(renderGroup)
-        )}
+        <div>
+          <h3 style={{ fontFamily: "Georgia,serif", fontSize: 18, color: "#4a3527", margin: "0 0 12px" }}>Domestic shipping</h3>
+          {domestic.length === 0 ? (
+            <p className="muted" style={{ fontSize: 13 }}>No domestic shipments.</p>
+          ) : (
+            domestic.map(renderGroup)
+          )}
+        </div>
       </div>
     </section>
   );
