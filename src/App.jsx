@@ -10631,6 +10631,12 @@ function computeSalesByModel(db, fyRange) {
   (db.quotes || []).forEach(q => {
     const milestones = q.paymentMilestones || [];
     if (!milestones.length) return;
+    // A quote's revenue should only land in Sales by Model once it's a real
+    // sale, not just a paid deposit sitting on a still-open quote (e.g. a
+    // Draft or Sent quote with a milestone marked paid by mistake, or a
+    // Declined quote where the deposit was refunded rather than banked as a
+    // sale).
+    if (!["Accepted", "Delivered"].includes(q.status)) return;
     const first = milestones[0];
     if (!first?.paid) return;
     const paidDate = (first.paidDate || first.due || "").slice(0, 10);
