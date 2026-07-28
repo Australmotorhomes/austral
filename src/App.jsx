@@ -6990,23 +6990,34 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
 <style>
 * { margin: 0; padding: 0; }
 body { font-family: Georgia, serif; color: #2b2018; padding: 40px; line-height: 1.7; }
-.doc-header { display: flex; justify-content: space-between; align-items: flex-start; gap: 20px; border-bottom: 3px solid #b5552b; padding-bottom: 30px; margin-bottom: 40px; }
+/* html2canvas doesn't reliably render flexbox vertical alignment, so the logo
+   column was rendering lower than the title column even though both used
+   align-items:flex-start. Pinning the logo column with absolute positioning
+   guarantees it sits flush at the top-right regardless of that limitation.
+   min-height reserves enough room for the (taller) letterhead column so it
+   never overlaps the line-items table below; the title column gets a little
+   top padding so it reads as intentionally offset rather than misaligned. */
+.doc-header { position: relative; display: flex; justify-content: space-between; border-bottom: 3px solid #b5552b; padding-bottom: 20px; margin-bottom: 30px; min-height: 150px; }
+.doc-header > div:first-child { max-width: 60%; padding-top: 6px; }
+.doc-header > div:last-child { position: absolute; top: 0; right: 0; text-align: right; }
 .doc-meta { display: flex; gap: 18px; flex-wrap: wrap; font-size: 12.5px; color: #8a7a66; margin-bottom: 14px; }
 h2 { font-size: 26px; font-weight: 700; margin-bottom: 8px; }
 .doc-info { margin: 20px 0; font-size: 14px; }
 .doc-info p { margin: 6px 0; }
-table { width: 100%; border-collapse: collapse; margin: 40px 0; }
-th { text-align: left; border-bottom: 2px solid #b5552b; padding: 12px 12px 12px 0; font-size: 12px; font-weight: 700; }
+table { width: 100%; border-collapse: collapse; margin: 24px 0; }
+th { text-align: left; border-bottom: 2px solid #b5552b; padding: 10px 12px 10px 0; font-size: 12px; font-weight: 700; }
 th.num { text-align: right; padding-right: 0; }
-td { padding: 14px 12px 14px 0; border-bottom: 1px solid #e3d8c6; font-size: 14px; }
+td { padding: 8px 12px 8px 0; border-bottom: 1px solid #e3d8c6; font-size: 14px; }
 td.num { text-align: right; padding-right: 0; }
 thead { display: table-header-group; }
 .pdf-line-item-group { page-break-inside: avoid; break-inside: avoid; }
-.totals { margin: 40px 0; }
-.totals-row { display: flex; justify-content: space-between; padding: 10px 0; font-size: 14px; }
-.grand { font-weight: 800; font-size: 18px; border-top: 2px solid #b5552b; border-bottom: 1px solid #b5552b; padding: 16px 0; margin-top: 20px; }
-.notes { margin-top: 50px; padding-top: 30px; border-top: 1px solid #e3d8c6; font-size: 13px; }
-.footer { margin-top: 40px; font-size: 11px; color: #8a7a66; }
+ul { line-height: 1.4 !important; }
+li { margin-bottom: 1px; }
+.totals { margin: 24px 0; }
+.totals-row { display: flex; justify-content: space-between; padding: 8px 0; font-size: 14px; }
+.grand { font-weight: 800; font-size: 18px; border-top: 2px solid #b5552b; border-bottom: 1px solid #b5552b; padding: 14px 0; margin-top: 14px; }
+.notes { margin-top: 30px; padding-top: 20px; border-top: 1px solid #e3d8c6; font-size: 13px; }
+.footer { margin-top: 24px; font-size: 11px; color: #8a7a66; }
 .no-print { display: none !important; }
 </style>
 </head>
