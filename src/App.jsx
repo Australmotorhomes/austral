@@ -7417,6 +7417,210 @@ function useIsMobile(breakpoint = 640) {
   return isMobile;
 }
 
+// Same pipeline-board concept as ProspectKanbanBoard, applied to Customers.
+// Columns are the customer status values; Canceled is filed away rather than
+// its own column (same treatment as Lost on the prospect board), and every
+// card still has a "Move to" select as a touch-friendly fallback since HTML5
+// drag-and-drop doesn't fire on mobile.
+const CUSTOMER_STAGES = [
+  { key: "Deposit", label: "Deposit" },
+  { key: "Paid", label: "Paid" },
+  { key: "Delivered", label: "Delivered" },
+  { key: "Canceled", label: "Canceled" },
+];
+const CUSTOMER_STAGE_COLORS = {
+  Deposit: { bg: "#fef2e0", color: "#a68d4a" },
+  Paid: { bg: "#e8f0fb", color: "#3a5fa0" },
+  Delivered: { bg: "#e3ecdc", color: "#5c7a4f" },
+  Canceled: { bg: "#fbeae5", color: "#a3442e" },
+};
+
+function CustomerKanbanBoard({ list, onOpen, onMove, onDelete, showCanceled, db }) {
+  const [dragOverStage, setDragOverStage] = useState(null);
+
+  const DEFAULT_COLUMN_WIDTH = 240;
+  const MIN_COLUMN_WIDTH = 190;
+  const MAX_COLUMN_WIDTH = 1000;
+  const [columnWidths, setColumnWidths] = useState(() => getAppSetting(db, "customer_kanban_column_widths", {}));
+  const columnWidthsRef = useRef(columnWidths);
+  const resizingRef = useRef(null);
+
+  function getColumnWidth(key) {
+    return columnWidths[key] || DEFAULT_COLUMN_WIDTH;
+  }
+
+  useEffect(() => {
+    function handleMouseMove(e) {
+      if (!resizingRef.current) return;
+      const { key, startX, startWidth } = resizingRef.current;
+      const next = Math.max(MIN_COLUMN_WIDTH, Math.min(MAX_COLUMN_WIDTH, startWidth + (e.clientX - startX)));
+      setColumnWidths((w) => {
+        const updated = { ...w, [key]: next };
+        columnWidthsRef.current = updated;
+        return updated;
+      });
+    }
+    function handleMouseUp() {
+      if (resizingRef.current) {
+        resizingRef.current = null;
+        saveAppSetting("customer_kanban_column_widths", columnWidthsRef.current);
+      }
+    }
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, []);
+
+  function startResize(e, key) {
+    e.preventDefault();
+    resizingRef.current = { key, startX: e.clientX, startWidth: getColumnWidth(key) };
+  }
+
+  function resetColumnWidth(key) {
+    const updated = { ...columnWidths, [key]: DEFAULT_COLUMN_WIDTH };
+    setColumnWidths(updated);
+    columnWidthsRef.current = updated;
+    saveAppSetting("customer_kanban_column_widths", updated);
+  }
+
+  const stagesToShow = showCanceled ? CUSTOMER_STAGES : CUSTOMER_STAGES.filter((s) => s.key !== "Canceled");
+
+  const byStage = {};
+  stagesToShow.forEach((s) => (byStage[s.key] = []));
+  list.forEach((c) => {
+    const key = c.status || "Deposit";
+    (byStage[key] || byStage.Deposit).push(c);
+  });
+
+  // Total value uses the same dedup-safe invoice calculation as the rest of
+  // the app (Income/Sales, drill-downs) so a card's figure always matches
+  // what's shown everywhere else — never a naive re-sum of the raw fields.
+  const customerValue = (c) => getCustomerInvoicesForCalc(c).reduce((s, inv) => s + (parseFloat(inv.amount) || 0), 0);
+
+  return (
+    <div style={{ display: "flex", gap: 10, overflowX: "auto", paddingBottom: 8, width: "100%" }}>
+      {stagesToShow.map((stage) => {
+        const cards = byStage[stage.key] || [];
+        const stageColor = CUSTOMER_STAGE_COLORS[stage.key] || { bg: "#f0e8d9", color: "#6b5240" };
+        const totalValue = cards.reduce((s, c) => s + customerValue(c), 0);
+        const isDragOver = dragOverStage === stage.key;
+
+        return (
+          <React.Fragment key={stage.key}>
+            <div
+              onDragOver={(e) => { e.preventDefault(); setDragOverStage(stage.key); }}
+              onDragLeave={() => setDragOverStage((prev) => (prev === stage.key ? null : prev))}
+              onDrop={(e) => {
+                e.preventDefault();
+                setDragOverStage(null);
+                const id = e.dataTransfer.getData("text/customer-id");
+                const contact = list.find((c) => c.id === id);
+                if (contact) onMove(contact, stage.key);
+              }}
+              style={{
+                flex: "0 0 auto",
+                width: getColumnWidth(stage.key),
+                background: isDragOver ? "#faf3ea" : "#faf7f2",
+                border: isDragOver ? "1px dashed #b5552b" : "1px solid #f0e8d9",
+                borderRadius: 8,
+                display: "flex",
+                flexDirection: "column",
+                maxHeight: "calc(100vh - 300px)",
+              }}
+            >
+              <div style={{ padding: "8px 10px", borderBottom: "2px solid " + stageColor.color, flexShrink: 0 }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                  <span style={{ background: stageColor.bg, color: stageColor.color, padding: "3px 8px", borderRadius: 5, fontSize: 11, fontWeight: 700, letterSpacing: "0.04em" }}>
+                    {stage.label.toUpperCase()}
+                  </span>
+                  <span style={{ fontSize: 11, color: "#8a7a66", fontWeight: 600 }}>{cards.length}</span>
+                </div>
+                {totalValue > 0 && (
+                  <div style={{ fontSize: 12, color: "#4a3527", fontWeight: 700, marginTop: 4 }}>
+                    {fmtMoney(totalValue, "AUD")}
+                  </div>
+                )}
+              </div>
+
+              <div style={{ padding: 6, overflowY: "auto", flex: 1, display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(190px, 1fr))", gap: 6, alignContent: "start" }}>
+                {cards.length === 0 && (
+                  <div style={{ fontSize: 12, color: "#b3a58e", textAlign: "center", padding: "16px 4px", gridColumn: "1 / -1" }}>No customers</div>
+                )}
+                {cards.map((c) => {
+                  const value = customerValue(c);
+                  return (
+                    <div
+                      key={c.id}
+                      draggable
+                      onDragStart={(e) => e.dataTransfer.setData("text/customer-id", c.id)}
+                      onClick={() => onOpen(c)}
+                      style={{
+                        background: "#fff",
+                        border: "1px solid #f0e8d9",
+                        borderRadius: 6,
+                        padding: 8,
+                        cursor: "grab",
+                        boxShadow: "0 1px 2px rgba(74,53,39,0.06)",
+                      }}
+                    >
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                        <div style={{ fontSize: 13, fontWeight: 700, color: "#4a3527", flex: 1, minWidth: 0 }}>
+                          {c.name}
+                          {c.archived && (
+                            <span style={{ marginLeft: 6, fontSize: 9, fontWeight: 700, color: "#a3442e", background: "#fbeae5", padding: "1px 5px", borderRadius: 4 }}>
+                              ARCHIVED
+                            </span>
+                          )}
+                        </div>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); onDelete(c); }}
+                          title="Delete"
+                          style={{ background: "none", border: "none", color: "#a3442e", cursor: "pointer", fontSize: 13, padding: 2, opacity: 0.6, flexShrink: 0 }}
+                        >
+                          ✕
+                        </button>
+                      </div>
+                      {c.product && (
+                        <div style={{ fontSize: 11, color: "#6b5240", marginTop: 3 }}>{c.product}</div>
+                      )}
+                      {value > 0 && (
+                        <div style={{ marginTop: 6 }}>
+                          <span style={{ fontSize: 12, fontWeight: 700, color: "#4a3527" }}>{fmtMoney(value, "AUD")}</span>
+                        </div>
+                      )}
+                      <select
+                        value={stage.key}
+                        onClick={(e) => e.stopPropagation()}
+                        onChange={(e) => onMove(c, e.target.value)}
+                        style={{ width: "100%", marginTop: 8, fontSize: 11, padding: "4px 6px", borderRadius: 4, border: "1px solid #e3d8c6", background: "#faf7f2", color: "#6b5240" }}
+                      >
+                        {CUSTOMER_STAGES.map((s) => (
+                          <option key={s.key} value={s.key}>Move to: {s.label}</option>
+                        ))}
+                      </select>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+            <div
+              onMouseDown={(e) => startResize(e, stage.key)}
+              onDoubleClick={() => resetColumnWidth(stage.key)}
+              title="Drag to resize column (double-click to reset)"
+              style={{ flex: "0 0 auto", width: 10, cursor: "col-resize", display: "flex", alignItems: "center", justifyContent: "center" }}
+            >
+              <div style={{ width: 3, height: 36, borderRadius: 2, background: "#e3d8c6" }} />
+            </div>
+          </React.Fragment>
+        );
+      })}
+    </div>
+  );
+}
+
 function ContactsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPendingOpen, openRecord }) {
   const isSupplier = kind === "supplier";
   
@@ -7429,6 +7633,12 @@ function ContactsTab({ kind, db, update, showToast, nextNumber, pendingOpen, cle
   const [importData, setImportData] = useState(null);
   const [pendingDelete, setPendingDelete] = useState(null);
   const [loggingActivityFor, setLoggingActivityFor] = useState(null);
+  const [viewMode, setViewModeState] = useState(getAppSetting(db, "customers_view_mode", "list"));
+  const [showCanceled, setShowCanceled] = useState(false);
+  function setViewMode(mode) {
+    setViewModeState(mode);
+    saveAppSetting("customers_view_mode", mode);
+  }
   const isMobile = useIsMobile();
 
   // Keep the open contact modal in sync with the latest data (e.g. a customer's
@@ -7665,6 +7875,23 @@ function ContactsTab({ kind, db, update, showToast, nextNumber, pendingOpen, cle
     })();
   }
 
+  function moveCustomerStatus(contact, newStatus) {
+    if (!contact || contact.status === newStatus) return;
+    (async () => {
+      try {
+        await supabaseREST("PATCH", `customers?id=eq.${contact.id}`, { status: newStatus });
+        update((next) => {
+          const target = next.customers.find((c) => c.id === contact.id);
+          if (target) target.status = newStatus;
+        });
+        showToast(`${contact.name} moved to ${newStatus}`);
+      } catch (err) {
+        console.error("Move customer status error:", err);
+        showToast(`Error updating status: ${err.message}`);
+      }
+    })();
+  }
+
   function deleteContact(contact) {
     setPendingDelete(contact);
   }
@@ -7842,6 +8069,36 @@ function ContactsTab({ kind, db, update, showToast, nextNumber, pendingOpen, cle
               Show Archived
             </label>
           )}
+          {!isSupplier && (
+            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "#6b5240", whiteSpace: "nowrap", cursor: "pointer" }}>
+              <input type="checkbox" checked={showCanceled} onChange={(e) => setShowCanceled(e.target.checked)} />
+              Show Canceled
+            </label>
+          )}
+          {!isSupplier && (
+            <div style={{ display: "flex", border: "1px solid #e3d8c6", borderRadius: 6, overflow: "hidden", flexShrink: 0 }}>
+              <button
+                onClick={() => setViewMode("list")}
+                style={{
+                  padding: "6px 12px", fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer",
+                  background: viewMode === "list" ? "#b5552b" : "#fff",
+                  color: viewMode === "list" ? "#fff" : "#6b5240",
+                }}
+              >
+                ☰ List
+              </button>
+              <button
+                onClick={() => setViewMode("kanban")}
+                style={{
+                  padding: "6px 12px", fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer",
+                  background: viewMode === "kanban" ? "#b5552b" : "#fff",
+                  color: viewMode === "kanban" ? "#fff" : "#6b5240",
+                }}
+              >
+                ▤ Kanban
+              </button>
+            </div>
+          )}
         </div>
         {!isSupplier && (
           <p style={{ fontSize: 11, color: "#8a7a66", margin: "0 0 14px" }}>
@@ -7853,6 +8110,15 @@ function ContactsTab({ kind, db, update, showToast, nextNumber, pendingOpen, cle
           <Empty
             icon="📇"
             text={`No ${isSupplier ? "suppliers" : "customers"} yet. Add one to get started.`}
+          />
+        ) : !isSupplier && viewMode === "kanban" ? (
+          <CustomerKanbanBoard
+            list={list}
+            onOpen={setEditingContact}
+            onMove={moveCustomerStatus}
+            onDelete={deleteContact}
+            showCanceled={showCanceled}
+            db={db}
           />
         ) : isMobile ? (
           // ── Mobile: name-only tappable list — opens directly editable ──
