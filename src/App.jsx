@@ -10642,7 +10642,23 @@ function computeSalesByModel(db, fyRange) {
     const paidDate = (first.paidDate || first.due || "").slice(0, 10);
     if (!paidDate || paidDate < fyRange.start || paidDate > fyRange.end) return;
     const { model, customerName, custId, debug } = getModel(q);
-    const total = parseFloat(q.total) || 0;
+    // Revenue counted here should reflect the vehicle sale itself, not
+    // freight, accessories, or other add-ons billed on the same quote — so
+    // only sum line items whose linked catalog item is tagged "Chassis &
+    // Structure". Lines with no linked item (manually-typed lines) or a
+    // different category (e.g. freight/delivery, which lives under "Other")
+    // are excluded from this total.
+    const total = (q.lines || []).reduce((sum, li) => {
+      const item = li.itemId ? (db.items || []).find(i => i.id === li.itemId) : null;
+      if (!item || item.category !== "Chassis & Structure") return sum;
+      const qty = parseFloat(li.qty ?? li.quantity ?? 1) || 1;
+      const price = parseFloat(li.price ?? li.unitPrice ?? 0) || 0;
+      return sum + qty * toAUD(price, li.currency || "AUD", q.fxRateUsed);
+    }, 0);
+    // No Chassis & Structure line item at all means this quote isn't a
+    // vehicle sale (e.g. a standalone accessories or freight quote) — don't
+    // count it as a "unit sold" with $0 attached to it.
+    if (total <= 0) return;
     if (!model) {
       unmatched.push({
         quoteId: q.id,
