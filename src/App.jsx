@@ -7551,6 +7551,8 @@ function CustomerKanbanBoard({ list, onOpen, onMove, onDelete, showCanceled, db 
                 )}
                 {cards.map((c) => {
                   const value = customerValue(c);
+                  const lastPaymentMonth = getLastPaymentMonth(c);
+                  const warranty = getWarrantyStatus(c, db);
                   return (
                     <div
                       key={c.id}
@@ -7585,6 +7587,21 @@ function CustomerKanbanBoard({ list, onOpen, onMove, onDelete, showCanceled, db 
                       </div>
                       {c.product && (
                         <div style={{ fontSize: 11, color: "#6b5240", marginTop: 3 }}>{c.product}</div>
+                      )}
+                      {lastPaymentMonth && (
+                        <div style={{ fontSize: 11, color: "#8a7a66", marginTop: 2 }}>
+                          Last payment: {new Date(`${lastPaymentMonth}-01`).toLocaleDateString("en-AU", { month: "short", year: "numeric" })}
+                        </div>
+                      )}
+                      {warranty && (
+                        <div style={{ marginTop: 4 }}>
+                          <span
+                            title={`${warranty.brand} warranty — ${warranty.years} year${warranty.years > 1 ? "s" : ""} from last payment, expires ${warranty.expiresLabel}`}
+                            style={{ background: "#e3ecdc", color: "#5c7a4f", padding: "2px 7px", borderRadius: 999, fontSize: 10, fontWeight: 700 }}
+                          >
+                            🛡️ Warranty until {warranty.expiresLabel}
+                          </span>
+                        </div>
                       )}
                       {value > 0 && (
                         <div style={{ marginTop: 6 }}>
@@ -10412,6 +10429,44 @@ function getCustomerInvoicesForCalc(c) {
     combined.push(inv);
   }
   return combined;
+}
+
+// Most recent payment month across all of a customer's payments (whichever
+// is latest, not necessarily the last one entered) — YYYY-MM string, or null
+// if the customer has no dated payments at all yet.
+function getLastPaymentMonth(c) {
+  const months = getCustomerInvoicesForCalc(c).map((inv) => inv.invoiceMonth).filter(Boolean);
+  if (!months.length) return null;
+  return months.slice().sort().pop();
+}
+
+// A customer's product is an Austral Motorhome if it matches one of the
+// known Austral model names (db.models — e.g. Campo/Scout/Savanna, derived
+// from the price book same as everywhere else brand detection happens in
+// this app). Anything that doesn't match is treated as Platinum Pontoons,
+// since pontoon model codes (e.g. "22SE", "19ft") don't share that list and
+// have no other brand marker to key off.
+function isAustralCustomerProduct(c, db) {
+  const product = (c.product || "").trim().toLowerCase();
+  if (!product) return null; // no product on file — can't tell either way
+  return (db?.models || []).some((m) => product.startsWith((m || "").trim().toLowerCase()));
+}
+
+// Warranty window: 1 year from the final payment for Austral Motorhomes
+// customers, 2 years for Platinum Pontoons customers. Returns null once the
+// window has lapsed (or if there's nothing to base it on) so the pin simply
+// stops appearing on its own — no separate "expire" step needed anywhere.
+function getWarrantyStatus(c, db) {
+  const lastMonth = getLastPaymentMonth(c);
+  if (!lastMonth) return null;
+  const isAustral = isAustralCustomerProduct(c, db);
+  if (isAustral === null) return null;
+  const years = isAustral ? 1 : 2;
+  const [y, m] = lastMonth.split("-").map(Number);
+  const expiry = new Date(y, (m - 1) + years * 12, 1);
+  const now = new Date();
+  if (now >= expiry) return null; // lapsed
+  return { brand: isAustral ? "Austral" : "Platinum Pontoons", years, expiresLabel: expiry.toLocaleDateString("en-AU", { month: "short", year: "numeric" }) };
 }
 
 // Safety net for duplicate ROWS in the customers table (not duplicate fields
