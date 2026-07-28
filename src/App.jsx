@@ -5486,9 +5486,14 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
   }
 
   const printRef = useRef(null);
+  const [modalWidth, setModalWidth] = useState(1000);
+  const MODAL_WIDTH_MIN = 700;
+  const MODAL_WIDTH_MAX = 1700;
+  const MODAL_WIDTH_DEFAULT = 1000;
+  const MODAL_WIDTH_STEP = 150;
 
   return (
-    <Modal width={1000} onClose={onCancel}>
+    <Modal width={modalWidth} onClose={onCancel}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
         <h3
           style={{
@@ -5504,22 +5509,58 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
         >
           {isNew ? (isQuote ? "New customer quote" : "New purchase order") : (isQuote ? "Customer Quote" : "Purchase Order")}
         </h3>
-        {!isNew && (
-          <Field label="" >
-            <select
-              style={{ ...inputStyle, width: 160 }}
-              value={status}
-              onChange={(e) => handleStatusChange(e.target.value)}
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          {!isMobile && (
+            <div
+              style={{ display: "flex", alignItems: "center", gap: 1, border: "1px solid #d3c9b8", borderRadius: 6, padding: 2 }}
+              title="Resize this window"
             >
-              {statusOptions.map((s) => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
-              ))}
-            </select>
-          </Field>
-        )}
+              <button
+                type="button"
+                onClick={() => setModalWidth((w) => Math.max(MODAL_WIDTH_MIN, w - MODAL_WIDTH_STEP))}
+                disabled={modalWidth <= MODAL_WIDTH_MIN}
+                title="Make window smaller"
+                style={{ background: "none", border: "none", cursor: modalWidth <= MODAL_WIDTH_MIN ? "default" : "pointer", fontSize: 15, padding: "4px 9px", color: modalWidth <= MODAL_WIDTH_MIN ? "#d3c9b8" : "#6b5240" }}
+              >
+                −
+              </button>
+              <button
+                type="button"
+                onClick={() => setModalWidth(MODAL_WIDTH_DEFAULT)}
+                title="Reset window size"
+                style={{ background: "none", border: "none", cursor: "pointer", fontSize: 13, padding: "4px 7px", color: "#6b5240" }}
+              >
+                ⤢
+              </button>
+              <button
+                type="button"
+                onClick={() => setModalWidth((w) => Math.min(MODAL_WIDTH_MAX, w + MODAL_WIDTH_STEP))}
+                disabled={modalWidth >= MODAL_WIDTH_MAX}
+                title="Make window bigger"
+                style={{ background: "none", border: "none", cursor: modalWidth >= MODAL_WIDTH_MAX ? "default" : "pointer", fontSize: 15, padding: "4px 9px", color: modalWidth >= MODAL_WIDTH_MAX ? "#d3c9b8" : "#6b5240" }}
+              >
+                +
+              </button>
+            </div>
+          )}
+          {!isNew && (
+            <Field label="" >
+              <select
+                style={{ ...inputStyle, width: 160 }}
+                value={status}
+                onChange={(e) => handleStatusChange(e.target.value)}
+              >
+                {statusOptions.map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          )}
+        </div>
       </div>
+
 
       <div className="doc-split-grid">
         {/* ---------------- EDIT SIDE ---------------- */}
@@ -5844,164 +5885,6 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                 {isQuote ? "Will be copied to POs created from this quote" : "Required for all purchase orders"}
               </p>
             </Field>
-          </Panel>
-
-          <Panel>
-            <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: "0 0 14px", fontSize: 16 }}>
-              Add from price book
-            </h3>
-            <Btn variant="primary" size="sm" onClick={() => setShowPriceBookSearch(true)} style={{ marginBottom: 10 }}>
-              🔍 Search price book
-            </Btn>
-            <details style={{ marginBottom: 4 }}>
-              <summary style={{ fontSize: 12, color: "#8a7a66", cursor: "pointer", userSelect: "none" }}>
-                Or pick from the dropdown
-              </summary>
-              <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-                <select style={{ ...inputStyle, flex: 1 }} value={pickerValue} onChange={(e) => setPickerValue(e.target.value)}>
-                  <option value="">— choose an item —</option>
-                  {sortedItems
-                    .filter((i) => {
-                      // Show all items regardless of supplier — the supplier on the item
-                      // is informational only and should not restrict the PO picker
-                      return true;
-                    })
-                    .map((i) => {
-                      const displayPrice = isQuote ? (i.sellPrice != null ? i.sellPrice : calcSellPrice(i.cost)) : i.cost;
-                      return (
-                        <option key={i.id} value={i.id}>
-                          {i.productCode ? `[${i.productCode}] ` : ""}{i.model} · {i.name} — {fmtMoney(displayPrice, i.currency || "AUD")}
-                          {(i.currency || "AUD") === "USD" ? " (USD)" : ""}
-                        </option>
-                      );
-                    })}
-                </select>
-                <Btn variant="ghost" size="sm" onClick={addFromPicker}>
-                  Add
-                </Btn>
-              </div>
-            </details>
-            <div style={{ marginTop: 10 }}>
-              <Btn variant="ghost" size="sm" onClick={addBlankLine}>
-                + Add blank line
-              </Btn>
-              {onAddItem && (
-                <Btn variant="ghost" size="sm" onClick={() => setShowQuickAddItem(true)} style={{ marginLeft: 8 }}>
-                  + New price book item
-                </Btn>
-              )}
-            </div>
-          </Panel>
-
-          {showPriceBookSearch && (
-            <PriceBookSearchModal
-              items={sortedItems}
-              isQuote={isQuote}
-              calcSellPrice={calcSellPrice}
-              onSelect={(item) => addItemToLines(item)}
-              onClose={() => setShowPriceBookSearch(false)}
-            />
-          )}
-
-          <Panel>
-            <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: "0 0 14px", fontSize: 16 }}>
-              Line items
-            </h3>
-            {lines.length === 0 ? (
-              <p className="muted" style={{ fontSize: 13, margin: "6px 0 14px" }}>
-                No line items yet — add from your price book or add a blank line.
-              </p>
-            ) : (
-              lines.map((li, idx) => {
-                const lineCurrency = li.currency || "AUD";
-                const nativeTotal = (Number(li.qty) || 0) * (Number(li.price) || 0);
-                return (
-                  <React.Fragment key={idx}>
-                  <div className="line-item-row">
-                    <input
-                      style={inputStyle}
-                      type="text"
-                      placeholder="Description"
-                      value={li.desc}
-                      onChange={(e) => updateLine(idx, "desc", e.target.value)}
-                    />
-                    <input
-                      style={inputStyle}
-                      type="number"
-                      min="0"
-                      step="1"
-                      placeholder="Qty"
-                      value={li.qty}
-                      onChange={(e) => updateLine(idx, "qty", e.target.value)}
-                    />
-                    <select style={inputStyle} value={lineCurrency} onChange={(e) => updateLine(idx, "currency", e.target.value)}>
-                      <option value="AUD">AUD</option>
-                      <option value="USD">USD</option>
-                    </select>
-                    <input
-                      style={inputStyle}
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      placeholder={isQuote ? "Price" : "Cost"}
-                      value={li.price}
-                      onChange={(e) => updateLine(idx, "price", e.target.value)}
-                    />
-                    {isQuote && (
-                      <input
-                        style={inputStyle}
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        placeholder="Cost"
-                        value={li.cost || ""}
-                        onChange={(e) => updateLine(idx, "cost", e.target.value)}
-                        title="Optional: set cost to override price book cost for profit calculation"
-                      />
-                    )}
-                    <div className="num" style={{ fontSize: 13.5, paddingTop: 9 }}>
-                      {fmtMoney(lineAudTotal(li), "AUD")}
-                      {lineCurrency === "USD" && (
-                        <div className="muted" style={{ fontSize: 11, fontWeight: 400 }}>
-                          {fmtMoney(nativeTotal, "USD")}
-                        </div>
-                      )}
-                    </div>
-                    <button
-                      onClick={() => removeLine(idx)}
-                      title="Remove"
-                      style={{ background: "none", border: "none", color: "#a3442e", cursor: "pointer", fontSize: 16, padding: 4 }}
-                    >
-                      ✕
-                    </button>
-                  </div>
-                  <textarea
-                    placeholder="One feature per line — each becomes a bullet point on the quote"
-                    value={li.lineNote || ""}
-                    onChange={(e) => updateLine(idx, "lineNote", e.target.value)}
-                    rows={2}
-                    style={{
-                      width: "100%", marginTop: 4, marginBottom: 8,
-                      fontSize: 12, color: "#6b5240", padding: "6px 8px",
-                      border: "1px solid #e3d8c6", borderRadius: 4,
-                      fontFamily: "inherit", resize: "vertical", background: "#faf7f3",
-                    }}
-                  />
-                  </React.Fragment>
-                );
-              })
-            )}
-            {lines.some((l) => (l.currency || "AUD") === "USD") && (
-              <div style={{ fontSize: 11.5, color: "#8a7a66", marginTop: 2, marginBottom: 8 }}>
-                USD lines convert to AUD at 1 USD = {rate.toFixed(4)} AUD ({fx && fx.source === "live" ? "live rate" : fx && fx.source === "manual" ? "your manual rate" : "default estimate"}) —
-                click the rate badge in the header to update it.
-              </div>
-            )}
-            <div style={{ borderTop: "2px solid #e3d8c6", marginTop: 10, paddingTop: 10 }}>
-              <Field label={isQuote ? "Discount (AUD)" : "Adjustment (AUD)"}>
-                <input style={inputStyle} type="number" step="0.01" value={discount} onChange={(e) => setDiscount(e.target.value)} />
-              </Field>
-            </div>
           </Panel>
 
           {/* Payment Schedule — shown for both quotes and POs, always visible */}
@@ -6566,12 +6449,241 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
         </fieldset>
         )} {/* end conditional normal left panel */}
 
-        {/* ---------------- LIVE PREVIEW SIDE ---------------- */}
+        {/* ---------------- LINE ITEMS + GROSS PROFIT SIDE ---------------- */}
         <div>
+          <fieldset disabled={viewOnly} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
+            <Panel>
+              <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: "0 0 14px", fontSize: 16 }}>
+                Add from price book
+              </h3>
+              <Btn variant="primary" size="sm" onClick={() => setShowPriceBookSearch(true)} style={{ marginBottom: 10 }}>
+                🔍 Search price book
+              </Btn>
+              <details style={{ marginBottom: 4 }}>
+                <summary style={{ fontSize: 12, color: "#8a7a66", cursor: "pointer", userSelect: "none" }}>
+                  Or pick from the dropdown
+                </summary>
+                <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                  <select style={{ ...inputStyle, flex: 1 }} value={pickerValue} onChange={(e) => setPickerValue(e.target.value)}>
+                    <option value="">— choose an item —</option>
+                    {sortedItems
+                      .filter((i) => {
+                        // Show all items regardless of supplier — the supplier on the item
+                        // is informational only and should not restrict the PO picker
+                        return true;
+                      })
+                      .map((i) => {
+                        const displayPrice = isQuote ? (i.sellPrice != null ? i.sellPrice : calcSellPrice(i.cost)) : i.cost;
+                        return (
+                          <option key={i.id} value={i.id}>
+                            {i.productCode ? `[${i.productCode}] ` : ""}{i.model} · {i.name} — {fmtMoney(displayPrice, i.currency || "AUD")}
+                            {(i.currency || "AUD") === "USD" ? " (USD)" : ""}
+                          </option>
+                        );
+                      })}
+                  </select>
+                  <Btn variant="ghost" size="sm" onClick={addFromPicker}>
+                    Add
+                  </Btn>
+                </div>
+              </details>
+              <div style={{ marginTop: 10 }}>
+                <Btn variant="ghost" size="sm" onClick={addBlankLine}>
+                  + Add blank line
+                </Btn>
+                {onAddItem && (
+                  <Btn variant="ghost" size="sm" onClick={() => setShowQuickAddItem(true)} style={{ marginLeft: 8 }}>
+                    + New price book item
+                  </Btn>
+                )}
+              </div>
+            </Panel>
+
+            {showPriceBookSearch && (
+              <PriceBookSearchModal
+                items={sortedItems}
+                isQuote={isQuote}
+                calcSellPrice={calcSellPrice}
+                onSelect={(item) => addItemToLines(item)}
+                onClose={() => setShowPriceBookSearch(false)}
+              />
+            )}
+
+            <Panel>
+              <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: "0 0 14px", fontSize: 16 }}>
+                Line items
+              </h3>
+              {lines.length === 0 ? (
+                <p className="muted" style={{ fontSize: 13, margin: "6px 0 14px" }}>
+                  No line items yet — add from your price book or add a blank line.
+                </p>
+              ) : (
+                lines.map((li, idx) => {
+                  const lineCurrency = li.currency || "AUD";
+                  const nativeTotal = (Number(li.qty) || 0) * (Number(li.price) || 0);
+                  return (
+                    <React.Fragment key={idx}>
+                    <div className="line-item-row">
+                      <input
+                        style={inputStyle}
+                        type="text"
+                        placeholder="Description"
+                        value={li.desc}
+                        onChange={(e) => updateLine(idx, "desc", e.target.value)}
+                      />
+                      <input
+                        style={inputStyle}
+                        type="number"
+                        min="0"
+                        step="1"
+                        placeholder="Qty"
+                        value={li.qty}
+                        onChange={(e) => updateLine(idx, "qty", e.target.value)}
+                      />
+                      <select style={inputStyle} value={lineCurrency} onChange={(e) => updateLine(idx, "currency", e.target.value)}>
+                        <option value="AUD">AUD</option>
+                        <option value="USD">USD</option>
+                      </select>
+                      <input
+                        style={inputStyle}
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        placeholder={isQuote ? "Price" : "Cost"}
+                        value={li.price}
+                        onChange={(e) => updateLine(idx, "price", e.target.value)}
+                      />
+                      {isQuote && (
+                        <input
+                          style={inputStyle}
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          placeholder="Cost"
+                          value={li.cost || ""}
+                          onChange={(e) => updateLine(idx, "cost", e.target.value)}
+                          title="Optional: set cost to override price book cost for profit calculation"
+                        />
+                      )}
+                      <div className="num" style={{ fontSize: 13.5, paddingTop: 9 }}>
+                        {fmtMoney(lineAudTotal(li), "AUD")}
+                        {lineCurrency === "USD" && (
+                          <div className="muted" style={{ fontSize: 11, fontWeight: 400 }}>
+                            {fmtMoney(nativeTotal, "USD")}
+                          </div>
+                        )}
+                      </div>
+                      <button
+                        onClick={() => removeLine(idx)}
+                        title="Remove"
+                        style={{ background: "none", border: "none", color: "#a3442e", cursor: "pointer", fontSize: 16, padding: 4 }}
+                      >
+                        ✕
+                      </button>
+                    </div>
+                    <textarea
+                      placeholder="One feature per line — each becomes a bullet point on the quote"
+                      value={li.lineNote || ""}
+                      onChange={(e) => updateLine(idx, "lineNote", e.target.value)}
+                      rows={2}
+                      style={{
+                        width: "100%", marginTop: 4, marginBottom: 8,
+                        fontSize: 12, color: "#6b5240", padding: "6px 8px",
+                        border: "1px solid #e3d8c6", borderRadius: 4,
+                        fontFamily: "inherit", resize: "vertical", background: "#faf7f3",
+                      }}
+                    />
+                    </React.Fragment>
+                  );
+                })
+              )}
+              {lines.some((l) => (l.currency || "AUD") === "USD") && (
+                <div style={{ fontSize: 11.5, color: "#8a7a66", marginTop: 2, marginBottom: 8 }}>
+                  USD lines convert to AUD at 1 USD = {rate.toFixed(4)} AUD ({fx && fx.source === "live" ? "live rate" : fx && fx.source === "manual" ? "your manual rate" : "default estimate"}) —
+                  click the rate badge in the header to update it.
+                </div>
+              )}
+              <div style={{ borderTop: "2px solid #e3d8c6", marginTop: 10, paddingTop: 10 }}>
+                <Field label={isQuote ? "Discount (AUD)" : "Adjustment (AUD)"}>
+                  <input style={inputStyle} type="number" step="0.01" value={discount} onChange={(e) => setDiscount(e.target.value)} />
+                </Field>
+              </div>
+              <div style={{ marginTop: 14, paddingTop: 14, borderTop: "2px solid #e3d8c6" }}>
+                <div className="totals-row">
+                  <span>Subtotal (incl. GST)</span>
+                  <span>{fmtMoney(subtotal, "AUD")}</span>
+                </div>
+                {discountNum > 0 && (
+                  <div className="totals-row" style={{ marginTop: 8 }}>
+                    <span>{isQuote ? "Discount" : "Adjustment"}</span>
+                    <span>{(isQuote ? "-" : "") + fmtMoney(discountNum, "AUD")}</span>
+                  </div>
+                )}
+                <div className="totals-row grand" style={{ marginTop: 10 }}>
+                  <span>Total (incl. GST)</span>
+                  <span>{fmtMoney(total, "AUD")}</span>
+                </div>
+              </div>
+            </Panel>
+          </fieldset>
+
+          {/* Gross Profit — moved out of the (now hidden) quote preview so it's
+              always visible here, bottom-right, regardless of preview state. */}
+          {isQuote && hasCostData && (
+            <Panel>
+              <div
+                onClick={() => setShowProfitSection(!showProfitSection)}
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  cursor: "pointer",
+                  fontSize: 13,
+                  fontWeight: 600,
+                  color: "#6b5240",
+                  userSelect: "none",
+                }}
+              >
+                <span style={{ fontFamily: "Georgia,serif", color: "#4a3527", fontSize: 16 }}>Gross Profit</span>
+                <span style={{ fontSize: 16, transition: "transform 0.3s ease", transform: showProfitSection ? "rotate(180deg)" : "rotate(0deg)" }}>▼</span>
+              </div>
+              {showProfitSection && (
+                <div style={{ marginTop: 12 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
+                    <span style={{ color: "#6b5240", fontWeight: 600 }}>Total Cost (AUD):</span>
+                    <span style={{ fontWeight: 700, color: "#4a3527" }}>{fmtMoney(knownCostTotal, "AUD")}</span>
+                  </div>
+                  <div style={{ display: "flex", justifyContent: "space-between" }}>
+                    <span style={{ color: "#6b5240", fontWeight: 600 }}>Gross Profit %:</span>
+                    <span
+                      style={{
+                        fontWeight: 700,
+                        color: grossProfitPct != null && grossProfitPct < 0 ? "#a3442e" : "#5c7a4f",
+                      }}
+                    >
+                      {grossProfitPct != null ? `${grossProfitPct.toFixed(1)}%` : "—"}
+                    </span>
+                  </div>
+                  {lines.length > 0 && !hasCostData && (
+                    <div style={{ fontSize: 11, color: "#8a7a66", marginTop: 8 }}>
+                      Gross profit isn't shown for manually-added lines with no linked price book cost.
+                    </div>
+                  )}
+                </div>
+              )}
+            </Panel>
+          )}
+        </div>
+
+        {/* ---------------- LIVE QUOTE PREVIEW (hidden from the modal UI; kept
+             only so Print / Download PDF can still clone a fully-formatted
+             version of the document via printRef) ---------------- */}
+        <div style={{ position: "absolute", width: 1, height: 1, overflow: "hidden", left: -99999, top: -99999 }} aria-hidden="true">
           <div className="doc-paper" ref={printRef} style={{ position: "sticky", top: 0 }}>
             {(() => {
               const isConsolidated = !isQuote && !isNew && editing?.consolidatedMemberIds?.length > 0;
               const consolidatedMembers = isConsolidated
+
                 ? (db.pos || []).filter(p => (editing.consolidatedMemberIds || []).includes(p.id))
                 : [];
               const allConsolidatedPOs = isConsolidated ? [editing, ...consolidatedMembers] : [];
