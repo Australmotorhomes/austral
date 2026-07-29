@@ -11299,6 +11299,10 @@ function StockMovementTable({ db, collapsed, setCollapsed, fyEnd, setFyEnd, curr
       }
       const code = item?.productCode;
       if (!code) return;
+      // Stock movement should only track the vehicle itself — freight,
+      // accessories, and anything else outside Chassis & Structure isn't a
+      // physical unit of stock and shouldn't appear as an IN line.
+      if (item?.category !== "Chassis & Structure") return;
       const qty = parseFloat(l.qty || l.quantity) || 1;
       const linePrice = parseFloat(l.price || l.unitPrice || l.cost || 0);
       const lineValue = linePrice * qty;
@@ -11336,6 +11340,8 @@ function StockMovementTable({ db, collapsed, setCollapsed, fyEnd, setFyEnd, curr
       const item = (db.items || []).find(i => i.id === l.itemId);
       const code = item?.productCode;
       if (!code) return;
+      // Same rule as IN: only Chassis & Structure items count as stock.
+      if (item?.category !== "Chassis & Structure") return;
       const qty = parseFloat(l.qty || l.quantity) || 1;
       if (!stockOUT[code]) stockOUT[code] = { qty: 0, entries: [] };
       stockOUT[code].qty += qty;
