@@ -11684,6 +11684,24 @@ function DashboardTab({ db, setTab, openRecord }) {
     .filter((p) => !["delivered", "converted"].includes(normStatus(p.currentStatus)))
     .reduce((sum, p) => sum + (parseFloat(p.salesValue) || 0), 0);
 
+  // Sales funnel value breakdown — Total Funnel is Prospects-with-Quotes +
+  // Prospects-no-quotes added together (both exclude Lost, so the three
+  // stay consistent with each other).
+  const funnelValueRowsForStatuses = (statuses) => db.crm
+    .filter((p) => statuses.includes(normStatus(p.currentStatus)))
+    .map((p) => ({
+      id: p.id,
+      who: p.name || "Unknown",
+      product: p.enquiryProduct || "—",
+      value: parseFloat(p.salesValue) || 0,
+    }));
+  const totalFunnelRows = funnelValueRowsForStatuses(["call", "meeting", "quote"]);
+  const prospectsWithQuoteRows = funnelValueRowsForStatuses(["quote"]);
+  const prospectsNoQuoteRows = funnelValueRowsForStatuses(["call", "meeting"]);
+  const totalFunnelValue = totalFunnelRows.reduce((sum, r) => sum + r.value, 0);
+  const prospectsWithQuoteValue = prospectsWithQuoteRows.reduce((sum, r) => sum + r.value, 0);
+  const prospectsNoQuoteValue = prospectsNoQuoteRows.reduce((sum, r) => sum + r.value, 0);
+
   // Shared formatting helpers for drill-down rows (PO status, revenue/cost)
   const monthKeyLabel = (key) => new Date(`${key}-01T00:00:00`).toLocaleDateString("en-AU", { month: "long", year: "numeric" });
   const productLabelOf = (rec) => rec.model || (rec.lines?.[0]?.desc || rec.lines?.[0]?.description) || "—";
@@ -11875,6 +11893,21 @@ function DashboardTab({ db, setTab, openRecord }) {
   
   const expectedMargin = acceptedQuotesTotal - expectedCost;
   const expectedMarginPct = acceptedQuotesTotal > 0 ? ((expectedMargin / acceptedQuotesTotal) * 100).toFixed(1) : 0;
+
+  // Average Margin: each accepted quote's own gross profit percentage
+  // (its revenue vs its own line-item costs), averaged across all accepted
+  // orders. This differs from expectedMarginPct above, which is a single
+  // blended margin (total profit ÷ total revenue) weighted toward bigger
+  // orders — this one treats every accepted order equally regardless of size.
+  const perQuoteMarginPcts = acceptedQuotes.map((quote) => {
+    const quoteTotal = quote.total || 0;
+    const quoteCost = (quote.lines || []).reduce((qSum, line) => qSum + ((line.cost || 0) * (line.qty || 0)), 0);
+    const quoteProfit = quoteTotal - quoteCost;
+    return quoteTotal > 0 ? (quoteProfit / quoteTotal) * 100 : 0;
+  });
+  const averageMarginPct = perQuoteMarginPcts.length > 0
+    ? (perQuoteMarginPcts.reduce((sum, pct) => sum + pct, 0) / perQuoteMarginPcts.length).toFixed(1)
+    : null;
 
   // Revenue/cost expected over the next 3 months, based on each Quote's or
   // PO's own payment schedule (unpaid milestones), not a lump total.
@@ -12644,42 +12677,34 @@ function DashboardTab({ db, setTab, openRecord }) {
           );
         })()}
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 14, marginBottom: 28 }}>
-        <div
-          style={statBoxStyle}
-          onMouseEnter={(e) => Object.assign(e.currentTarget.style, { background: "#f0e8d9", borderColor: "#b5552b" })}
-          onMouseLeave={(e) => Object.assign(e.currentTarget.style, { background: "#f6f1e7", borderColor: "#e3d8c6" })}
-          onClick={() => setTab("crm")}
-        >
-          <p style={{ fontSize: 12, color: "#8a7a66", margin: "0 0 8px", fontWeight: 600 }}>Pipeline value</p>
-          <p style={{ fontSize: 24, fontWeight: 700, color: "#4a3527", margin: 0 }}>{fmtMoney(pipelineValue, "AUD")}</p>
-        </div>
-        <div
-          style={statBoxStyle}
-          onMouseEnter={(e) => Object.assign(e.currentTarget.style, { background: "#f0e8d9", borderColor: "#b5552b" })}
-          onMouseLeave={(e) => Object.assign(e.currentTarget.style, { background: "#f6f1e7", borderColor: "#e3d8c6" })}
-          onClick={() => setTab("po")}
-        >
-          <p style={{ fontSize: 12, color: "#8a7a66", margin: "0 0 8px", fontWeight: 600 }}>Open POs</p>
-          <p style={{ fontSize: 24, fontWeight: 700, color: "#4a3527", margin: 0 }}>{openPos}</p>
-        </div>
-        <div
-          style={statBoxStyle}
-          onMouseEnter={(e) => Object.assign(e.currentTarget.style, { background: "#f0e8d9", borderColor: "#b5552b" })}
-          onMouseLeave={(e) => Object.assign(e.currentTarget.style, { background: "#f6f1e7", borderColor: "#e3d8c6" })}
-          onClick={() => setTab("quotes")}
-        >
-          <p style={{ fontSize: 12, color: "#8a7a66", margin: "0 0 8px", fontWeight: 600 }}>Expected margin</p>
-          <p style={{ fontSize: 24, fontWeight: 700, color: expectedMargin >= 0 ? "#5c7a4f" : "#a3442e", margin: 0 }}>
-            {expectedMarginPct}%
-          </p>
-        </div>
-      </div>
-
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 14 }}>
         <Panel>
           <h3 style={{ fontFamily: "Georgia,serif", fontSize: 16, color: "#4a3527", margin: "0 0 12px" }}>Sales funnel</h3>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+            <div
+              onClick={() => setFunnelDrillDown({ title: "Total Funnel", kind: "prospects", rows: totalFunnelRows })}
+              style={{ display: "flex", justifyContent: "space-between", fontSize: 13, cursor: "pointer" }}
+            >
+              <span>Total Funnel</span>
+              <strong>{fmtMoney(totalFunnelValue, "AUD")}</strong>
+            </div>
+            <div
+              onClick={() => setFunnelDrillDown({ title: "Prospects with Quotes", kind: "prospects", rows: prospectsWithQuoteRows })}
+              style={{ display: "flex", justifyContent: "space-between", fontSize: 13, cursor: "pointer" }}
+            >
+              <span>Prospects with Quotes</span>
+              <strong>{fmtMoney(prospectsWithQuoteValue, "AUD")}</strong>
+            </div>
+            <div
+              onClick={() => setFunnelDrillDown({ title: "Prospects no quotes", kind: "prospects", rows: prospectsNoQuoteRows })}
+              style={{ display: "flex", justifyContent: "space-between", fontSize: 13, cursor: "pointer" }}
+            >
+              <span>Prospects no quotes</span>
+              <strong>{fmtMoney(prospectsNoQuoteValue, "AUD")}</strong>
+            </div>
+
+            <div style={{ borderTop: "1px solid #e3d8c6", margin: "4px 0" }} />
+
             <div
               onClick={() => setFunnelDrillDown({ title: "Active Prospects", kind: "prospects", rows: recentProspectRows })}
               style={{ display: "flex", justifyContent: "space-between", fontSize: 13, cursor: "pointer" }}
@@ -12740,6 +12765,12 @@ function DashboardTab({ db, setTab, openRecord }) {
             >
               <span>Revenue expected next 3 months</span>
               <strong>{fmtMoney(revenueNext3, "AUD")}</strong>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+              <span>Average Margin</span>
+              <strong style={{ color: averageMarginPct != null && averageMarginPct >= 0 ? "#5c7a4f" : "#a3442e" }}>
+                {averageMarginPct != null ? `${averageMarginPct}%` : "—"}
+              </strong>
             </div>
           </div>
         </Panel>
