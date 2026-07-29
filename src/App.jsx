@@ -11264,6 +11264,7 @@ function SalesByModelModals({ drillDown, setDrillDown, unmatchedInfo, setUnmatch
 
 function StockMovementTable({ db, collapsed, setCollapsed, fyEnd, setFyEnd, currentFYEnd, getFYRange, EARLIEST_FY_END }) {
   const fyRange = getFYRange(fyEnd);
+  const [drillDown, setDrillDown] = React.useState(null); // { title, entries: [{label, party, date, qty, value}] }
 
   // ── IN: POs with status "Paid" or "Received" within FY ──
   // "Received" comes after "Paid" in the workflow, so stock remains counted IN
@@ -11276,6 +11277,8 @@ function StockMovementTable({ db, collapsed, setCollapsed, fyEnd, setFyEnd, curr
   }).forEach(po => {
     const lines = po.lines || [];
     const freight = parseFloat(po.customsClearance) || 0;
+    const poLabel = `PO-${String(po.number || "").replace(/^PO-?/i, "")}`;
+    const poDate = (po.date || po.createdAt || "").slice(0, 10);
 
     // Total value of ALL lines (including non-coded lines like shipping)
     const totalLineValue = lines.reduce((s, l) => {
@@ -11300,9 +11303,18 @@ function StockMovementTable({ db, collapsed, setCollapsed, fyEnd, setFyEnd, curr
       const linePrice = parseFloat(l.price || l.unitPrice || l.cost || 0);
       const lineValue = linePrice * qty;
       const freightShare = totalLineValue > 0 ? (lineValue / totalLineValue) * freight : 0;
-      if (!stockIN[code]) stockIN[code] = { code, desc: item?.name || item?.description || l.desc || l.description || code, qty: 0, value: 0 };
+      const entryValue = lineValue + freightShare;
+      if (!stockIN[code]) stockIN[code] = { code, desc: item?.name || item?.description || l.desc || l.description || code, qty: 0, value: 0, entries: [] };
       stockIN[code].qty += qty;
-      stockIN[code].value += lineValue + freightShare;
+      stockIN[code].value += entryValue;
+      stockIN[code].entries.push({
+        id: po.id,
+        label: poLabel,
+        party: po.party || "Unknown supplier",
+        date: poDate,
+        qty,
+        value: entryValue,
+      });
     });
   });
 
@@ -11318,27 +11330,48 @@ function StockMovementTable({ db, collapsed, setCollapsed, fyEnd, setFyEnd, curr
     // Use the paidDate of the first milestone for FY range check
     const paidDate = (first.paidDate || first.due || "").slice(0, 10);
     if (!paidDate || paidDate < fyRange.start || paidDate > fyRange.end) return;
+    const quoteLabel = `${quote.number || "Quote"}`;
     (quote.lines || []).forEach(l => {
       if (!l.itemId) return;
       const item = (db.items || []).find(i => i.id === l.itemId);
       const code = item?.productCode;
       if (!code) return;
-      stockOUT[code] = (stockOUT[code] || 0) + (parseFloat(l.qty || l.quantity) || 1);
+      const qty = parseFloat(l.qty || l.quantity) || 1;
+      if (!stockOUT[code]) stockOUT[code] = { qty: 0, entries: [] };
+      stockOUT[code].qty += qty;
+      stockOUT[code].entries.push({
+        id: quote.id,
+        label: quoteLabel,
+        party: quote.party || "Unknown customer",
+        date: paidDate,
+        qty,
+        value: null, // OUT value is apportioned from IN cost, not a standalone figure per quote
+      });
     });
   });
 
   const allCodes = [...new Set([...Object.keys(stockIN), ...Object.keys(stockOUT)])].sort();
   const totIN = allCodes.reduce((s, c) => s + (stockIN[c]?.qty || 0), 0);
-  const totOUT = allCodes.reduce((s, c) => s + (stockOUT[c] || 0), 0);
+  const totOUT = allCodes.reduce((s, c) => s + (stockOUT[c]?.qty || 0), 0);
   const totOH = totIN - totOUT;
   const totalINValue = allCodes.reduce((s, c) => s + (stockIN[c]?.value || 0), 0);
   const totalOUTValue = allCodes.reduce((s, c) => {
     const inQty = stockIN[c]?.qty || 0;
-    const outQty = stockOUT[c] || 0;
+    const outQty = stockOUT[c]?.qty || 0;
     const inVal = stockIN[c]?.value || 0;
     return inQty > 0 ? s + (outQty / inQty) * inVal : s;
   }, 0);
   const totValue = totalINValue - totalOUTValue;
+
+  // Builds the drill-down entry list for one code (or every code, for the
+  // Total row) — IN entries (with $ value) followed by OUT entries (qty
+  // only, since OUT "value" is an apportioned share of IN cost, not its own
+  // real transaction amount).
+  function buildDrillDownEntries(codes) {
+    const inEntries = codes.flatMap((c) => (stockIN[c]?.entries || []).map((e) => ({ ...e, code: c, direction: "IN" })));
+    const outEntries = codes.flatMap((c) => (stockOUT[c]?.entries || []).map((e) => ({ ...e, code: c, direction: "OUT" })));
+    return [...inEntries, ...outEntries].sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+  }
 
   const fyOptions = [];
   for (let y = EARLIEST_FY_END; y <= currentFYEnd + 1; y++) fyOptions.push(y);
@@ -11382,13 +11415,17 @@ function StockMovementTable({ db, collapsed, setCollapsed, fyEnd, setFyEnd, curr
                 </p>
               ) : allCodes.map((code) => {
                 const inQty = stockIN[code]?.qty || 0;
-                const outQty = stockOUT[code] || 0;
+                const outQty = stockOUT[code]?.qty || 0;
                 const onHand = inQty - outQty;
                 const inVal = stockIN[code]?.value || 0;
                 const outVal = inQty > 0 ? (outQty / inQty) * inVal : 0;
                 const onHandVal = inVal - outVal;
                 return (
-                  <div key={code} style={{ background: "#fff", border: "1px solid #c0d8c8", borderRadius: 6, padding: 12, marginBottom: 8 }}>
+                  <div
+                    key={code}
+                    onClick={() => setDrillDown({ title: `${code} — ${stockIN[code]?.desc || ""}`, entries: buildDrillDownEntries([code]) })}
+                    style={{ background: "#fff", border: "1px solid #c0d8c8", borderRadius: 6, padding: 12, marginBottom: 8, cursor: "pointer" }}
+                  >
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
                       <span style={{ fontFamily: "monospace", fontWeight: 700, color: "#b5552b", fontSize: 13 }}>{code}</span>
                       <span style={{ fontSize: 12, color: "#4a3527" }}>{(stockIN[code]?.desc || "").slice(0, 12)}</span>
@@ -11411,7 +11448,10 @@ function StockMovementTable({ db, collapsed, setCollapsed, fyEnd, setFyEnd, curr
               })}
               {/* Mobile totals */}
               {allCodes.length > 0 && (
-                <div style={{ background: "#e8f5ec", border: "2px solid #3a7a4a", borderRadius: 6, padding: 12, marginTop: 4 }}>
+                <div
+                  onClick={() => setDrillDown({ title: "Stock Movement — Total", entries: buildDrillDownEntries(allCodes) })}
+                  style={{ background: "#e8f5ec", border: "2px solid #3a7a4a", borderRadius: 6, padding: 12, marginTop: 4, cursor: "pointer" }}
+                >
                   <div style={{ fontSize: 12, fontWeight: 700, color: "#2d5a38", marginBottom: 8 }}>Total</div>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 4 }}>
                     {[
@@ -11452,13 +11492,19 @@ function StockMovementTable({ db, collapsed, setCollapsed, fyEnd, setFyEnd, curr
                     </tr>
                   ) : allCodes.map((code, ri) => {
                     const inQty = stockIN[code]?.qty || 0;
-                    const outQty = stockOUT[code] || 0;
+                    const outQty = stockOUT[code]?.qty || 0;
                     const onHand = inQty - outQty;
                     const inVal = stockIN[code]?.value || 0;
                     const outVal = inQty > 0 ? (outQty / inQty) * inVal : 0;
                     const onHandVal = inVal - outVal;
                     return (
-                      <tr key={code} style={{ background: ri % 2 === 0 ? "#fff" : "#f4faf6" }}>
+                      <tr
+                        key={code}
+                        onClick={() => setDrillDown({ title: `${code} — ${stockIN[code]?.desc || ""}`, entries: buildDrillDownEntries([code]) })}
+                        style={{ background: ri % 2 === 0 ? "#fff" : "#f4faf6", cursor: "pointer" }}
+                        onMouseEnter={(e) => (e.currentTarget.style.background = "#e8f5ec")}
+                        onMouseLeave={(e) => (e.currentTarget.style.background = ri % 2 === 0 ? "#fff" : "#f4faf6")}
+                      >
                         <td style={{ ...tdL, fontFamily: "monospace", fontWeight: 700, color: "#b5552b", fontSize: 11 }}>{code}</td>
                         <td style={{ ...tdL, color: "#4a3527" }}>{(stockIN[code]?.desc || "").slice(0, 12)}</td>
                         <td style={{ ...tdS, color: "#3a7a4a", fontWeight: 600 }}>{inQty}</td>
@@ -11469,7 +11515,12 @@ function StockMovementTable({ db, collapsed, setCollapsed, fyEnd, setFyEnd, curr
                     );
                   })}
                   {allCodes.length > 0 && (
-                    <tr style={{ background: "#e8f5ec", borderTop: "2px solid #3a7a4a", fontWeight: 700 }}>
+                    <tr
+                      onClick={() => setDrillDown({ title: "Stock Movement — Total", entries: buildDrillDownEntries(allCodes) })}
+                      style={{ background: "#e8f5ec", borderTop: "2px solid #3a7a4a", fontWeight: 700, cursor: "pointer" }}
+                      onMouseEnter={(e) => (e.currentTarget.style.background = "#d8ecdf")}
+                      onMouseLeave={(e) => (e.currentTarget.style.background = "#e8f5ec")}
+                    >
                       <td style={{ ...tdL, fontWeight: 700, color: "#2d5a38" }} colSpan={2}>Total</td>
                       <td style={{ ...tdS, color: "#3a7a4a", fontWeight: 700 }}>{totIN}</td>
                       <td style={{ ...tdS, color: "#b5552b", fontWeight: 700 }}>{totOUT || "—"}</td>
@@ -11482,6 +11533,57 @@ function StockMovementTable({ db, collapsed, setCollapsed, fyEnd, setFyEnd, curr
             </div>
           )}
         </>
+      )}
+
+      {drillDown && (
+        <Modal onClose={() => setDrillDown(null)} width={640}>
+          <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: "0 0 4px", fontSize: 19 }}>
+            {drillDown.title}
+          </h3>
+          <p style={{ fontSize: 12, color: "#8a7a66", margin: "0 0 16px" }}>
+            Individual transactions behind this row, for {getFYRange(fyEnd).label}.
+          </p>
+          {drillDown.entries.length === 0 ? (
+            <p style={{ fontSize: 13, color: "#aaa", textAlign: "center", padding: 20 }}>No transactions found.</p>
+          ) : (
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                <thead>
+                  <tr style={{ borderBottom: "2px solid #b5552b" }}>
+                    <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11 }}>Date</th>
+                    <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11 }}>Direction</th>
+                    <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11 }}>Reference</th>
+                    <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11 }}>Party</th>
+                    <th style={{ textAlign: "right", padding: "6px 8px", fontSize: 11 }}>Qty</th>
+                    <th style={{ textAlign: "right", padding: "6px 8px", fontSize: 11 }}>Value</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {drillDown.entries.map((e, i) => (
+                    <tr key={`${e.direction}-${e.id}-${e.code}-${i}`} style={{ borderBottom: "1px solid #e3d8c6" }}>
+                      <td style={{ padding: "6px 8px", color: "#8a7a66" }}>{e.date ? new Date(e.date).toLocaleDateString("en-AU") : "—"}</td>
+                      <td style={{ padding: "6px 8px" }}>
+                        <span style={{
+                          fontSize: 10, fontWeight: 700, padding: "2px 6px", borderRadius: 4,
+                          background: e.direction === "IN" ? "#e3ecdc" : "#fbeae5",
+                          color: e.direction === "IN" ? "#3a7a4a" : "#b5552b",
+                        }}>
+                          {e.direction}
+                        </span>
+                      </td>
+                      <td style={{ padding: "6px 8px", color: "#4a3527" }}>{e.label}</td>
+                      <td style={{ padding: "6px 8px", color: "#4a3527" }}>{e.party}</td>
+                      <td style={{ padding: "6px 8px", textAlign: "right", color: "#4a3527" }}>{e.qty}</td>
+                      <td style={{ padding: "6px 8px", textAlign: "right", color: "#4a3527" }}>
+                        {e.value != null ? `$${Math.round(e.value).toLocaleString()}` : "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </Modal>
       )}
     </>
   );
