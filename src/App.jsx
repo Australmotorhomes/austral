@@ -9052,21 +9052,25 @@ const PROSPECT_STAGES = [
   { key: "meeting", label: "Meeting" },
   { key: "quote", label: "Quote" },
   { key: "lost", label: "Lost" },
+  { key: "converted", label: "Converted" },
 ];
 const PROSPECT_STAGE_COLORS = {
   call: { bg: "#fef2e0", color: "#a68d4a" },
   meeting: { bg: "#f3eafc", color: "#7a4fa0" },
   quote: { bg: "#e8f0fb", color: "#3a5fa0" },
   lost: { bg: "#fbeae5", color: "#a3442e" },
+  converted: { bg: "#eaf5ea", color: "#3a7a3a" },
 };
-// The Kanban board only shows the active working stages as columns — Lost is
-// a terminal/filed-away state, not something you drag a card into visually.
-// It's still a selectable status everywhere else (the modal dropdown, and
-// each card's "Move to" fallback select below), so a prospect can still be
-// marked Lost — it just then drops out of the board entirely rather than
-// getting its own column. The "Include Lost" checkbox next to search still
-// controls whether Lost prospects show up in the List view.
-const PROSPECT_KANBAN_COLUMNS = PROSPECT_STAGES.filter((s) => s.key !== "lost");
+// The Kanban board only shows the active working stages as columns — Lost and
+// Converted are terminal/filed-away states, not something you drag a card
+// into visually. They're still selectable statuses everywhere else (the modal
+// dropdown, and each card's "Move to" fallback select below); a prospect that
+// reaches either state just drops out of the board's columns rather than
+// getting its own. The "Include Lost" checkbox next to search still controls
+// whether Lost/Converted prospects show up in the List view — converting a
+// prospect no longer deletes its record (see convertProspectToCustomer), it's
+// kept and marked "Converted" so historical funnel metrics stay accurate.
+const PROSPECT_KANBAN_COLUMNS = PROSPECT_STAGES.filter((s) => s.key !== "lost" && s.key !== "converted");
 
 // Kanban view of the prospect pipeline. Cards are draggable between columns
 // (desktop) and also carry a small stage <select> on every card as a
@@ -9154,7 +9158,7 @@ function ProspectKanbanBoard({ list, onOpen, onMove, onDelete, showLost, db }) {
   // Lost prospects clutter the board when they're not being actively worked —
   // the column only appears when "Show Lost" (next to search) is checked,
   // which is the same checkbox that already includes/excludes them from `list`.
-  const stagesToShow = showLost ? PROSPECT_STAGES : PROSPECT_STAGES.filter((s) => s.key !== "lost");
+  const stagesToShow = showLost ? PROSPECT_STAGES : PROSPECT_STAGES.filter((s) => s.key !== "lost" && s.key !== "converted");
 
   const byStage = {};
   stagesToShow.forEach((s) => (byStage[s.key] = []));
@@ -9474,7 +9478,7 @@ function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOp
 
   let list = db.crm.slice().sort((a, b) => (b.lastContactDate || "").localeCompare(a.lastContactDate || ""));
   if (!showLost) {
-    list = list.filter((p) => (p.currentStatus || "").trim().toLowerCase() !== "lost");
+    list = list.filter((p) => !["lost", "converted"].includes((p.currentStatus || "").trim().toLowerCase()));
   }
   if (search) {
     const s = search.toLowerCase();
@@ -9711,10 +9715,12 @@ function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOp
         const savedRow = Array.isArray(result) ? result[0] : result;
         const newCustomer = { ...newCustomerLocal, ...fromSupabaseFormat(savedRow, "customers"), id: savedRow.id };
 
-        // Remove the prospect from Supabase now that they're a customer
+        // Mark the prospect "Converted" instead of deleting it — the record is
+        // kept (and hidden from active views, same as Lost) so funnel metrics
+        // like conversion rate and lost rate have an accurate denominator.
         console.log("📋 Converting prospect to customer:", prospect.name);
         console.log("  Activities being copied:", prospect.activities?.length || 0, "activities");
-        await supabaseREST("DELETE", `crm_prospects?id=eq.${prospect.id}`);
+        await supabaseREST("PATCH", `crm_prospects?id=eq.${prospect.id}`, { current_status: "converted" });
 
         // Retroactively link any existing quotes for this prospect (matched by
         // name) to the new customer record's real ID, so they show up via the
@@ -9729,8 +9735,8 @@ function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOp
         // Then update local state to match
         update((next) => {
           next.customers.push(newCustomer);
-          const idx = next.crm.findIndex((p) => p.id === prospect.id);
-          if (idx >= 0) next.crm.splice(idx, 1);
+          const target = next.crm.find((p) => p.id === prospect.id);
+          if (target) target.currentStatus = "converted";
           matchingQuotes.forEach((mq) => {
             const target = next.quotes.find((q) => q.id === mq.id);
             if (target) target.customerId = newCustomer.id;
@@ -9818,7 +9824,7 @@ function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOp
           />
           <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "#6b5240", whiteSpace: "nowrap", cursor: "pointer" }}>
             <input type="checkbox" checked={showLost} onChange={(e) => setShowLost(e.target.checked)} />
-            Show Lost
+            Show Lost/Converted
           </label>
           <div style={{ display: "flex", border: "1px solid #e3d8c6", borderRadius: 6, overflow: "hidden", flexShrink: 0 }}>
             <button
@@ -11533,15 +11539,18 @@ function DashboardTab({ db, setTab, openRecord }) {
   // Sales funnel counts — normalise status to lowercase+trimmed for comparison
   const normStatus = (s) => (s || "").trim().toLowerCase();
   const funnelStats = {
-    activeProspects: db.crm.filter((p) => !["delivered", "lost"].includes(normStatus(p.currentStatus))).length,
+    activeProspects: db.crm.filter((p) => !["delivered", "lost", "converted"].includes(normStatus(p.currentStatus))).length,
     quotesSent:      db.quotes.filter((q) => normStatus(q.status) === "sent").length,
     quotesAccepted:  db.quotes.filter((q) => normStatus(q.status) === "accepted").length,
     quotesDelivered: db.quotes.filter((q) => normStatus(q.status) === "delivered").length,
   };
 
-  // Pipeline value — sum of salesValue for all non-delivered prospects
+  // Pipeline value — sum of salesValue for all non-delivered, non-converted
+  // prospects. (Converted prospects used to be deleted on conversion, so they
+  // never reached this calculation; now that the record is kept — see
+  // convertProspectToCustomer — it has to be excluded explicitly instead.)
   const pipelineValue = db.crm
-    .filter((p) => normStatus(p.currentStatus) !== "delivered")
+    .filter((p) => !["delivered", "converted"].includes(normStatus(p.currentStatus)))
     .reduce((sum, p) => sum + (parseFloat(p.salesValue) || 0), 0);
 
   // Shared formatting helpers for drill-down rows (PO status, revenue/cost)
@@ -11553,7 +11562,7 @@ function DashboardTab({ db, setTab, openRecord }) {
   // currently in that stage (who, product, ETA, value), and clicking a quote
   // row opens that specific quote.
   const recentProspectRows = db.crm
-    .filter((p) => !["delivered", "lost"].includes(normStatus(p.currentStatus)))
+    .filter((p) => !["delivered", "lost", "converted"].includes(normStatus(p.currentStatus)))
     .slice()
     .sort((a, b) => (b.createdAt || "").localeCompare(a.createdAt || ""))
     .slice(0, 5)
@@ -11575,6 +11584,44 @@ function DashboardTab({ db, setTab, openRecord }) {
   const quotesSentRows = quoteRowsForStatus("sent");
   const quotesAcceptedRows = quoteRowsForStatus("accepted");
   const quotesDeliveredRows = quoteRowsForStatus("delivered");
+
+  // ---- Additional funnel-health metrics ----
+  // "All prospects" here means every row in crm_prospects, including ones now
+  // marked Converted — converting a prospect no longer deletes its record, so
+  // this denominator is accurate for everything converted from this point
+  // forward. Conversions/losses from before that change was made won't be
+  // reflected here, since those prospect rows no longer exist.
+  const allProspects = db.crm;
+  const lostProspectsAll = allProspects.filter((p) => normStatus(p.currentStatus) === "lost");
+  const convertedProspectsAll = allProspects.filter((p) => normStatus(p.currentStatus) === "converted");
+  const totalProspectsCount = allProspects.length;
+  const totalQuotesCount = db.quotes.length;
+
+  // Prospects Lost, current FY — crm_prospects has no "date marked lost"
+  // column, so this uses First Contact Date as the closest available proxy
+  // for which FY a lost prospect belongs to (a prospect lost in FY26 whose
+  // first contact was in FY25 won't be counted here — there's currently no
+  // way to know the actual date it was marked Lost).
+  const currentFYRangeForFunnel = getFYRange(currentFYEnd);
+  const lostProspectsThisFY = lostProspectsAll.filter(
+    (p) => p.firstContactDate && p.firstContactDate >= currentFYRangeForFunnel.start && p.firstContactDate <= currentFYRangeForFunnel.end
+  );
+  const lostProspectsThisFYRows = lostProspectsThisFY.map((p) => ({
+    id: p.id,
+    who: p.name || "Unknown",
+    product: p.enquiryProduct || "—",
+    value: parseFloat(p.salesValue) || 0,
+  }));
+
+  // Quote Closing Rate % — customer conversions ÷ total quotes. (Standard
+  // "win rate" is usually conversions ÷ quotes sent specifically, but this
+  // matches how the business tracks it here: every quote ever raised.)
+  const quoteClosingRatePct = totalQuotesCount > 0 ? (convertedProspectsAll.length / totalQuotesCount) * 100 : null;
+  // Customer conversions as a % of all prospects (win rate at the top of funnel)
+  const customerConversionRatePct = totalProspectsCount > 0 ? (convertedProspectsAll.length / totalProspectsCount) * 100 : null;
+  // Lost Prospect Rate — Lost ÷ all prospects
+  const lostProspectRatePct = totalProspectsCount > 0 ? (lostProspectsAll.length / totalProspectsCount) * 100 : null;
+
 
   // PO tracking — build full row lists (not just counts/sums) so each stat can
   // be drilled into and show the underlying POs.
@@ -12534,6 +12581,29 @@ function DashboardTab({ db, setTab, openRecord }) {
             >
               <span>Quotes Delivered</span>
               <strong>{funnelStats.quotesDelivered}</strong>
+            </div>
+
+            <div style={{ borderTop: "1px solid #e3d8c6", margin: "4px 0" }} />
+
+            <div
+              onClick={() => setFunnelDrillDown({ title: `Prospects Lost (${currentFYRangeForFunnel.label})`, kind: "prospects", rows: lostProspectsThisFYRows })}
+              style={{ display: "flex", justifyContent: "space-between", fontSize: 13, cursor: "pointer" }}
+              title="Based on each prospect's first contact date — the exact date a prospect was marked Lost isn't tracked, so this counts prospects first contacted this FY who are now Lost."
+            >
+              <span>Prospects Lost ({currentFYRangeForFunnel.label})</span>
+              <strong>{lostProspectsThisFY.length}</strong>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+              <span>Quote Closing Rate</span>
+              <strong>{quoteClosingRatePct != null ? `${quoteClosingRatePct.toFixed(1)}%` : "—"}</strong>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+              <span>Customer Conversion Rate</span>
+              <strong>{customerConversionRatePct != null ? `${customerConversionRatePct.toFixed(1)}%` : "—"}</strong>
+            </div>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13 }}>
+              <span>Lost Prospect Rate</span>
+              <strong>{lostProspectRatePct != null ? `${lostProspectRatePct.toFixed(1)}%` : "—"}</strong>
             </div>
           </div>
         </Panel>
