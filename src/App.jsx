@@ -5486,11 +5486,31 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
   }
 
   const printRef = useRef(null);
-  const [modalWidth, setModalWidth] = useState(1000);
   const MODAL_WIDTH_MIN = 700;
   const MODAL_WIDTH_MAX = 1700;
   const MODAL_WIDTH_DEFAULT = 1000;
   const MODAL_WIDTH_STEP = 150;
+  const MODAL_WIDTH_STORAGE_KEY = "docModalWidth";
+  const [modalWidth, setModalWidthState] = useState(() => {
+    try {
+      const saved = parseInt(localStorage.getItem(MODAL_WIDTH_STORAGE_KEY), 10);
+      if (saved && saved >= MODAL_WIDTH_MIN && saved <= MODAL_WIDTH_MAX) return saved;
+    } catch (e) {
+      // localStorage unavailable (e.g. private browsing) — fall back to default
+    }
+    return MODAL_WIDTH_DEFAULT;
+  });
+  const setModalWidth = (updater) => {
+    setModalWidthState((prev) => {
+      const next = typeof updater === "function" ? updater(prev) : updater;
+      try {
+        localStorage.setItem(MODAL_WIDTH_STORAGE_KEY, String(next));
+      } catch (e) {
+        // ignore — persistence is best-effort
+      }
+      return next;
+    });
+  };
 
   return (
     <Modal width={modalWidth} onClose={onCancel}>
