@@ -1983,34 +1983,37 @@ export default function App() {
       <style>{globalCss}</style>
       <div className="app">
         <header className="top">
-          <div className="brand" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, minWidth: 0 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
-              <img src={AUSTRAL_LOGO} alt="Austral Motorhomes" style={{ height: 40, width: "auto", objectFit: "contain", flexShrink: 0 }} />
+          <div className="brand">
+            <img src={AUSTRAL_LOGO} alt="Austral Motorhomes" style={{ height: 40, width: "auto", objectFit: "contain", flexShrink: 0 }} />
+            <div className="app-name-wrap">
+              <span className="app-name-rule" />
               <span className="app-name">CRM</span>
-              <img src={PLATINUM_LOGO} alt="Platinum Pontoons" style={{ height: 40, width: "auto", objectFit: "contain", flexShrink: 0 }} />
+              <span className="app-name-rule" />
             </div>
-            <button
-              onClick={toggleHeaderTools}
-              title={showHeaderTools ? "Hide sync/backup menu" : "Show sync/backup menu"}
-              aria-expanded={showHeaderTools}
-              style={{
-                background: "none",
-                border: "1px solid #e3d8c6",
-                borderRadius: 8,
-                width: 34,
-                height: 34,
-                flexShrink: 0,
-                cursor: "pointer",
-                color: "#6b5240",
-                fontSize: 16,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-              }}
-            >
-              {showHeaderTools ? "✕" : "⋯"}
-            </button>
+            <img src={PLATINUM_LOGO} alt="Platinum Pontoons" style={{ height: 40, width: "auto", objectFit: "contain", flexShrink: 0 }} />
           </div>
+          <button
+            className="header-tools-toggle"
+            onClick={toggleHeaderTools}
+            title={showHeaderTools ? "Hide sync/backup menu" : "Show sync/backup menu"}
+            aria-expanded={showHeaderTools}
+            style={{
+              background: "none",
+              border: "1px solid #e3d8c6",
+              borderRadius: 8,
+              width: 34,
+              height: 34,
+              flexShrink: 0,
+              cursor: "pointer",
+              color: "#6b5240",
+              fontSize: 16,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            {showHeaderTools ? "✕" : "⋯"}
+          </button>
           {showHeaderTools && (
           <div className="header-utilities">
             <button
@@ -2436,15 +2439,21 @@ const appStyle = {
 
 const globalCss = `
   .app{max-width:min(1800px, 96vw);margin:0 auto;padding:0 20px 80px;}
-  header.top{display:flex;flex-direction:column;align-items:stretch;padding:22px 0 18px;border-bottom:3px solid #b5552b;margin-bottom:14px;gap:14px;}
-  .brand{display:flex;align-items:center;gap:12px;width:100%;}
+  header.top{position:relative;display:flex;flex-direction:column;align-items:stretch;padding:22px 0 18px;border-bottom:3px solid #b5552b;margin-bottom:14px;gap:14px;}
+  .brand{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:18px;width:100%;padding-right:44px;}
   .brand .mark{width:42px;height:42px;border-radius:9px;background:linear-gradient(155deg,#b5552b,#8f3f1f);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:18px;font-family:Georgia,serif;letter-spacing:-1px;flex-shrink:0;}
   .brand h1{font-family:Georgia,serif;font-size:21px;margin:0;color:#4a3527;letter-spacing:.2px;}
   .brand .sub{font-size:12px;color:#8a7a66;margin-top:1px;letter-spacing:.3px;}
-  .app-name{font-family:Georgia,serif;font-size:15px;font-weight:700;color:#4a3527;letter-spacing:.5px;white-space:nowrap;}
+  .app-name-wrap{display:flex;align-items:center;justify-content:center;gap:12px;min-width:0;}
+  .app-name-rule{flex:1;height:1px;max-width:56px;background:linear-gradient(90deg,transparent,#c9a063,transparent);}
+  .app-name{font-family:Georgia,serif;font-size:24px;font-weight:700;color:#b5552b;letter-spacing:6px;white-space:nowrap;}
+  .header-tools-toggle{position:absolute;top:22px;right:0;}
   .header-utilities{display:flex;align-items:center;gap:10px;flex-wrap:wrap;width:100%;}
   @media (max-width:640px){
-    .app-name{font-size:13px;}
+    .brand{gap:10px;padding-right:40px;}
+    .app-name{font-size:17px;letter-spacing:3px;}
+    .app-name-rule{max-width:20px;}
+    .header-tools-toggle{top:14px;}
   }
   nav.tabs{
     display:flex;gap:4px;background:#eee3d1;padding:4px;border-radius:11px;
