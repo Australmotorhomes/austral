@@ -8261,6 +8261,52 @@ function ContactsTab({ kind, db, update, showToast, nextNumber, pendingOpen, cle
     })();
   }
 
+  // "Convert to Prospect" — for a customer who was added directly and never
+  // went through the CRM pipeline (so there's no prospect record to mark
+  // Converted). This backfills one: a CRM prospect record already marked
+  // "Converted", so the sale is counted in the Sales Funnel's conversion-rate
+  // metrics. It's the reverse of convertProspectToCustomer.
+  function convertCustomerToProspect(customer) {
+    const alreadyExists = (db.crm || []).some(
+      (p) => (p.name || "").trim().toLowerCase() === customer.name.trim().toLowerCase()
+    );
+    if (alreadyExists) {
+      showToast(`${customer.name} already has a CRM record`);
+      return;
+    }
+    (async () => {
+      try {
+        const newProspectLocal = {
+          name: customer.name,
+          email: customer.email || "",
+          phone: customer.phone || "",
+          source: "Backfilled from existing customer record",
+          enquiryProduct: customer.product || "",
+          chanceOfClosing: 100,
+          currentStatus: "converted",
+          firstContactDate: null,
+          lastContactDate: todayISO(),
+          expectedOrderEtaMonth: null,
+          salesValue: parseFloat(customer.lastQuoteValue) || 0,
+          notes: `Backfilled from existing customer record so this sale counts toward CRM conversion metrics.${customer.notes ? " " + customer.notes : ""}`,
+          nextAction: "",
+          followUpMonth: null,
+          attachments: [],
+          activities: customer.activities || [],
+        };
+        const createPayload = toSupabaseFormat(newProspectLocal, "crm_prospects");
+        const result = await supabaseREST("POST", "crm_prospects", createPayload);
+        const savedRow = Array.isArray(result) ? result[0] : result;
+        const newProspect = { ...newProspectLocal, ...fromSupabaseFormat(savedRow, "crm_prospects"), id: savedRow.id };
+        update((next) => { next.crm.push(newProspect); });
+        showToast(`${customer.name} added to CRM as a converted prospect`);
+      } catch (err) {
+        showToast(`Error converting to prospect: ${err.message}`);
+        console.error("Convert customer to prospect error:", err);
+      }
+    })();
+  }
+
   return (
     <section>
       <div className="toolbar-row">
@@ -8461,6 +8507,7 @@ function ContactsTab({ kind, db, update, showToast, nextNumber, pendingOpen, cle
           onCancel={() => setEditingContact(undefined)}
           onSave={saveContact}
           onCreateQuote={!isSupplier ? createQuoteFromCustomer : undefined}
+          onConvertToProspect={!isSupplier ? (contact) => { convertCustomerToProspect(contact); setEditingContact(undefined); } : undefined}
           onArchive={!isSupplier ? (contact, archived) => { archiveContact(contact, archived); setEditingContact(undefined); } : undefined}
           onLogActivity={!isSupplier ? () => setLoggingActivityFor({ contact: editingContact, activity: null, index: null }) : undefined}
           onEditActivity={!isSupplier ? (activity, index) => setLoggingActivityFor({ contact: editingContact, activity, index }) : undefined}
@@ -8668,7 +8715,7 @@ function mergeLegacyPaymentsIntoInvoices(c) {
   return merged;
 }
 
-function ContactModal({ kind, editing, onCancel, onSave, onCreateQuote, onArchive, onLogActivity, onEditActivity, db, openRecord }) {
+function ContactModal({ kind, editing, onCancel, onSave, onCreateQuote, onConvertToProspect, onArchive, onLogActivity, onEditActivity, db, openRecord }) {
   const isSupplier = kind === "supplier";
   const [name, setName] = useState(editing ? editing.name : "");
   const [contactPerson, setContactPerson] = useState(isSupplier ? (editing ? editing.contactPerson || "" : "") : "");
@@ -8782,6 +8829,11 @@ function ContactModal({ kind, editing, onCancel, onSave, onCreateQuote, onArchiv
           )}
           {onCreateQuote && (
             <Btn variant="ghost" size="sm" onClick={() => onCreateQuote(editing)}>Create quote</Btn>
+          )}
+          {onConvertToProspect && !(db?.crm || []).some((p) => (p.name || "").trim().toLowerCase() === editing.name.trim().toLowerCase()) && (
+            <Btn variant="ghost" size="sm" onClick={() => onConvertToProspect(editing)} title="Backfill a CRM prospect record (marked Converted) for a customer who never went through the pipeline, so this sale counts toward the funnel's conversion-rate metrics">
+              Convert to Prospect
+            </Btn>
           )}
           {onArchive && (
             <Btn
