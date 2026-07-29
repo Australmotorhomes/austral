@@ -11824,7 +11824,7 @@ function DashboardTab({ db, setTab, openRecord }) {
   const expectedMargin = acceptedQuotesTotal - expectedCost;
   const expectedMarginPct = acceptedQuotesTotal > 0 ? ((expectedMargin / acceptedQuotesTotal) * 100).toFixed(1) : 0;
 
-  // Revenue/cost expected over the next 3 / 6 months, based on each Quote's or
+  // Revenue/cost expected over the next 3 months, based on each Quote's or
   // PO's own payment schedule (unpaid milestones), not a lump total.
   const monthKeysFromNow = (count) => {
     const keys = [];
@@ -11836,7 +11836,6 @@ function DashboardTab({ db, setTab, openRecord }) {
     return keys;
   };
   const next3MonthKeys = monthKeysFromNow(3);
-  const next6MonthKeys = monthKeysFromNow(6);
 
   const collectQuoteRevenueRows = (monthKeys) => {
     const rows = [];
@@ -11885,13 +11884,9 @@ function DashboardTab({ db, setTab, openRecord }) {
   };
 
   const revenueRows3 = collectQuoteRevenueRows(next3MonthKeys);
-  const revenueRows6 = collectQuoteRevenueRows(next6MonthKeys);
   const costRows3 = collectPoCostRows(next3MonthKeys);
-  const costRows6 = collectPoCostRows(next6MonthKeys);
   const revenueNext3 = revenueRows3.reduce((s, r) => s + r.amount, 0);
-  const revenueNext6 = revenueRows6.reduce((s, r) => s + r.amount, 0);
   const costNext3 = costRows3.reduce((s, r) => s + r.amount, 0);
-  const costNext6 = costRows6.reduce((s, r) => s + r.amount, 0);
 
   // Stat box style - clickable
   const statBoxStyle = {
@@ -12684,6 +12679,16 @@ function DashboardTab({ db, setTab, openRecord }) {
               <span>Lost Prospect Rate</span>
               <strong>{lostProspectRatePct != null ? `${lostProspectRatePct.toFixed(1)}%` : "—"}</strong>
             </div>
+
+            <div style={{ borderTop: "1px solid #e3d8c6", margin: "4px 0" }} />
+
+            <div
+              onClick={() => setRevCostDrillDown({ title: "Revenue expected — next 3 months", rows: revenueRows3, type: "quote" })}
+              style={{ display: "flex", justifyContent: "space-between", fontSize: 13, cursor: "pointer" }}
+            >
+              <span>Revenue expected next 3 months</span>
+              <strong>{fmtMoney(revenueNext3, "AUD")}</strong>
+            </div>
           </div>
         </Panel>
 
@@ -12725,39 +12730,15 @@ function DashboardTab({ db, setTab, openRecord }) {
               <span>POs owing in 3 months</span>
               <strong>{fmtMoney(owingIn3Months, "AUD")}</strong>
             </div>
-          </div>
-        </Panel>
 
-        <Panel>
-          <h3 style={{ fontFamily: "Georgia,serif", fontSize: 16, color: "#4a3527", margin: "0 0 12px" }}>Revenue vs cost</h3>
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-            <div
-              onClick={() => setRevCostDrillDown({ title: "Revenue expected — next 3 months", rows: revenueRows3, type: "quote" })}
-              style={{ display: "flex", justifyContent: "space-between", fontSize: 13, cursor: "pointer" }}
-            >
-              <span>Revenue expected next 3 months</span>
-              <strong>{fmtMoney(revenueNext3, "AUD")}</strong>
-            </div>
+            <div style={{ borderTop: "1px solid #e3d8c6", margin: "4px 0" }} />
+
             <div
               onClick={() => setRevCostDrillDown({ title: "Cost expected — next 3 months", rows: costRows3, type: "po" })}
               style={{ display: "flex", justifyContent: "space-between", fontSize: 13, cursor: "pointer" }}
             >
               <span>Cost expected next 3 months</span>
               <strong>{fmtMoney(costNext3, "AUD")}</strong>
-            </div>
-            <div
-              onClick={() => setRevCostDrillDown({ title: "Revenue expected — next 6 months", rows: revenueRows6, type: "quote" })}
-              style={{ display: "flex", justifyContent: "space-between", fontSize: 13, paddingTop: 8, borderTop: "1px solid #e3d8c6", cursor: "pointer" }}
-            >
-              <span>Revenue expected next 6 months</span>
-              <strong>{fmtMoney(revenueNext6, "AUD")}</strong>
-            </div>
-            <div
-              onClick={() => setRevCostDrillDown({ title: "Cost expected — next 6 months", rows: costRows6, type: "po" })}
-              style={{ display: "flex", justifyContent: "space-between", fontSize: 13, cursor: "pointer" }}
-            >
-              <span>Cost expected next 6 months</span>
-              <strong>{fmtMoney(costNext6, "AUD")}</strong>
             </div>
           </div>
         </Panel>
