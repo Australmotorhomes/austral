@@ -3912,6 +3912,7 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
     party: (d) => (d.party || "").toLowerCase(),
     model: (d) => (d.model || "").toLowerCase(),
     date: (d) => d.date || "",
+    ref: (d) => (d.ref || "").toLowerCase(),
     eta: (d) => d.eta || "",
     total: (d) => parseFloat(d.total) || 0,
     status: (d) => displayStatus(d) || "",
@@ -4899,6 +4900,8 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
                   <Badge tone={displayStatus(d).toLowerCase()}>{displayStatus(d)}</Badge>
                   {d.model && <Badge tone="model">{d.model}</Badge>}
                   <span>{fmtMoney(d.total)}</span>
+                  {d.ref && <span>Ref {d.ref}</span>}
+                  {d.eta && <span>ETA {fmtDate(d.eta)}</span>}
                 </div>
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: 10, flexShrink: 0 }}>
@@ -4927,6 +4930,8 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
                 <SortTh col="party">Customer</SortTh>
                 <SortTh col="model">Model</SortTh>
                 <SortTh col="date">Date</SortTh>
+                <SortTh col="ref">Ref</SortTh>
+                <SortTh col="eta">ETA</SortTh>
                 <SortTh col="total" className="num">Total (AUD)</SortTh>
                 <SortTh col="status">Status</SortTh>
                 <th></th>
@@ -4943,6 +4948,8 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
                     {d.model ? <Badge tone="model">{d.model}</Badge> : <span className="muted">—</span>}
                   </td>
                   <td className="muted">{fmtDate(d.date)}</td>
+                  <td className="muted">{d.ref ? d.ref : <span className="muted">—</span>}</td>
+                  <td className="muted">{d.eta ? fmtDate(d.eta) : <span className="muted">—</span>}</td>
                   <td className="num">{fmtMoney(d.total)}</td>
                   <td>
                     <Badge tone={displayStatus(d).toLowerCase()}>{displayStatus(d)}</Badge>
@@ -5255,6 +5262,9 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
   const [eta, setEta] = useState(
     editing?.eta ? editing.eta : ""
   );
+  const [ref, setRef] = useState(
+    editing?.ref ? editing.ref : ""
+  );
 
   // Member PO editing state — used when a member PO tab is active in consolidated view
   const [memberEditId, setMemberEditId] = useState(null);
@@ -5460,6 +5470,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
         ...(!isQuote && { customsClearance }),  // Always include for POs (allows setting to 0)
         ...(!isQuote && customer && { customer }),
         eta,  // Always include ETA for both quotes and POs (persist to Supabase)
+        ...(isQuote && { ref: ref.trim() }),
       },
       editing
     );
@@ -5894,17 +5905,42 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
             <Field label={isQuote ? "Contact (email/phone)" : "Supplier contact"}>
               <input style={inputStyle} type="text" placeholder="Optional" value={contact} onChange={(e) => setContact(e.target.value)} />
             </Field>
-            <Field label={isQuote ? "ETA (Estimated Delivery)" : "ETA (Estimated Time of Arrival)"}>
-              <input 
-                style={inputStyle} 
-                type="date" 
-                value={eta} 
-                onChange={(e) => setEta(e.target.value)}
-              />
-              <p style={{ fontSize: 11, color: "#8a7a66", margin: "4px 0 0" }}>
-                {isQuote ? "Will be copied to POs created from this quote" : "Required for all purchase orders"}
-              </p>
-            </Field>
+            {isQuote ? (
+              <div className="grid2">
+                <Field label="ETA (Estimated Delivery)">
+                  <input
+                    style={inputStyle}
+                    type="date"
+                    value={eta}
+                    onChange={(e) => setEta(e.target.value)}
+                  />
+                  <p style={{ fontSize: 11, color: "#8a7a66", margin: "4px 0 0" }}>
+                    Will be copied to POs created from this quote
+                  </p>
+                </Field>
+                <Field label="Reference">
+                  <input
+                    style={inputStyle}
+                    type="text"
+                    placeholder="Optional"
+                    value={ref}
+                    onChange={(e) => setRef(e.target.value)}
+                  />
+                </Field>
+              </div>
+            ) : (
+              <Field label="ETA (Estimated Time of Arrival)">
+                <input 
+                  style={inputStyle} 
+                  type="date" 
+                  value={eta} 
+                  onChange={(e) => setEta(e.target.value)}
+                />
+                <p style={{ fontSize: 11, color: "#8a7a66", margin: "4px 0 0" }}>
+                  Required for all purchase orders
+                </p>
+              </Field>
+            )}
           </Panel>
 
           {/* Payment Schedule — shown for both quotes and POs, always visible */}
