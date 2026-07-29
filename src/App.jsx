@@ -1572,6 +1572,24 @@ export default function App() {
   const [tab, setTab] = useState("dashboard");
   const [toast, setToast] = useState("");
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [showHeaderTools, setShowHeaderTools] = useState(() => {
+    try {
+      return localStorage.getItem("am_showHeaderTools") === "1";
+    } catch (e) {
+      return false;
+    }
+  });
+  const toggleHeaderTools = () => {
+    setShowHeaderTools((v) => {
+      const next = !v;
+      try {
+        localStorage.setItem("am_showHeaderTools", next ? "1" : "0");
+      } catch (e) {
+        // ignore — persistence is best-effort
+      }
+      return next;
+    });
+  };
   // Cross-tab "view this record" navigation — e.g. clicking "View quote" from a
   // customer record switches to the Quotes tab and opens that specific quote.
   const [pendingOpen, setPendingOpen] = useState(null); // { type: 'quote'|'po'|'customer'|'supplier'|'prospect', id }
@@ -1966,18 +1984,34 @@ export default function App() {
       <div className="app">
         <header className="top">
           <div className="brand" style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, minWidth: 0 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
               <img src={AUSTRAL_LOGO} alt="Austral Motorhomes" style={{ height: 40, width: "auto", objectFit: "contain", flexShrink: 0 }} />
-              <div>
-                <h1 style={{ margin: 0 }}>Austral Motorhomes</h1>
-                <div className="sub">Supplier Pricing &amp; Order Manager</div>
-              </div>
-            </div>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
-              <h1 style={{ margin: 0, textAlign: "right" }}>Platinum Pontoons</h1>
+              <span className="app-name">CRM</span>
               <img src={PLATINUM_LOGO} alt="Platinum Pontoons" style={{ height: 40, width: "auto", objectFit: "contain", flexShrink: 0 }} />
             </div>
+            <button
+              onClick={toggleHeaderTools}
+              title={showHeaderTools ? "Hide sync/backup menu" : "Show sync/backup menu"}
+              aria-expanded={showHeaderTools}
+              style={{
+                background: "none",
+                border: "1px solid #e3d8c6",
+                borderRadius: 8,
+                width: 34,
+                height: 34,
+                flexShrink: 0,
+                cursor: "pointer",
+                color: "#6b5240",
+                fontSize: 16,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              {showHeaderTools ? "✕" : "⋯"}
+            </button>
           </div>
+          {showHeaderTools && (
           <div className="header-utilities">
             <button
               onClick={() => setShowSyncModal(true)}
@@ -2078,6 +2112,7 @@ export default function App() {
               Sign out
             </Btn>
           </div>
+          )}
         </header>
 
         <nav className="tabs" style={{ marginBottom: 0 }}>
@@ -2406,11 +2441,10 @@ const globalCss = `
   .brand .mark{width:42px;height:42px;border-radius:9px;background:linear-gradient(155deg,#b5552b,#8f3f1f);display:flex;align-items:center;justify-content:center;color:#fff;font-weight:800;font-size:18px;font-family:Georgia,serif;letter-spacing:-1px;flex-shrink:0;}
   .brand h1{font-family:Georgia,serif;font-size:21px;margin:0;color:#4a3527;letter-spacing:.2px;}
   .brand .sub{font-size:12px;color:#8a7a66;margin-top:1px;letter-spacing:.3px;}
+  .app-name{font-family:Georgia,serif;font-size:15px;font-weight:700;color:#4a3527;letter-spacing:.5px;white-space:nowrap;}
   .header-utilities{display:flex;align-items:center;gap:10px;flex-wrap:wrap;width:100%;}
   @media (max-width:640px){
-    .brand{flex-wrap:wrap;row-gap:10px;}
-    .brand h1{font-size:17px;}
-    .brand > div:last-child{align-self:flex-end;}
+    .app-name{font-size:13px;}
   }
   nav.tabs{
     display:flex;gap:4px;background:#eee3d1;padding:4px;border-radius:11px;
