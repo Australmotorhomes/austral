@@ -458,6 +458,10 @@ function toSupabaseFormat(data, table) {
         copy.payment_milestones = copy.paymentMilestones;
         delete copy.paymentMilestones;
       }
+      if (copy.deliveredDate !== undefined) {
+        copy.delivered_date = copy.deliveredDate;
+        delete copy.deliveredDate;
+      }
       if (copy.grossProfitPct !== undefined) {
         copy.gross_profit_pct = copy.grossProfitPct;
         delete copy.grossProfitPct;
@@ -574,6 +578,7 @@ function fromSupabaseFormat(data, table) {
       if (copy.updated_at !== undefined) { copy.updatedAt = copy.updated_at; delete copy.updated_at; }
       if (copy.customs_clearance !== undefined) { copy.customsClearance = copy.customs_clearance; delete copy.customs_clearance; }
       if (copy.payment_milestones !== undefined) { copy.paymentMilestones = copy.payment_milestones; delete copy.payment_milestones; }
+      if (copy.delivered_date !== undefined) { copy.deliveredDate = copy.delivered_date; delete copy.delivered_date; }
       if (copy.gross_profit_pct !== undefined) { copy.grossProfitPct = copy.gross_profit_pct; delete copy.gross_profit_pct; }
       if (copy.fx_rate_used !== undefined) { copy.fxRateUsed = copy.fx_rate_used; delete copy.fx_rate_used; }
       if (copy.customer_id !== undefined) { copy.customerId = copy.customer_id; delete copy.customer_id; }
@@ -4602,7 +4607,15 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
           status,
           updated_at: todayISO(),
         };
-        
+
+        // Stock only actually leaves once the order is Delivered, not when the
+        // deposit is paid — so stamp the real delivery date here, once, the
+        // moment the status becomes Delivered. This is what Stock Movement's
+        // OUT calculation keys off, instead of the first-milestone-paid date.
+        if (isQuote && status === "Delivered" && !doc.deliveredDate) {
+          updatePayload.delivered_date = todayISO();
+        }
+
         if (!isQuote) {
           updatePayload.archived = status === "Received" ? true : false;
         }
@@ -4645,7 +4658,10 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
           const coll = isQuote ? next.quotes : next.pos;
           const target = coll.find((d) => d.id === doc.id);
           target.status = status;
-          
+          if (isQuote && status === "Delivered" && !target.deliveredDate) {
+            target.deliveredDate = todayISO();
+          }
+
           // For POs: set archived status based on whether status is "Received"
           if (!isQuote) {
             target.archived = status === "Received" ? true : false;
@@ -11322,18 +11338,20 @@ function StockMovementTable({ db, collapsed, setCollapsed, fyEnd, setFyEnd, curr
     });
   });
 
-  // ── OUT: Quotes where first milestone is ticked ──
-  // Use milestone paidDate for FY filtering (not quote date) — the deposit
-  // was paid in a specific month regardless of when the quote was created
+  // ── OUT: Quotes that have actually been Delivered ──
+  // Stock physically leaves once the order is delivered — a paid deposit on
+  // an order still in production doesn't reduce on-hand stock, since the
+  // goods haven't gone anywhere yet. Uses deliveredDate (stamped
+  // automatically the moment a quote's status is set to "Delivered" — see
+  // setStatus()) for FY filtering, falling back to the last paid milestone's
+  // date for quotes that were already Delivered before this field existed.
   const stockOUT = {};
   (db.quotes || []).forEach(quote => {
+    if (quote.status !== "Delivered") return;
     const milestones = quote.paymentMilestones || [];
-    if (!milestones.length) return;
-    const first = milestones[0];
-    if (!first?.paid) return;
-    // Use the paidDate of the first milestone for FY range check
-    const paidDate = (first.paidDate || first.due || "").slice(0, 10);
-    if (!paidDate || paidDate < fyRange.start || paidDate > fyRange.end) return;
+    const lastPaidMilestone = [...milestones].reverse().find((m) => m?.paid);
+    const outDate = (quote.deliveredDate || lastPaidMilestone?.paidDate || lastPaidMilestone?.due || "").slice(0, 10);
+    if (!outDate || outDate < fyRange.start || outDate > fyRange.end) return;
     const quoteLabel = `${quote.number || "Quote"}`;
     (quote.lines || []).forEach(l => {
       if (!l.itemId) return;
@@ -11349,7 +11367,7 @@ function StockMovementTable({ db, collapsed, setCollapsed, fyEnd, setFyEnd, curr
         id: quote.id,
         label: quoteLabel,
         party: quote.party || "Unknown customer",
-        date: paidDate,
+        date: outDate,
         qty,
         value: null, // OUT value is apportioned from IN cost, not a standalone figure per quote
       });
