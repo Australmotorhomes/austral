@@ -5335,6 +5335,65 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
   const [mNotes, setMNotes] = useState("");
   const [mDirty, setMDirty] = useState(false);
 
+  // Fresh, isolated mechanism for switching which PO's LINE ITEMS are being
+  // edited in a consolidated PO. Deliberately separate from memberEditId
+  // above (which handles supplier details/milestones/notes) — that existing
+  // mechanism turned out to have a bug that crashed part of the screen the
+  // one time it was actually exercised, so line items get their own simple,
+  // independent state rather than reusing it.
+  const [lineItemsPoId, setLineItemsPoId] = useState(null); // null = primary PO's own `lines` state
+  const [mLines, setMLinesState] = useState([]);
+  const [mLinesDirty, setMLinesDirty] = useState(false);
+
+  useEffect(() => {
+    if (!lineItemsPoId) return;
+    const member = (db.pos || []).find(p => p.id === lineItemsPoId);
+    setMLinesState(member?.lines ? JSON.parse(JSON.stringify(member.lines)) : []);
+    setMLinesDirty(false);
+  }, [lineItemsPoId]);
+
+  function updateMLine(idx, field, value) {
+    setMLinesState(prev => {
+      const next = [...prev];
+      next[idx] = { ...next[idx], [field]: value };
+      return next;
+    });
+    setMLinesDirty(true);
+  }
+  function removeMLine(idx) {
+    setMLinesState(prev => prev.filter((_, i) => i !== idx));
+    setMLinesDirty(true);
+  }
+  function addBlankMLine() {
+    setMLinesState(prev => [...prev, { desc: "", qty: 1, currency: "AUD", price: 0 }]);
+    setMLinesDirty(true);
+  }
+  async function saveMemberLines() {
+    const member = (db.pos || []).find(p => p.id === lineItemsPoId);
+    if (!member) return;
+    try {
+      const newSubtotal = mLines.reduce((s, l) => {
+        const native = (Number(l.qty) || 0) * (Number(l.price) || 0);
+        return s + (l.currency === "USD" ? native * (Number(rate) || 1) : native);
+      }, 0);
+      const newTotal = newSubtotal + (Number(member.customsClearance) || 0);
+      const payload = toSupabaseFormat(
+        { lines: mLines, subtotal: newSubtotal, total: newTotal, updatedAt: todayISO() },
+        "purchase_orders"
+      );
+      await supabaseRESTWithSchemaFallback("PATCH", `purchase_orders?id=eq.${member.id}`, payload);
+      update(next => {
+        const po = (next.pos || []).find(p => p.id === member.id);
+        if (po) { po.lines = mLines; po.subtotal = newSubtotal; po.total = newTotal; }
+      });
+      setMLinesDirty(false);
+      showToast(`PO-${member.number} line items saved`);
+    } catch (err) {
+      showToast("Save failed");
+      console.error(err);
+    }
+  }
+
   // When the active preview tab changes to a member PO, load that PO's fields
   // into the member edit state so the left panel switches to editing it.
   useEffect(() => {
@@ -6623,10 +6682,129 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
               />
             )}
 
+            {!isQuote && !isNew && editing?.consolidatedMemberIds?.length > 0 && (() => {
+              const memberPOs = (db.pos || []).filter(p => (editing.consolidatedMemberIds || []).includes(p.id));
+              const lineTabs = [{ id: null, label: `PO-${String(editing.number || "").replace(/^PO-?/i, "")}` }, ...memberPOs.map(p => ({ id: p.id, label: `PO-${String(p.number || "").replace(/^PO-?/i, "")}` }))];
+              return (
+                <div style={{ display: "flex", gap: 6, marginBottom: -1, position: "relative", zIndex: 1 }}>
+                  {lineTabs.map(t => {
+                    const active = lineItemsPoId === t.id;
+                    return (
+                      <button
+                        key={t.label}
+                        onClick={() => setLineItemsPoId(t.id)}
+                        style={{
+                          padding: "8px 16px", fontSize: 13, fontWeight: 600, cursor: "pointer",
+                          border: "1px solid #e3d8c6", borderBottom: active ? "1px solid #fff" : "1px solid #e3d8c6",
+                          borderRadius: "6px 6px 0 0",
+                          background: active ? "#fff" : "#f6f1e7",
+                          color: active ? "#b5552b" : "#8a7a66",
+                        }}
+                      >
+                        {t.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              );
+            })()}
+
             <Panel>
               <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: "0 0 14px", fontSize: 16 }}>
-                Line items
+                Line items{lineItemsPoId && (() => {
+                  const m = (db.pos || []).find(p => p.id === lineItemsPoId);
+                  return m ? ` — PO-${String(m.number || "").replace(/^PO-?/i, "")}` : "";
+                })()}
               </h3>
+              {lineItemsPoId ? (
+                // ── Editing a member PO's line items (isolated from the primary `lines` state) ──
+                <>
+                  {mLines.length === 0 ? (
+                    <p className="muted" style={{ fontSize: 13, margin: "6px 0 14px" }}>
+                      No line items on this PO yet.
+                    </p>
+                  ) : (
+                    mLines.map((li, idx) => {
+                      const lineCurrency = li.currency || "AUD";
+                      const nativeTotal = (Number(li.qty) || 0) * (Number(li.price) || 0);
+                      const audTotal = lineCurrency === "USD" ? nativeTotal * (Number(rate) || 1) : nativeTotal;
+                      return (
+                        <React.Fragment key={idx}>
+                          <div className="line-item-row">
+                            <input
+                              style={inputStyle}
+                              type="text"
+                              placeholder="Description"
+                              value={li.desc || ""}
+                              onChange={(e) => updateMLine(idx, "desc", e.target.value)}
+                            />
+                            <input
+                              style={inputStyle}
+                              type="number"
+                              min="0"
+                              step="1"
+                              placeholder="Qty"
+                              value={li.qty}
+                              onChange={(e) => updateMLine(idx, "qty", e.target.value)}
+                            />
+                            <select style={inputStyle} value={lineCurrency} onChange={(e) => updateMLine(idx, "currency", e.target.value)}>
+                              <option value="AUD">AUD</option>
+                              <option value="USD">USD</option>
+                            </select>
+                            <input
+                              style={inputStyle}
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              placeholder="Cost"
+                              value={li.price}
+                              onChange={(e) => updateMLine(idx, "price", e.target.value)}
+                            />
+                            <div className="num" style={{ fontSize: 13.5, paddingTop: 9 }}>
+                              {fmtMoney(audTotal, "AUD")}
+                              {lineCurrency === "USD" && (
+                                <div className="muted" style={{ fontSize: 11, fontWeight: 400 }}>
+                                  {fmtMoney(nativeTotal, "USD")}
+                                </div>
+                              )}
+                            </div>
+                            <button
+                              onClick={() => removeMLine(idx)}
+                              title="Remove"
+                              style={{ background: "none", border: "none", color: "#a3442e", cursor: "pointer", fontSize: 16, padding: 4 }}
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        </React.Fragment>
+                      );
+                    })
+                  )}
+                  <div style={{ marginTop: 10, display: "flex", gap: 8, alignItems: "center" }}>
+                    <Btn variant="ghost" size="sm" onClick={addBlankMLine}>
+                      + Add blank line
+                    </Btn>
+                    <Btn variant="primary" size="sm" onClick={saveMemberLines} disabled={!mLinesDirty}>
+                      {mLinesDirty ? "Save line items" : "Saved"}
+                    </Btn>
+                  </div>
+                  <div style={{ marginTop: 14, paddingTop: 14, borderTop: "2px solid #e3d8c6" }}>
+                    <div className="totals-row grand">
+                      <span>Subtotal (incl. GST)</span>
+                      <span>
+                        {fmtMoney(
+                          mLines.reduce((s, l) => {
+                            const native = (Number(l.qty) || 0) * (Number(l.price) || 0);
+                            return s + ((l.currency || "AUD") === "USD" ? native * (Number(rate) || 1) : native);
+                          }, 0),
+                          "AUD"
+                        )}
+                      </span>
+                    </div>
+                  </div>
+                </>
+              ) : (
+              <>
               {lines.length === 0 ? (
                 <p className="muted" style={{ fontSize: 13, margin: "6px 0 14px" }}>
                   No line items yet — add from your price book or add a blank line.
@@ -6738,6 +6916,8 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                   <span>{fmtMoney(total, "AUD")}</span>
                 </div>
               </div>
+              </>
+              )}
             </Panel>
           </fieldset>
 
