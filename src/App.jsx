@@ -5358,21 +5358,26 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
   const splitResizingRef = useRef(false);
 
   useEffect(() => {
-    function handleSplitMouseMove(e) {
+    function handleSplitPointerMove(e) {
       if (!splitResizingRef.current || !splitContainerRef.current) return;
       const rect = splitContainerRef.current.getBoundingClientRect();
       let pct = ((e.clientX - rect.left) / rect.width) * 100;
       pct = Math.max(20, Math.min(80, pct));
       setSplitRatio(pct);
     }
-    function handleSplitMouseUp() {
+    function handleSplitPointerUp() {
       splitResizingRef.current = false;
     }
-    window.addEventListener("mousemove", handleSplitMouseMove);
-    window.addEventListener("mouseup", handleSplitMouseUp);
+    // Pointer events (not mouse events) so this also works with touch
+    // input on iPad/tablets — mouse events don't reliably fire from touch
+    // drag gestures, which is why the divider previously did nothing on iPad.
+    window.addEventListener("pointermove", handleSplitPointerMove);
+    window.addEventListener("pointerup", handleSplitPointerUp);
+    window.addEventListener("pointercancel", handleSplitPointerUp);
     return () => {
-      window.removeEventListener("mousemove", handleSplitMouseMove);
-      window.removeEventListener("mouseup", handleSplitMouseUp);
+      window.removeEventListener("pointermove", handleSplitPointerMove);
+      window.removeEventListener("pointerup", handleSplitPointerUp);
+      window.removeEventListener("pointercancel", handleSplitPointerUp);
     };
   }, []);
   const [mLines, setMLinesState] = useState([]);
@@ -5753,16 +5758,17 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
       >
         {!isNarrowForSplit && (
           <div
-            onMouseDown={() => { splitResizingRef.current = true; }}
+            onPointerDown={(e) => { e.currentTarget.setPointerCapture(e.pointerId); splitResizingRef.current = true; }}
             onDoubleClick={() => setSplitRatio(50)}
             title="Drag to resize (double-click to reset to 50/50)"
             style={{
               position: "absolute",
               top: 0,
               bottom: 0,
-              left: `calc(${splitRatio}% - 5px)`,
-              width: 10,
+              left: `calc(${splitRatio}% - 12px)`,
+              width: 24,
               cursor: "col-resize",
+              touchAction: "none",
               zIndex: 5,
               display: "flex",
               alignItems: "center",
