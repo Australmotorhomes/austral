@@ -6366,8 +6366,10 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
               ? consolidatedTab
               : allPOs[0]?.id || "summary";
 
+            console.log("🐛 CONSOLIDATED TAB PANEL RENDERING — tabList:", tabList, "activeTab:", activeTab);
+
             return (
-              <Panel>
+              <Panel style={{ border: "4px solid red" }}>
                 {/* Header */}
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
                   <h4 style={{ fontSize: 13, fontWeight: 700, color: "#4a3527", margin: 0 }}>
