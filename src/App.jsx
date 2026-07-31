@@ -5652,6 +5652,13 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
       </div>
 
 
+      {/* TEMPORARY DEBUG — remove once the consolidated PO tab issue is resolved */}
+      {!isQuote && (
+        <div style={{ background: "#fff3cd", border: "2px solid #e0a800", borderRadius: 6, padding: "8px 12px", marginBottom: 12, fontFamily: "monospace", fontSize: 12, color: "#5c4a00" }}>
+          🐛 DEBUG — isNew: {String(isNew)} | editing.id: {editing?.id || "(none)"} | consolidatedMemberIds: {JSON.stringify(editing?.consolidatedMemberIds)} | length check ({'>'}0): {String((editing?.consolidatedMemberIds?.length || 0) > 0)}
+        </div>
+      )}
+
       <div className="doc-split-grid">
         {/* ---------------- EDIT SIDE ---------------- */}
         {/* For consolidated POs: when a member PO tab is active, show that member's editable fields */}
