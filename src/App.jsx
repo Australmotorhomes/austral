@@ -6372,7 +6372,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                   {tabList.map(tab => (
                     <button
                       key={tab.id}
-                      onClick={() => { setConsolidatedTab(tab.id); setPreviewPoId(tab.id === "summary" ? (editing?.id || null) : tab.id); }}
+                      onClick={() => { setConsolidatedTab(tab.id); if (tab.id === "summary") setPreviewPoId(editing?.id || null); }}
                       style={{
                         padding: isMobile ? "7px 10px" : "8px 14px",
                         fontSize: isMobile ? 11 : 12,
