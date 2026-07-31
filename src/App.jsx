@@ -5651,14 +5651,6 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
         </div>
       </div>
 
-
-      {/* TEMPORARY DEBUG — remove once the consolidated PO tab issue is resolved */}
-      {!isQuote && (
-        <div style={{ background: "#fff3cd", border: "2px solid #e0a800", borderRadius: 6, padding: "8px 12px", marginBottom: 12, fontFamily: "monospace", fontSize: 12, color: "#5c4a00" }}>
-          🐛 DEBUG — isNew: {String(isNew)} | editing.id: {editing?.id || "(none)"} | consolidatedMemberIds: {JSON.stringify(editing?.consolidatedMemberIds)} | length check ({'>'}0): {String((editing?.consolidatedMemberIds?.length || 0) > 0)}
-        </div>
-      )}
-
       <div className="doc-split-grid">
         {/* ---------------- EDIT SIDE ---------------- */}
         {/* For consolidated POs: when a member PO tab is active, show that member's editable fields */}
@@ -6366,10 +6358,8 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
               ? consolidatedTab
               : allPOs[0]?.id || "summary";
 
-            console.log("🐛 CONSOLIDATED TAB PANEL RENDERING — tabList:", tabList, "activeTab:", activeTab);
-
             return (
-              <Panel style={{ border: "4px solid red" }}>
+              <Panel>
                 {/* Header */}
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
                   <h4 style={{ fontSize: 13, fontWeight: 700, color: "#4a3527", margin: 0 }}>
@@ -6382,7 +6372,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                   {tabList.map(tab => (
                     <button
                       key={tab.id}
-                      onClick={() => { setConsolidatedTab(tab.id); if (tab.id === "summary") setPreviewPoId(editing?.id || null); }}
+                      onClick={() => { setConsolidatedTab(tab.id); setPreviewPoId(tab.id === "summary" ? (editing?.id || null) : tab.id); }}
                       style={{
                         padding: isMobile ? "7px 10px" : "8px 14px",
                         fontSize: isMobile ? 11 : 12,
