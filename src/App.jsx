@@ -5403,7 +5403,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
     setMLinesDirty(true);
   }
   function addBlankMLine() {
-    setMLinesState(prev => [...prev, { desc: "", qty: 1, currency: "AUD", price: 0 }]);
+    setMLinesState(prev => [...prev, { desc: "", qty: 1, currency: "AUD", price: 0, lineNote: "" }]);
     setMLinesDirty(true);
   }
   async function saveMemberLines() {
@@ -5531,10 +5531,14 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
   }
   function addItemToLines(item) {
     const defaultPrice = isQuote ? (item.sellPrice != null ? item.sellPrice : calcSellPrice(item.cost)) : item.cost;
-    setLines((prev) => [
-      ...prev,
-      { desc: `${item.model} — ${item.name}`, qty: 1, price: defaultPrice, currency: item.currency || "AUD", itemId: item.id, cost: item.cost || 0, lineNote: item.itemDescription || "" },
-    ]);
+    const newLine = { desc: `${item.model} — ${item.name}`, qty: 1, price: defaultPrice, currency: item.currency || "AUD", itemId: item.id, cost: item.cost || 0, lineNote: item.itemDescription || "" };
+    if (lineItemsPoId) {
+      // A member PO tab is active — add to that PO's own lines, not the primary's
+      setMLinesState((prev) => [...prev, newLine]);
+      setMLinesDirty(true);
+    } else {
+      setLines((prev) => [...prev, newLine]);
+    }
   }
   function addFromPicker() {
     if (!pickerValue) {
@@ -5551,15 +5555,22 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
     setPickerValue("");
   }
   function addBlankLine() {
+    if (lineItemsPoId) {
+      addBlankMLine();
+      return;
+    }
     setLines((prev) => [...prev, { desc: "", qty: 1, price: 0, currency: "AUD", cost: 0, lineNote: "" }]);
   }
   function handleQuickAddItem(payload) {
     onAddItem(payload, (newItem) => {
       const defaultPrice = isQuote ? (newItem.sellPrice != null ? newItem.sellPrice : calcSellPrice(newItem.cost)) : newItem.cost;
-      setLines((prev) => [
-        ...prev,
-        { desc: `${newItem.model} — ${newItem.name}`, qty: 1, price: defaultPrice, currency: newItem.currency || "AUD", itemId: newItem.id, cost: newItem.cost || 0, lineNote: newItem.itemDescription || "" },
-      ]);
+      const newLine = { desc: `${newItem.model} — ${newItem.name}`, qty: 1, price: defaultPrice, currency: newItem.currency || "AUD", itemId: newItem.id, cost: newItem.cost || 0, lineNote: newItem.itemDescription || "" };
+      if (lineItemsPoId) {
+        setMLinesState((prev) => [...prev, newLine]);
+        setMLinesDirty(true);
+      } else {
+        setLines((prev) => [...prev, newLine]);
+      }
       setShowQuickAddItem(false);
     });
   }
@@ -6693,9 +6704,20 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
         <div>
           <fieldset disabled={viewOnly} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
             <Panel>
-              <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: "0 0 14px", fontSize: 16 }}>
+              <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: "0 0 4px", fontSize: 16 }}>
                 Add from price book
               </h3>
+              {!isQuote && !isNew && editing?.consolidatedMemberIds?.length > 0 && (
+                <p style={{ fontSize: 12, color: "#8a7a66", margin: "0 0 10px" }}>
+                  Adding to{" "}
+                  <strong style={{ color: "#b5552b" }}>
+                    {lineItemsPoId
+                      ? `PO-${String((db.pos || []).find((p) => p.id === lineItemsPoId)?.number || "").replace(/^PO-?/i, "")}`
+                      : `PO-${String(editing.number || "").replace(/^PO-?/i, "")}`}
+                  </strong>{" "}
+                  — switch tabs below to add to a different PO in this shipment.
+                </p>
+              )}
               <Btn variant="primary" size="sm" onClick={() => setShowPriceBookSearch(true)} style={{ marginBottom: 10 }}>
                 🔍 Search price book
               </Btn>
@@ -6843,9 +6865,27 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                               ✕
                             </button>
                           </div>
+                          <textarea
+                            placeholder="One feature per line — internal notes for this line item"
+                            value={li.lineNote || ""}
+                            onChange={(e) => updateMLine(idx, "lineNote", e.target.value)}
+                            rows={2}
+                            style={{
+                              width: "100%", marginTop: 4, marginBottom: 8,
+                              fontSize: 12, color: "#6b5240", padding: "6px 8px",
+                              border: "1px solid #e3d8c6", borderRadius: 4,
+                              fontFamily: "inherit", resize: "vertical", background: "#faf7f3",
+                            }}
+                          />
                         </React.Fragment>
                       );
                     })
+                  )}
+                  {mLines.some((l) => (l.currency || "AUD") === "USD") && (
+                    <div style={{ fontSize: 11.5, color: "#8a7a66", marginTop: 2, marginBottom: 8 }}>
+                      USD lines convert to AUD at 1 USD = {rate.toFixed(4)} AUD ({fx && fx.source === "live" ? "live rate" : fx && fx.source === "manual" ? "your manual rate" : "default estimate"}) —
+                      click the rate badge in the header to update it.
+                    </div>
                   )}
                   <div style={{ marginTop: 10, display: "flex", gap: 8, alignItems: "center" }}>
                     <Btn variant="ghost" size="sm" onClick={addBlankMLine}>
