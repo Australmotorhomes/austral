@@ -5342,6 +5342,33 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
   // one time it was actually exercised, so line items get their own simple,
   // independent state rather than reusing it.
   const [lineItemsPoId, setLineItemsPoId] = useState(null); // null = primary PO's own `lines` state
+
+  // Draggable divider between the two modal columns, so either side can be
+  // made bigger than the other. Percentage = width of the first (left)
+  // column; the second column takes the remainder. Desktop only — mobile
+  // already stacks the columns via CSS, where a horizontal split doesn't apply.
+  const [splitRatio, setSplitRatio] = useState(50);
+  const splitContainerRef = useRef(null);
+  const splitResizingRef = useRef(false);
+
+  useEffect(() => {
+    function handleSplitMouseMove(e) {
+      if (!splitResizingRef.current || !splitContainerRef.current) return;
+      const rect = splitContainerRef.current.getBoundingClientRect();
+      let pct = ((e.clientX - rect.left) / rect.width) * 100;
+      pct = Math.max(20, Math.min(80, pct));
+      setSplitRatio(pct);
+    }
+    function handleSplitMouseUp() {
+      splitResizingRef.current = false;
+    }
+    window.addEventListener("mousemove", handleSplitMouseMove);
+    window.addEventListener("mouseup", handleSplitMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", handleSplitMouseMove);
+      window.removeEventListener("mouseup", handleSplitMouseUp);
+    };
+  }, []);
   const [mLines, setMLinesState] = useState([]);
   const [mLinesDirty, setMLinesDirty] = useState(false);
 
@@ -5710,7 +5737,35 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
         </div>
       </div>
 
-      <div className="doc-split-grid">
+      <div
+        className="doc-split-grid"
+        ref={splitContainerRef}
+        style={{
+          position: "relative",
+          ...(isMobile ? {} : { gridTemplateColumns: `${splitRatio}% ${100 - splitRatio}%` }),
+        }}
+      >
+        {!isMobile && (
+          <div
+            onMouseDown={() => { splitResizingRef.current = true; }}
+            onDoubleClick={() => setSplitRatio(50)}
+            title="Drag to resize (double-click to reset to 50/50)"
+            style={{
+              position: "absolute",
+              top: 0,
+              bottom: 0,
+              left: `calc(${splitRatio}% - 5px)`,
+              width: 10,
+              cursor: "col-resize",
+              zIndex: 5,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <div style={{ width: 3, height: 40, borderRadius: 2, background: "#e3d8c6" }} />
+          </div>
+        )}
         {/* ---------------- EDIT SIDE ---------------- */}
         {/* For consolidated POs: when a member PO tab is active, show that member's editable fields */}
         {!isQuote && !isNew && editing?.consolidatedMemberIds?.length > 0 && memberEditId && (() => {
