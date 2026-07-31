@@ -5348,6 +5348,12 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
   // column; the second column takes the remainder. Desktop only — mobile
   // already stacks the columns via CSS, where a horizontal split doesn't apply.
   const [splitRatio, setSplitRatio] = useState(50);
+  // Must match the doc-split-grid CSS breakpoint (900px) exactly — using the
+  // general-purpose `isMobile` (640px) here caused a real bug: on iPad-width
+  // screens (768–900px), the CSS had already collapsed to one column while
+  // this inline override kept forcing two, squeezing every field into half
+  // its intended width and causing visible overlap.
+  const isNarrowForSplit = useIsMobile(900);
   const splitContainerRef = useRef(null);
   const splitResizingRef = useRef(false);
 
@@ -5742,10 +5748,10 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
         ref={splitContainerRef}
         style={{
           position: "relative",
-          ...(isMobile ? {} : { gridTemplateColumns: `${splitRatio}% ${100 - splitRatio}%` }),
+          ...(isNarrowForSplit ? {} : { gridTemplateColumns: `${splitRatio}% ${100 - splitRatio}%` }),
         }}
       >
-        {!isMobile && (
+        {!isNarrowForSplit && (
           <div
             onMouseDown={() => { splitResizingRef.current = true; }}
             onDoubleClick={() => setSplitRatio(50)}
