@@ -6099,9 +6099,38 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                 <input style={inputStyle} type="date" value={date} onChange={(e) => setDate(e.target.value)} />
               </Field>
             </div>
-            <Field label={isQuote ? "Contact (email/phone)" : "Supplier contact"}>
-              <input style={inputStyle} type="text" placeholder="Optional" value={contact} onChange={(e) => setContact(e.target.value)} />
-            </Field>
+            {isQuote ? (
+              <Field label="Contact (email/phone)">
+                <input style={inputStyle} type="text" placeholder="Optional" value={contact} onChange={(e) => setContact(e.target.value)} />
+              </Field>
+            ) : (
+              <Field label="Originating Quote">
+                {editing?.quoteId ? (
+                  <button
+                    type="button"
+                    onClick={() => openRecord && openRecord("quote", editing.quoteId)}
+                    style={{
+                      ...inputStyle,
+                      textAlign: "left",
+                      cursor: "pointer",
+                      color: "#b5552b",
+                      fontWeight: 600,
+                      background: "#faf7f2",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                    }}
+                  >
+                    <span>{(db.quotes || []).find((q) => q.id === editing.quoteId)?.number || "View quote"}</span>
+                    <span aria-hidden="true">→</span>
+                  </button>
+                ) : (
+                  <div style={{ ...inputStyle, color: "#aaa", background: "#f6f1e7", cursor: "default" }}>
+                    — Not generated from a quote
+                  </div>
+                )}
+              </Field>
+            )}
             {isQuote ? (
               <div className="grid2">
                 <Field label="ETA (Estimated Delivery)">
