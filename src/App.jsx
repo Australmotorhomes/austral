@@ -11946,6 +11946,50 @@ function ToggleSwitch({ checked, onChange, label }) {
   );
 }
 
+// Small "?" icon that opens a help modal explaining how a dashboard section's
+// figures are calculated. `onOpen` is called with the icon's own title/body
+// so the parent can manage a single shared modal instance rather than every
+// icon owning its own.
+function HelpIcon({ title, body, onOpen }) {
+  return (
+    <button
+      type="button"
+      onClick={(e) => { e.stopPropagation(); onOpen({ title, body }); }}
+      title="What does this mean?"
+      aria-label={`Help: ${title}`}
+      style={{
+        display: "inline-flex", alignItems: "center", justifyContent: "center",
+        width: 18, height: 18, borderRadius: "50%", marginLeft: 6,
+        border: "1px solid #d3c9b8", background: "#faf7f2", color: "#8a7a66",
+        fontSize: 11, fontWeight: 700, cursor: "pointer", padding: 0, lineHeight: 1,
+        flexShrink: 0,
+      }}
+    >
+      ?
+    </button>
+  );
+}
+
+// Shared modal rendered once per screen; content is whatever the last-clicked
+// HelpIcon passed in. Keeps explanatory copy out of a wall of individual
+// modals and lets new HelpIcons be added anywhere with one line.
+function HelpModal({ help, onClose }) {
+  if (!help) return null;
+  return (
+    <Modal onClose={onClose} width={480}>
+      <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: "0 0 12px", fontSize: 18 }}>
+        {help.title}
+      </h3>
+      <div style={{ fontSize: 13.5, lineHeight: 1.7, color: "#4a3527" }}>
+        {help.body}
+      </div>
+      <div style={{ marginTop: 20, textAlign: "right" }}>
+        <Btn variant="primary" onClick={onClose}>Got it</Btn>
+      </div>
+    </Modal>
+  );
+}
+
 // Wraps a single Dashboard section with a small drag handle + up/down buttons
 // so the user can reorder sections. The section's own JSX (title, collapse
 // toggle, table, everything) is passed through unchanged as children — this
@@ -12030,6 +12074,7 @@ function DashboardTab({ db, setTab, openRecord }) {
   const [salesModelSkippedNoDate, setSalesModelSkippedNoDate] = React.useState(null); // rows[] — customers with payments but no invoiceDate1st
   const [revCostDrillDown, setRevCostDrillDown] = React.useState(null); // { title, rows, type: "quote" | "po" }
   const [poStatusDrillDown, setPoStatusDrillDown] = React.useState(null); // { title, rows }
+  const [helpModal, setHelpModal] = React.useState(null); // { title, body } — shared across all HelpIcon buttons on this page
   const [funnelDrillDown, setFunnelDrillDown] = React.useState(null); // { title, kind: "prospects" | "quotes", rows }
   const [mobilePage, setMobilePage] = React.useState(0);
   const touchStartX = React.useRef(0);
@@ -13217,7 +13262,24 @@ function DashboardTab({ db, setTab, openRecord }) {
         </Panel>
 
         <Panel>
-          <h3 style={{ fontFamily: "Georgia,serif", fontSize: 16, color: "#4a3527", margin: "0 0 12px" }}>PO status</h3>
+          <h3 style={{ fontFamily: "Georgia,serif", fontSize: 16, color: "#4a3527", margin: "0 0 12px", display: "flex", alignItems: "center" }}>
+            PO status
+            <HelpIcon
+              title="How PO status figures are calculated"
+              onOpen={setHelpModal}
+              body={
+                <>
+                  <p style={{ margin: "0 0 10px" }}><strong>Draft POs</strong> and <strong>Open POs</strong> are simple counts of purchase orders in those statuses.</p>
+                  <p style={{ margin: "0 0 10px" }}>
+                    <strong>POs owing this month / next month / in 3 months</strong> and <strong>Cost expected next 3 months</strong> are all based on <strong>unpaid payment milestone due dates</strong> — they sum whatever payment amounts are still unpaid and due within that time window, regardless of the order's total value or shipping ETA.
+                  </p>
+                  <p style={{ margin: 0 }}>
+                    This is different from the <strong>International/Domestic shipping</strong> panels below, which show the <em>full order value</em> of everything currently in the shipping pipeline (any status except Received/Cancelled) with <em>no date limit at all</em> — an order arriving in 6 months still counts there. That's why the shipping totals can be larger than "Cost expected next 3 months": one is a near-term payment forecast, the other is a snapshot of everything currently on order.
+                  </p>
+                </>
+              }
+            />
+          </h3>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             <div
               onClick={() => setPoStatusDrillDown({ title: "Draft POs", rows: draftPORows })}
@@ -13268,7 +13330,23 @@ function DashboardTab({ db, setTab, openRecord }) {
         </Panel>
 
         <Panel>
-          <h3 style={{ fontFamily: "Georgia,serif", fontSize: 16, color: "#4a3527", margin: "0 0 12px" }}>International shipping</h3>
+          <h3 style={{ fontFamily: "Georgia,serif", fontSize: 16, color: "#4a3527", margin: "0 0 12px", display: "flex", alignItems: "center" }}>
+            International shipping
+            <HelpIcon
+              title="How shipping totals are calculated"
+              onOpen={setHelpModal}
+              body={
+                <>
+                  <p style={{ margin: "0 0 10px" }}>
+                    This lists every open purchase order (any status except Received or Cancelled) that has a freight/customs clearance fee on it, grouped by consolidated PO where applicable.
+                  </p>
+                  <p style={{ margin: 0 }}>
+                    <strong>Total value is the full order value</strong> of each PO — not just the freight cost, and not limited to any date range. An order with an ETA many months away is still included. This is different from "Cost expected next 3 months" in the PO status panel, which only counts unpaid payment amounts actually due soon.
+                  </p>
+                </>
+              }
+            />
+          </h3>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {intlShippingRows.length === 0 ? (
               <p className="muted" style={{ fontSize: 13, margin: 0 }}>No international shipments.</p>
@@ -13298,7 +13376,23 @@ function DashboardTab({ db, setTab, openRecord }) {
         </Panel>
 
         <Panel>
-          <h3 style={{ fontFamily: "Georgia,serif", fontSize: 16, color: "#4a3527", margin: "0 0 12px" }}>Domestic shipping</h3>
+          <h3 style={{ fontFamily: "Georgia,serif", fontSize: 16, color: "#4a3527", margin: "0 0 12px", display: "flex", alignItems: "center" }}>
+            Domestic shipping
+            <HelpIcon
+              title="How shipping totals are calculated"
+              onOpen={setHelpModal}
+              body={
+                <>
+                  <p style={{ margin: "0 0 10px" }}>
+                    This lists every open purchase order (any status except Received or Cancelled) that has <strong>no</strong> freight/customs clearance fee on it, grouped by consolidated PO where applicable.
+                  </p>
+                  <p style={{ margin: 0 }}>
+                    <strong>Total value is the full order value</strong> of each PO, not limited to any date range — an order with an ETA many months away is still included. This is different from "Cost expected next 3 months" in the PO status panel, which only counts unpaid payment amounts actually due soon.
+                  </p>
+                </>
+              }
+            />
+          </h3>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {domesticShippingRows.length === 0 ? (
               <p className="muted" style={{ fontSize: 13, margin: 0 }}>No domestic shipments.</p>
@@ -13327,6 +13421,8 @@ function DashboardTab({ db, setTab, openRecord }) {
           </div>
         </Panel>
       </div>
+
+      <HelpModal help={helpModal} onClose={() => setHelpModal(null)} />
 
       {revCostDrillDown && (
         <Modal onClose={() => setRevCostDrillDown(null)} width={600}>
