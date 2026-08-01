@@ -2506,7 +2506,7 @@ const globalCss = `
   .builder-grid{display:grid;grid-template-columns:1.1fr 1fr;gap:20px;}
   @media (max-width:900px){.builder-grid{grid-template-columns:1fr;}}
   .doc-split-grid{display:grid;grid-template-columns:1fr 1fr;gap:22px;align-items:start;}
-  @media (max-width:900px), (hover:none) and (pointer:coarse){.doc-split-grid{grid-template-columns:1fr;}}
+  @media (max-width:900px){.doc-split-grid{grid-template-columns:1fr;}}
   .line-item-row{display:grid;grid-template-columns:1fr 50px 60px 70px 70px 80px 30px;gap:6px;align-items:start;margin-bottom:8px;}
   @media (max-width:680px){.line-item-row{grid-template-columns:1fr 1fr;}}
   .totals-row{display:flex;justify-content:space-between;font-size:13.5px;padding:4px 0;}
@@ -5348,14 +5348,12 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
   // column; the second column takes the remainder. Desktop only — mobile
   // already stacks the columns via CSS, where a horizontal split doesn't apply.
   const [splitRatio, setSplitRatio] = useState(50);
-  // Must match the doc-split-grid CSS breakpoint (900px + touch-primary)
-  // exactly — using the general-purpose `isMobile` (640px, width-only) here
-  // caused a real bug: on iPad-width screens (768–900px), the CSS had already
-  // collapsed to one column while this inline override kept forcing two,
-  // squeezing every field into half its intended width and causing visible
-  // overlap. useIsCompactModal mirrors the CSS media query exactly (width OR
-  // touch-primary), so a landscape iPad/large iPhone can't disagree with it.
-  const isNarrowForSplit = useIsCompactModal(900);
+  // Must match the doc-split-grid CSS breakpoint (900px) exactly — using the
+  // general-purpose `isMobile` (640px) here caused a real bug: on iPad-width
+  // screens (768–900px), the CSS had already collapsed to one column while
+  // this inline override kept forcing two, squeezing every field into half
+  // its intended width and causing visible overlap.
+  const isNarrowForSplit = useIsMobile(900);
   const splitContainerRef = useRef(null);
   const splitResizingRef = useRef(false);
 
@@ -7966,35 +7964,6 @@ function useIsMobile(breakpoint = 640) {
     return () => window.removeEventListener("resize", handler);
   }, [breakpoint]);
   return isMobile;
-}
-
-// Hook: same idea as useIsMobile, but also treats any touch-primary device as
-// "compact" regardless of its pixel width. A narrow-width check alone misses
-// tablets and large phones in landscape — an iPad is ~1024–1194px wide
-// landscape and a large iPhone is ~930px, both past a 900px cutoff, but both
-// are still touchscreens that need the stacked single-column layout rather
-// than the cramped two-column desktop one. Mirrors the CSS media query
-// `(max-width: Xpx), (hover: none) and (pointer: coarse)` exactly, so JS and
-// CSS never disagree about which layout is showing (a prior JS/CSS breakpoint
-// mismatch here caused a real overlap bug — see isNarrowForSplit below).
-function useIsCompactModal(widthCutoff = 900) {
-  const evaluate = () => {
-    if (typeof window === "undefined") return false;
-    const narrow = window.innerWidth < widthCutoff;
-    const touchPrimary = typeof window.matchMedia === "function" && window.matchMedia("(hover: none) and (pointer: coarse)").matches;
-    return narrow || touchPrimary;
-  };
-  const [isCompact, setIsCompact] = React.useState(evaluate);
-  React.useEffect(() => {
-    const handler = () => setIsCompact(evaluate());
-    window.addEventListener("resize", handler);
-    window.addEventListener("orientationchange", handler);
-    return () => {
-      window.removeEventListener("resize", handler);
-      window.removeEventListener("orientationchange", handler);
-    };
-  }, [widthCutoff]);
-  return isCompact;
 }
 
 // Same pipeline-board concept as ProspectKanbanBoard, applied to Customers.
