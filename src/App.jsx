@@ -6580,38 +6580,56 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                     <div style={{ fontSize: isMobile ? 12 : 13, fontWeight: 700, color: "#4a3527", marginBottom: 12 }}>
                       PO-{stripPO(po.number)}
                     </div>
-                    {po.lines && po.lines.length > 0 ? (
-                      <div>
-                        {po.lines.map((line, li) => (
-                          <div key={li} style={{ padding: "9px 0", borderBottom: li < po.lines.length - 1 ? "1px solid #f0e8d9" : "none", fontSize: 12 }}>
-                            <div style={{ fontWeight: 600, color: "#4a3527", fontSize: isMobile ? 12 : 13 }}>{line.desc || line.description || "Item"}</div>
-                            <div style={{ display: "flex", gap: isMobile ? 8 : 16, marginTop: 3, flexWrap: "wrap" }}>
-                              {(line.qty || line.quantity) && <span style={{ color: "#8a7a66", fontSize: 11 }}>Qty: {line.qty || line.quantity}</span>}
-                              {(line.price || line.unitPrice) && <span style={{ color: "#8a7a66", fontSize: 11 }}>Unit: ${Number(parseFloat(line.price || line.unitPrice || 0)).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",")}</span>}
-                              <span style={{ fontWeight: 600, color: "#b5552b", fontSize: 11 }}>
-                                ${Number(parseFloat(line.amount) || ((parseFloat(line.qty || line.quantity) || 1) * (parseFloat(line.price || line.unitPrice) || 0))).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",")}
-                              </span>
+                    {(() => {
+                      // Freight forwarding is already surfaced separately (the
+                      // "Freight Forward Fee" field / Customs line above), so it's
+                      // hidden from this line-item list to avoid showing it twice.
+                      // The Subtotal shown here is recalculated from only the
+                      // visible lines (not the PO's real, freight-inclusive
+                      // subtotal) so the figures on screen always add up to what's
+                      // actually listed; the real total — freight included —
+                      // still shows on the "Total" row below when it differs.
+                      const visibleLines = (po.lines || []).filter(
+                        (line) => !/freight\s*forward/i.test(line.desc || line.description || "")
+                      );
+                      const visibleSubtotal = visibleLines.reduce((s, line) => {
+                        const qty = parseFloat(line.qty || line.quantity) || 1;
+                        const price = parseFloat(line.price || line.unitPrice) || 0;
+                        return s + (parseFloat(line.amount) || qty * price);
+                      }, 0);
+                      return visibleLines.length > 0 ? (
+                        <div>
+                          {visibleLines.map((line, li) => (
+                            <div key={li} style={{ padding: "9px 0", borderBottom: li < visibleLines.length - 1 ? "1px solid #f0e8d9" : "none", fontSize: 12 }}>
+                              <div style={{ fontWeight: 600, color: "#4a3527", fontSize: isMobile ? 12 : 13 }}>{line.desc || line.description || "Item"}</div>
+                              <div style={{ display: "flex", gap: isMobile ? 8 : 16, marginTop: 3, flexWrap: "wrap" }}>
+                                {(line.qty || line.quantity) && <span style={{ color: "#8a7a66", fontSize: 11 }}>Qty: {line.qty || line.quantity}</span>}
+                                {(line.price || line.unitPrice) && <span style={{ color: "#8a7a66", fontSize: 11 }}>Unit: ${Number(parseFloat(line.price || line.unitPrice || 0)).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",")}</span>}
+                                <span style={{ fontWeight: 600, color: "#b5552b", fontSize: 11 }}>
+                                  ${Number(parseFloat(line.amount) || ((parseFloat(line.qty || line.quantity) || 1) * (parseFloat(line.price || line.unitPrice) || 0))).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",")}
+                                </span>
+                              </div>
                             </div>
-                          </div>
-                        ))}
-                        <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 0 2px", borderTop: "2px solid #d4a574", marginTop: 6 }}>
-                          <span style={{ fontWeight: 700, color: "#4a3527", fontSize: 12 }}>Subtotal</span>
-                          <span style={{ fontWeight: 700, color: "#4a3527", fontSize: 12 }}>
-                            ${Number(poSubtotalVal(po) || 0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",")}
-                          </span>
-                        </div>
-                        {poTotal(po) !== poSubtotalVal(po) && (
-                          <div style={{ display: "flex", justifyContent: "space-between", paddingTop: 4 }}>
-                            <span style={{ fontWeight: 700, color: "#b5552b", fontSize: 12 }}>Total</span>
-                            <span style={{ fontWeight: 700, color: "#b5552b", fontSize: 12 }}>
-                              ${Number(poTotal(po) || 0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",")}
+                          ))}
+                          <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 0 2px", borderTop: "2px solid #d4a574", marginTop: 6 }}>
+                            <span style={{ fontWeight: 700, color: "#4a3527", fontSize: 12 }}>Subtotal</span>
+                            <span style={{ fontWeight: 700, color: "#4a3527", fontSize: 12 }}>
+                              ${Number(visibleSubtotal || 0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",")}
                             </span>
                           </div>
-                        )}
-                      </div>
-                    ) : (
-                      <p style={{ fontSize: 12, color: "#8a7a66" }}>No line items on this PO.</p>
-                    )}
+                          {poTotal(po) !== visibleSubtotal && (
+                            <div style={{ display: "flex", justifyContent: "space-between", paddingTop: 4 }}>
+                              <span style={{ fontWeight: 700, color: "#b5552b", fontSize: 12 }}>Total (incl. freight forwarding)</span>
+                              <span style={{ fontWeight: 700, color: "#b5552b", fontSize: 12 }}>
+                                ${Number(poTotal(po) || 0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",")}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <p style={{ fontSize: 12, color: "#8a7a66" }}>No line items on this PO.</p>
+                      );
+                    })()}
                     
                     {/* Internal Notes for this PO — not sent to the supplier */}
                     <div style={{ marginTop: 14, paddingTop: 14, borderTop: "2px solid #d4a574" }}>
