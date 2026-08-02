@@ -6537,7 +6537,6 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                         </div>
                         <div style={{ textAlign: "right", flexShrink: 0 }}>
                           <div style={{ fontWeight: 600 }}>${Number(poTotal(po)).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",")}</div>
-                          {po.customsClearance > 0 && <div style={{ fontSize: 11, color: "#8a7a66" }}>Customs: ${Number(po.customsClearance).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",")}</div>}
                         </div>
                       </div>
                     ))}
@@ -6617,14 +6616,6 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                               ${Number(visibleSubtotal || 0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",")}
                             </span>
                           </div>
-                          {poTotal(po) !== visibleSubtotal && (
-                            <div style={{ display: "flex", justifyContent: "space-between", paddingTop: 4 }}>
-                              <span style={{ fontWeight: 700, color: "#b5552b", fontSize: 12 }}>Total (incl. freight forwarding)</span>
-                              <span style={{ fontWeight: 700, color: "#b5552b", fontSize: 12 }}>
-                                ${Number(poTotal(po) || 0).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",")}
-                              </span>
-                            </div>
-                          )}
                         </div>
                       ) : (
                         <p style={{ fontSize: 12, color: "#8a7a66" }}>No line items on this PO.</p>
