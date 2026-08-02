@@ -5277,6 +5277,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
   const [consolidatedTab, setConsolidatedTab] = useState("details");
   const [previewPoId, setPreviewPoId] = useState(editing?.id || null);
   const [showProfitSection, setShowProfitSection] = useState(false);
+  const [showGPReport, setShowGPReport] = useState(false);
   const [paymentMilestones, setPaymentMilestones] = useState(
     editing?.paymentMilestones ? editing.paymentMilestones : []
   );
@@ -7047,11 +7048,98 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                       Gross profit isn't shown for manually-added lines with no linked price book cost.
                     </div>
                   )}
+                  <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid #e3d8c6" }}>
+                    <Btn variant="ghost" size="sm" onClick={() => setShowGPReport(true)}>
+                      📊 Gross Profit report
+                    </Btn>
+                  </div>
                 </div>
               )}
             </Panel>
           )}
         </div>
+
+        {showGPReport && (
+          <Modal width={720} onClose={() => setShowGPReport(false)}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16, gap: 8, flexWrap: "wrap" }}>
+              <div>
+                <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: 0, fontSize: isMobile ? 16 : 19 }}>
+                  Gross Profit Report
+                </h3>
+                <div style={{ fontSize: 12, color: "#8a7a66", marginTop: 2 }}>
+                  {party ? `${party} — ` : ""}{isNew ? "New quote" : (editing?.number || "")}
+                </div>
+              </div>
+              <Btn variant="ghost" size="sm" onClick={() => setShowGPReport(false)}>Close</Btn>
+            </div>
+
+            {lines.length === 0 ? (
+              <p style={{ fontSize: 13, color: "#8a7a66" }}>No line items on this quote yet.</p>
+            ) : (
+              <>
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                    <thead>
+                      <tr style={{ borderBottom: "2px solid #b5552b" }}>
+                        <th style={{ textAlign: "left", padding: "6px 8px 6px 0", fontSize: 11, color: "#6b5240" }}>Item</th>
+                        <th style={{ textAlign: "right", padding: "6px 8px", fontSize: 11, color: "#6b5240" }}>Qty</th>
+                        <th style={{ textAlign: "right", padding: "6px 8px", fontSize: 11, color: "#6b5240" }}>Sell (AUD)</th>
+                        <th style={{ textAlign: "right", padding: "6px 8px", fontSize: 11, color: "#6b5240" }}>Cost (AUD)</th>
+                        <th style={{ textAlign: "right", padding: "6px 8px", fontSize: 11, color: "#6b5240" }}>Margin ($)</th>
+                        <th style={{ textAlign: "right", padding: "6px 0", fontSize: 11, color: "#6b5240" }}>Margin (%)</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {lines.map((li, idx) => {
+                        const sell = lineAudTotal(li);
+                        const cost = lineAudCost(li);
+                        const margin = cost != null ? sell - cost : null;
+                        const marginPct = cost != null && sell > 0 ? (margin / sell) * 100 : null;
+                        return (
+                          <tr key={idx} style={{ borderBottom: "1px solid #e3d8c6" }}>
+                            <td style={{ padding: "8px 8px 8px 0", color: "#4a3527" }}>
+                              {li.desc || <span className="muted">Untitled item</span>}
+                            </td>
+                            <td style={{ textAlign: "right", padding: "8px" }}>{li.qty || 0}</td>
+                            <td style={{ textAlign: "right", padding: "8px" }}>{fmtMoney(sell, "AUD")}</td>
+                            <td style={{ textAlign: "right", padding: "8px", color: cost == null ? "#8a7a66" : "#4a3527" }}>
+                              {cost != null ? fmtMoney(cost, "AUD") : "—"}
+                            </td>
+                            <td style={{ textAlign: "right", padding: "8px", fontWeight: 600, color: margin == null ? "#8a7a66" : margin < 0 ? "#a3442e" : "#5c7a4f" }}>
+                              {margin != null ? fmtMoney(margin, "AUD") : "—"}
+                            </td>
+                            <td style={{ textAlign: "right", padding: "8px 0", fontWeight: 600, color: marginPct == null ? "#8a7a66" : marginPct < 0 ? "#a3442e" : "#5c7a4f" }}>
+                              {marginPct != null ? `${marginPct.toFixed(1)}%` : "—"}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                    <tfoot>
+                      <tr style={{ borderTop: "2px solid #b5552b" }}>
+                        <td style={{ padding: "10px 8px 0 0", fontWeight: 700, color: "#4a3527" }}>Total</td>
+                        <td></td>
+                        <td style={{ textAlign: "right", padding: "10px 8px 0", fontWeight: 700, color: "#4a3527" }}>{fmtMoney(subtotal, "AUD")}</td>
+                        <td style={{ textAlign: "right", padding: "10px 8px 0", fontWeight: 700, color: "#4a3527" }}>{fmtMoney(knownCostTotal, "AUD")}</td>
+                        <td style={{ textAlign: "right", padding: "10px 8px 0", fontWeight: 700, color: grossProfitAmount != null && grossProfitAmount < 0 ? "#a3442e" : "#5c7a4f" }}>
+                          {grossProfitAmount != null ? fmtMoney(grossProfitAmount, "AUD") : "—"}
+                        </td>
+                        <td style={{ textAlign: "right", padding: "10px 0 0", fontWeight: 700, color: grossProfitPct != null && grossProfitPct < 0 ? "#a3442e" : "#5c7a4f" }}>
+                          {grossProfitPct != null ? `${grossProfitPct.toFixed(1)}%` : "—"}
+                        </td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+                {!hasCostData || lines.some((li) => lineAudCost(li) == null) ? (
+                  <p style={{ fontSize: 11, color: "#8a7a66", marginTop: 12 }}>
+                    Items showing "—" have no linked price book cost, so they're excluded from the cost/margin totals above.
+                  </p>
+                ) : null}
+              </>
+            )}
+          </Modal>
+        )}
 
         {/* ---------------- LIVE QUOTE PREVIEW (hidden from the modal UI; kept
              only so Print / Download PDF can still clone a fully-formatted
