@@ -4446,36 +4446,6 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
     })();
   }
 
-  function splitCustomsClearance(groupPO, customsAmount) {
-    // Split customs clearance 50/50 across member POs
-    (async () => {
-      try {
-        const allPOIds = [groupPO.id, ...(groupPO.consolidatedMemberIds || [])];
-        const allPOs = (db.pos || []).filter(p => allPOIds.includes(p.id));
-        if (allPOs.length === 0) { showToast("No POs to split"); return; }
-
-        // Split 50/50 across all POs
-        const splitAmount = Math.round((customsAmount / allPOs.length) * 100) / 100;
-        
-        // Update each PO's customsClearance with equal 50/50 split
-        for (const po of allPOs) {
-          await supabaseRESTWithSchemaFallback("PATCH", `purchase_orders?id=eq.${po.id}`,
-            toSupabaseFormat({ customsClearance: splitAmount, updatedAt: todayISO() }, "purchase_orders")
-          );
-        }
-        update((next) => {
-          allPOs.forEach(po => {
-            const p = next.pos.find(x => x.id === po.id);
-            if (p) p.customsClearance = splitAmount;
-          });
-        });
-        showToast(`Freight Forward Fee $${customsAmount.toLocaleString()} split 50/50 across ${allPOs.length} POs ($${splitAmount.toLocaleString()} each)`);
-      } catch (err) {
-        showToast(`Split error: ${err.message}`);
-        console.error("Split customs error:", err);
-      }
-    })();
-  }
 
   function createCustomsPO(parentPO) {
     // Create a dedicated Customs Clearance PO from the parent PO's customs amount
@@ -5062,7 +5032,6 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
           onCreateCustomsPO={!isQuote ? createCustomsPO : null}
           onConsolidatePOs={!isQuote ? consolidatePOs : null}
           onReverseConsolidation={!isQuote ? reverseConsolidation : null}
-          onSplitCustoms={!isQuote ? splitCustomsClearance : null}
           openRecord={openRecord}
           showToast={showToast}
           update={update}
@@ -5270,7 +5239,7 @@ function PriceBookSearchModal({ items, isQuote, calcSellPrice, onSelect, onClose
   );
 }
 
-function DocModal({ kind, editing, db, items, models, categories, fx, statusOptions, onCancel, onSave, onSaveMilestones, onAddItem, onAddModel, onAddCategory, onStatusChange, onDelete, onGeneratePOs, onCreateCustomsPO, onConsolidatePOs, onReverseConsolidation, onSplitCustoms, openRecord, showToast, update }) {
+function DocModal({ kind, editing, db, items, models, categories, fx, statusOptions, onCancel, onSave, onSaveMilestones, onAddItem, onAddModel, onAddCategory, onStatusChange, onDelete, onGeneratePOs, onCreateCustomsPO, onConsolidatePOs, onReverseConsolidation, openRecord, showToast, update }) {
   const isQuote = kind === "quote";
   const isMobile = useIsMobile();
   const isTablet = useIsMobile(880); // covers iPad-width viewports where the desktop payment-schedule grid gets too tight
@@ -5314,7 +5283,6 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
   const [customsClearance, setCustomsClearance] = useState(
     !isQuote && (editing?.customsClearance !== undefined && editing.customsClearance !== null) ? editing.customsClearance : 0
   );
-  const [consolidatedCustoms, setConsolidatedCustoms] = useState(customsClearance);
   const [attachments, setAttachments] = useState(
     editing?.attachments ? editing.attachments : []
   );
@@ -6573,35 +6541,6 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                         </div>
                       </div>
                     ))}
-
-                    <div style={{ margin: "14px 0", padding: 12, background: "#f9f5f0", borderRadius: 4 }}>
-                      <label style={{ fontSize: 12, fontWeight: 600, color: "#6b5240", display: "block", marginBottom: 8 }}>
-                        Freight Forward Fee (AUD)
-                      </label>
-                      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                        <span style={{ fontSize: 11, color: "#8a7a66" }}>$</span>
-                        <input
-                          type="number"
-                          value={consolidatedCustoms}
-                          onChange={(e) => {
-                            const value = parseFloat(e.target.value) || 0;
-                            setConsolidatedCustoms(value);
-                            setCustomsClearance(value);  // Sync to customsClearance for saving
-                          }}
-                          style={{ flex: 1, padding: "6px 8px", fontSize: 12, border: "1px solid #d4a574", borderRadius: 3 }}
-                        />
-                      </div>
-                      {customsClearance > 0 && (
-                        <div style={{ marginTop: 8 }}>
-                          <Btn variant="secondary" size="sm" onClick={() => onSplitCustoms && onSplitCustoms(editing, customsClearance)}>
-                            Split ${customsClearance.toLocaleString()} freight 50/50
-                          </Btn>
-                          <p style={{ fontSize: 11, color: "#8a7a66", margin: "4px 0 0" }}>
-                            {allPOs.map(po => `PO-${stripPO(po.number)}: $${Math.round((customsClearance / allPOs.length) * 100) / 100}`).join(" · ")}
-                          </p>
-                        </div>
-                      )}
-                    </div>
 
                     {paymentMilestones.filter(m => m.due || m.amount).length > 0 && (
                       <div style={{ marginBottom: 14 }}>
