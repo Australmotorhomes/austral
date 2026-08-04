@@ -5477,15 +5477,16 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
   const knownCostTotal = costEntries.reduce((s, c) => s + (c || 0), 0);
   const sellTotalForKnownCostLines = lines.reduce((s, li, idx) => s + (costEntries[idx] != null ? lineAudTotal(li) : 0), 0);
   const hasCostData = costEntries.some((c) => c != null);
-  const grossProfitPct = hasCostData && sellTotalForKnownCostLines > 0 ? ((sellTotalForKnownCostLines - knownCostTotal) / sellTotalForKnownCostLines) * 100 : null;
-  const grossProfitAmount = hasCostData ? sellTotalForKnownCostLines - knownCostTotal : null;
   // Total of hidden cost items (freight, labour, etc.), converted to AUD.
-  // Shown alongside — but deliberately kept separate from — the product cost
-  // total above; Gross Profit % still reflects product costs only.
+  // Shown as its own line item for visibility, but also folded into the
+  // Gross Profit $/% below — hidden costs are real costs baked into the
+  // quoted price, so the true margin has to account for them.
   const hiddenCostTotalAud = hiddenCosts.reduce(
     (s, hc) => s + toAUD(parseFloat(hc.cost) || 0, hc.currency || "AUD", rate) * (parseFloat(hc.qty) || 0),
     0
   );
+  const grossProfitAmount = hasCostData ? sellTotalForKnownCostLines - knownCostTotal - hiddenCostTotalAud : null;
+  const grossProfitPct = hasCostData && sellTotalForKnownCostLines > 0 ? (grossProfitAmount / sellTotalForKnownCostLines) * 100 : null;
 
   function updateLine(idx, field, value) {
     setLines((prev) => {
@@ -7093,7 +7094,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                     </div>
                   )}
                   <div style={{ display: "flex", justifyContent: "space-between" }}>
-                    <span style={{ color: "#6b5240", fontWeight: 600 }}>Gross Profit %:</span>
+                    <span style={{ color: "#6b5240", fontWeight: 600 }}>Gross Profit %{hiddenCosts.length > 0 ? " (incl. hidden costs)" : ""}:</span>
                     <span
                       style={{
                         fontWeight: 700,
@@ -7282,17 +7283,13 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                         <th style={{ textAlign: "left", padding: "6px 8px 6px 0", fontSize: 11, color: "#6b5240" }}>Item</th>
                         <th style={{ textAlign: "right", padding: "6px 8px", fontSize: 11, color: "#6b5240" }}>Qty</th>
                         <th style={{ textAlign: "right", padding: "6px 8px", fontSize: 11, color: "#6b5240" }}>Sell (AUD)</th>
-                        <th style={{ textAlign: "right", padding: "6px 8px", fontSize: 11, color: "#6b5240" }}>Cost (AUD)</th>
-                        <th style={{ textAlign: "right", padding: "6px 8px", fontSize: 11, color: "#6b5240" }}>Margin ($)</th>
-                        <th style={{ textAlign: "right", padding: "6px 0", fontSize: 11, color: "#6b5240" }}>Margin (%)</th>
+                        <th style={{ textAlign: "right", padding: "6px 0", fontSize: 11, color: "#6b5240" }}>Cost (AUD)</th>
                       </tr>
                     </thead>
                     <tbody>
                       {lines.map((li, idx) => {
                         const sell = lineAudTotal(li);
                         const cost = lineAudCost(li);
-                        const margin = cost != null ? sell - cost : null;
-                        const marginPct = cost != null && sell > 0 ? (margin / sell) * 100 : null;
                         return (
                           <tr key={idx} style={{ borderBottom: "1px solid #e3d8c6" }}>
                             <td style={{ padding: "8px 8px 8px 0", color: "#4a3527" }}>
@@ -7300,14 +7297,8 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                             </td>
                             <td style={{ textAlign: "right", padding: "8px" }}>{li.qty || 0}</td>
                             <td style={{ textAlign: "right", padding: "8px" }}>{fmtMoney(sell, "AUD")}</td>
-                            <td style={{ textAlign: "right", padding: "8px", color: cost == null ? "#8a7a66" : "#4a3527" }}>
+                            <td style={{ textAlign: "right", padding: "8px 0", color: cost == null ? "#8a7a66" : "#4a3527" }}>
                               {cost != null ? fmtMoney(cost, "AUD") : "—"}
-                            </td>
-                            <td style={{ textAlign: "right", padding: "8px", fontWeight: 600, color: margin == null ? "#8a7a66" : margin < 0 ? "#a3442e" : "#5c7a4f" }}>
-                              {margin != null ? fmtMoney(margin, "AUD") : "—"}
-                            </td>
-                            <td style={{ textAlign: "right", padding: "8px 0", fontWeight: 600, color: marginPct == null ? "#8a7a66" : marginPct < 0 ? "#a3442e" : "#5c7a4f" }}>
-                              {marginPct != null ? `${marginPct.toFixed(1)}%` : "—"}
                             </td>
                           </tr>
                         );
@@ -7315,23 +7306,17 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                     </tbody>
                     <tfoot>
                       <tr style={{ borderTop: "2px solid #b5552b" }}>
-                        <td style={{ padding: "10px 8px 0 0", fontWeight: 700, color: "#4a3527" }}>Total</td>
+                        <td style={{ padding: "10px 8px 0 0", fontWeight: 700, color: "#4a3527" }}>Product Subtotal</td>
                         <td></td>
                         <td style={{ textAlign: "right", padding: "10px 8px 0", fontWeight: 700, color: "#4a3527" }}>{fmtMoney(subtotal, "AUD")}</td>
-                        <td style={{ textAlign: "right", padding: "10px 8px 0", fontWeight: 700, color: "#4a3527" }}>{fmtMoney(knownCostTotal, "AUD")}</td>
-                        <td style={{ textAlign: "right", padding: "10px 8px 0", fontWeight: 700, color: grossProfitAmount != null && grossProfitAmount < 0 ? "#a3442e" : "#5c7a4f" }}>
-                          {grossProfitAmount != null ? fmtMoney(grossProfitAmount, "AUD") : "—"}
-                        </td>
-                        <td style={{ textAlign: "right", padding: "10px 0 0", fontWeight: 700, color: grossProfitPct != null && grossProfitPct < 0 ? "#a3442e" : "#5c7a4f" }}>
-                          {grossProfitPct != null ? `${grossProfitPct.toFixed(1)}%` : "—"}
-                        </td>
+                        <td style={{ textAlign: "right", padding: "10px 0 0", fontWeight: 700, color: "#4a3527" }}>{fmtMoney(knownCostTotal, "AUD")}</td>
                       </tr>
                     </tfoot>
                   </table>
                 </div>
                 {!hasCostData || lines.some((li) => lineAudCost(li) == null) ? (
                   <p style={{ fontSize: 11, color: "#8a7a66", marginTop: 12 }}>
-                    Items showing "—" have no linked price book cost, so they're excluded from the cost/margin totals above.
+                    Items showing "—" have no linked price book cost, so they're excluded from the cost totals below.
                   </p>
                 ) : null}
               </>
@@ -7385,6 +7370,36 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                   </table>
                 </div>
               </>
+            )}
+
+            {lines.length > 0 && (
+              <div style={{ marginTop: 24, paddingTop: 16, borderTop: "3px solid #b5552b" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8, fontSize: 13 }}>
+                  <span style={{ color: "#6b5240", fontWeight: 600 }}>Total Sell (AUD):</span>
+                  <span style={{ fontWeight: 700, color: "#4a3527" }}>{fmtMoney(sellTotalForKnownCostLines, "AUD")}</span>
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8, fontSize: 13 }}>
+                  <span style={{ color: "#6b5240", fontWeight: 600 }}>Total Cost — product + hidden (AUD):</span>
+                  <span style={{ fontWeight: 700, color: "#4a3527" }}>{fmtMoney(knownCostTotal + hiddenCostTotalAud, "AUD")}</span>
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8, fontSize: 15 }}>
+                  <span style={{ color: "#4a3527", fontWeight: 700, fontFamily: "Georgia,serif" }}>Gross Profit ($):</span>
+                  <span style={{ fontWeight: 700, color: grossProfitAmount != null && grossProfitAmount < 0 ? "#a3442e" : "#5c7a4f" }}>
+                    {grossProfitAmount != null ? fmtMoney(grossProfitAmount, "AUD") : "—"}
+                  </span>
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 15 }}>
+                  <span style={{ color: "#4a3527", fontWeight: 700, fontFamily: "Georgia,serif" }}>Gross Profit (%):</span>
+                  <span style={{ fontWeight: 700, color: grossProfitPct != null && grossProfitPct < 0 ? "#a3442e" : "#5c7a4f" }}>
+                    {grossProfitPct != null ? `${grossProfitPct.toFixed(1)}%` : "—"}
+                  </span>
+                </div>
+                {sellTotalForKnownCostLines !== subtotal && (
+                  <p style={{ fontSize: 11, color: "#8a7a66", marginTop: 10 }}>
+                    Total Sell above only counts lines with a known cost, to keep Gross Profit % comparable — it may be less than the quote's full subtotal ({fmtMoney(subtotal, "AUD")}) if some lines have no linked price book cost.
+                  </p>
+                )}
+              </div>
             )}
           </Modal>
         )}
