@@ -12821,28 +12821,6 @@ function DashboardTab({ db, setTab, openRecord }) {
 
   // ── MOBILE SWIPE DASHBOARD ────────────────────────────────────────────────
   if (isMobile) {
-    const mobileShipments = (() => {
-      const pos = (db.pos || []).filter((po) =>
-        !po.consolidatedGroupId &&
-        (po.eta || (po.customsClearance || 0) > 0 || (po.consolidatedMemberIds || []).length > 0) &&
-        po.status !== "Cancelled"
-      );
-      // Sort by soonest ETA or earliest milestone due date
-      const earliestDue = (po) => {
-        const dates = [po.eta, ...(po.paymentMilestones || []).map(m => m.due)].filter(Boolean).sort();
-        return dates[0] || "9999";
-      };
-      pos.sort((a, b) => earliestDue(a).localeCompare(earliestDue(b)));
-      // Group by supplier
-      const grouped = {};
-      pos.forEach(po => {
-        const supplier = po.party || "Unknown Supplier";
-        if (!grouped[supplier]) grouped[supplier] = [];
-        grouped[supplier].push(po);
-      });
-      return Object.entries(grouped).map(([supplier, pos]) => ({ supplier, pos }));
-    })();
-
     // Pre-compute deposit rows for Page 2 — soonest due date first, paid items pushed to
     // the end (still soonest-first within that group) and hidden behind a toggle.
     const depositRows = (() => {
@@ -12871,9 +12849,8 @@ function DashboardTab({ db, setTab, openRecord }) {
     const unpaidDepositRows = depositRows.filter(r => !r.paid);
     const paidDepositRows = depositRows.filter(r => r.paid);
 
-    const totalPages = 8 + mobileShipments.length;
-    const pageTitles = ["Sales Performance", "Deposits", "Stock", "Sales by Model", "Sales Funnel", "PO Status", "International Shipping", "Domestic Shipping",
-      ...mobileShipments.map(g => g.supplier)];
+    const totalPages = 8;
+    const pageTitles = ["Sales Performance", "Deposits", "Stock", "Sales by Model", "Sales Funnel", "PO Status", "International Shipping", "Domestic Shipping"];
 
     const handleTouchStart = (e) => { touchStartX.current = e.touches[0].clientX; };
     const handleTouchEnd = (e) => {
@@ -13149,84 +13126,6 @@ function DashboardTab({ db, setTab, openRecord }) {
               <span>{fmtMoney(domesticShippingTotal, "AUD")}</span>
             </div>
           </div>
-
-          {/* PAGES 9+ — One page per supplier, all their POs scrollable */}
-          {mobileShipments.map(({ supplier, pos: supplierPOs }) => {
-            const fmtD = (d) => d ? new Date(d).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" }) : "—";
-            const stripPO = (n) => String(n).replace(/^PO-?/i, "");
-            // Sort each supplier's POs by soonest milestone/ETA
-            const sorted = [...supplierPOs].sort((a, b) => {
-              const da = [a.eta, ...(a.paymentMilestones||[]).map(m=>m.due)].filter(Boolean).sort()[0] || "9999";
-              const db2 = [b.eta, ...(b.paymentMilestones||[]).map(m=>m.due)].filter(Boolean).sort()[0] || "9999";
-              return da.localeCompare(db2);
-            });
-            return (
-              <div key={supplier} style={page}>
-                {sorted.map((po) => {
-                  const members = (po.consolidatedMemberIds || []).length > 0
-                    ? (db.pos || []).filter(p => (po.consolidatedMemberIds || []).includes(p.id)) : [];
-                  const allPOs = members.length ? [po, ...members] : [po];
-                  const poLabel = `PO-${stripPO(po.number)}${members.length ? `/${members.map(m => stripPO(m.number)).join("/")}` : ""}`;
-                  // Product name: first line desc or model
-                  const productName = po.model || (po.lines && po.lines[0] ? (po.lines[0].desc || po.lines[0].description) : null) || "—";
-
-                  return (
-                    <div key={po.id} style={{ ...card, borderLeft: "4px solid #b5552b" }}>
-                      {/* PO header - tappable */}
-                      <div onClick={() => openRecord && openRecord("po", po.id)} style={{ cursor: "pointer", marginBottom: 10 }}>
-                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
-                          <div style={{ minWidth: 0 }}>
-                            <div style={{ fontSize: 12, fontWeight: 700, color: "#b5552b" }}>{poLabel}</div>
-                            <div style={{ fontSize: 13, fontWeight: 700, color: "#4a3527", marginTop: 2, wordBreak: "break-word" }}>{productName}</div>
-                          </div>
-                          {po.eta && (
-                            <div style={{ textAlign: "right", fontSize: 11, color: "#8a7a66", flexShrink: 0 }}>
-                              <div style={{ fontWeight: 600 }}>ETA</div>
-                              <div>{fmtD(po.eta)}</div>
-                            </div>
-                          )}
-                        </div>
-                        {(po.customsClearance || 0) > 0 && (
-                          <div style={{ marginTop: 6, padding: "4px 8px", background: "#fbeae5", borderRadius: 5, display: "inline-block" }}>
-                            <span style={{ fontSize: 11, color: "#a3442e", fontWeight: 600 }}>Freight: {fmtMoney(po.customsClearance, "AUD")}</span>
-                          </div>
-                        )}
-                        <div style={{ fontSize: 10, color: "#8a7a66", marginTop: 6 }}>Tap to open PO →</div>
-                      </div>
-
-                      {/* Payment milestones for each PO in group, sorted soonest first */}
-                      {allPOs.map(p => {
-                        const milestones = (p.paymentMilestones || [])
-                          .filter(m => m.due || m.amount)
-                          .slice()
-                          .sort((a, b) => (a.due || "9999").localeCompare(b.due || "9999"));
-                        if (!milestones.length) return null;
-                        return (
-                          <div key={p.id} style={{ borderTop: "1px solid #e3d8c6", paddingTop: 8, marginTop: 4 }}>
-                            {members.length > 0 && (
-                              <div style={{ fontSize: 10, fontWeight: 700, color: "#b5552b", marginBottom: 4 }}>PO-{stripPO(p.number)}</div>
-                            )}
-                            {milestones.map((m, mi) => (
-                              <div key={mi} onClick={() => openRecord && openRecord("po", p.id)}
-                                style={{ ...row, cursor: "pointer" }}>
-                                <div>
-                                  <div style={{ fontSize: 12, color: m.paid ? "#5c7a4f" : "#4a3527" }}>{m.due ? fmtD(m.due) : "TBC"}</div>
-                                  {m.paid && <div style={{ fontSize: 10, color: "#5c7a4f", fontWeight: 700 }}>PAID ✓</div>}
-                                </div>
-                                <strong style={{ color: m.paid ? "#5c7a4f" : "#b5552b", fontSize: 13 }}>
-                                  {m.amount ? fmtMoney(parseFloat(m.amount), "AUD") : "TBC"}
-                                </strong>
-                              </div>
-                            ))}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  );
-                })}
-              </div>
-            );
-          })}
         </div>
 
         {/* Prev / Next */}
