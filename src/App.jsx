@@ -498,6 +498,10 @@ function toSupabaseFormat(data, table) {
         copy.quote_number = copy.quoteNumber;
         delete copy.quoteNumber;
       }
+      if (copy.hiddenCosts !== undefined) {
+        copy.hidden_costs = copy.hiddenCosts;
+        delete copy.hiddenCosts;
+      }
       if (copy.consolidatedGroupId !== undefined) {
         copy.consolidated_group_id = copy.consolidatedGroupId || null;
         delete copy.consolidatedGroupId;
@@ -585,8 +589,10 @@ function fromSupabaseFormat(data, table) {
       if (copy.supplier_id !== undefined) { copy.supplierId = copy.supplier_id; delete copy.supplier_id; }
       if (copy.quote_id !== undefined) { copy.quoteId = copy.quote_id; delete copy.quote_id; }
       if (copy.quote_number !== undefined) { copy.quoteNumber = copy.quote_number; delete copy.quote_number; }
+      if (copy.hidden_costs !== undefined) { copy.hiddenCosts = copy.hidden_costs; delete copy.hidden_costs; }
       if (copy.supplier_note !== undefined) { copy.supplierNote = copy.supplier_note; delete copy.supplier_note; }
       copy.lines = Array.isArray(copy.lines) ? copy.lines : [];
+      copy.hiddenCosts = Array.isArray(copy.hiddenCosts) ? copy.hiddenCosts : [];
       copy.paymentMilestones = Array.isArray(copy.paymentMilestones) ? copy.paymentMilestones : [];
       copy.attachments = Array.isArray(copy.attachments) ? copy.attachments : [];
       if (copy.consolidated_group_id !== undefined) { copy.consolidatedGroupId = copy.consolidated_group_id; delete copy.consolidated_group_id; }
@@ -2509,6 +2515,8 @@ const globalCss = `
   @media (max-width:900px){.doc-split-grid{grid-template-columns:1fr;}}
   .line-item-row{display:grid;grid-template-columns:1fr 50px 60px 70px 70px 80px 30px;gap:6px;align-items:start;margin-bottom:8px;}
   @media (max-width:680px){.line-item-row{grid-template-columns:1fr 1fr;}}
+  .hidden-cost-row{display:grid;grid-template-columns:2fr 60px 90px 70px 1fr 24px;gap:6px;align-items:start;margin-bottom:6px;}
+  @media (max-width:680px){.hidden-cost-row{grid-template-columns:1fr 1fr;}}
   .totals-row{display:flex;justify-content:space-between;font-size:13.5px;padding:4px 0;}
   .totals-row.grand{font-weight:800;font-size:16px;color:#4a3527;border-top:1px solid #e3d8c6;margin-top:6px;padding-top:10px;}
   .doc-meta{display:flex;gap:18px;flex-wrap:wrap;font-size:12.5px;color:#8a7a66;margin-bottom:14px;}
@@ -5293,6 +5301,17 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
   const [ref, setRef] = useState(
     editing?.ref ? editing.ref : ""
   );
+  // Hidden cost items — internal-only costs (freight, labour, etc.) that are
+  // baked into the quoted price but never itemized to the customer. Kept as
+  // their own array (not mixed into `lines`, which the customer-facing quote
+  // preview renders directly) so there's no risk of one ever leaking into the
+  // other. showHiddenCosts is a plain reveal toggle, off by default, so this
+  // section stays out of view (e.g. during a screen-share) until switched on.
+  const [hiddenCosts, setHiddenCosts] = useState(
+    editing?.hiddenCosts ? JSON.parse(JSON.stringify(editing.hiddenCosts)) : []
+  );
+  const [showHiddenCosts, setShowHiddenCosts] = useState(false);
+  const [showPriceBookSearchForHiddenCost, setShowPriceBookSearchForHiddenCost] = useState(false);
 
   // Member PO editing state — used when a member PO tab is active in consolidated view
   const [memberEditId, setMemberEditId] = useState(null);
@@ -5544,6 +5563,34 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
     });
   }
 
+  // ---- Hidden cost items (office use only) — kept in a separate array from
+  // `lines` so they never appear on the customer-facing quote preview/PDF,
+  // but still get picked up by Generate POs and by cost tracking. ----
+  function updateHiddenCost(idx, field, value) {
+    setHiddenCosts((prev) => {
+      const next = prev.slice();
+      if (field === "desc" || field === "supplierName" || field === "currency") {
+        next[idx] = { ...next[idx], [field]: value };
+      } else {
+        next[idx] = { ...next[idx], [field]: parseFloat(value) || 0 };
+      }
+      return next;
+    });
+  }
+  function removeHiddenCost(idx) {
+    setHiddenCosts((prev) => prev.filter((_, i) => i !== idx));
+  }
+  function addBlankHiddenCost() {
+    setHiddenCosts((prev) => [...prev, { desc: "", qty: 1, cost: 0, currency: "AUD", supplierName: "", itemId: null }]);
+  }
+  function addItemToHiddenCosts(item) {
+    setHiddenCosts((prev) => [
+      ...prev,
+      { desc: `${item.model} — ${item.name}`, qty: 1, cost: item.cost || 0, currency: item.currency || "AUD", supplierName: item.supplier || "", itemId: item.id },
+    ]);
+    setShowPriceBookSearchForHiddenCost(false);
+  }
+
   async function savePONotes(poId, newNotes) {
     // Save notes for a specific PO (used for member POs in consolidated view)
     try {
@@ -5606,7 +5653,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
         ...(!isQuote && { customsClearance }),  // Always include for POs (allows setting to 0)
         ...(!isQuote && customer && { customer }),
         eta,  // Always include ETA for both quotes and POs (persist to Supabase)
-        ...(isQuote && { ref: ref.trim() }),
+        ...(isQuote && { ref: ref.trim(), hiddenCosts }),
       },
       editing
     );
@@ -7057,6 +7104,144 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
               )}
             </Panel>
           )}
+
+          {/* Hidden cost items — office use only. Never rendered into the
+              customer-facing quote preview/PDF (that only ever reads `lines`);
+              this is a separate array purely for internal cost tracking and
+              feeding Generate POs. Off by default via the toggle switch so it
+              doesn't show during a screen-share unless deliberately switched on. */}
+          {isQuote && (
+            <Panel>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div>
+                  <span style={{ fontFamily: "Georgia,serif", color: "#4a3527", fontSize: 16 }}>Hidden Cost Items</span>
+                  <div style={{ fontSize: 11, color: "#8a7a66", marginTop: 2 }}>
+                    Office use only — included in the price, never shown to the customer
+                    {hiddenCosts.length > 0 ? ` · ${hiddenCosts.length} item${hiddenCosts.length !== 1 ? "s" : ""}` : ""}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={showHiddenCosts}
+                  onClick={() => setShowHiddenCosts((v) => !v)}
+                  title={showHiddenCosts ? "Hide this section" : "Show this section"}
+                  style={{
+                    flexShrink: 0,
+                    width: 40,
+                    height: 22,
+                    borderRadius: 11,
+                    border: "none",
+                    cursor: "pointer",
+                    background: showHiddenCosts ? "#b5552b" : "#d3c9b8",
+                    position: "relative",
+                    transition: "background 0.2s ease",
+                  }}
+                >
+                  <span
+                    style={{
+                      position: "absolute",
+                      top: 2,
+                      left: showHiddenCosts ? 20 : 2,
+                      width: 18,
+                      height: 18,
+                      borderRadius: "50%",
+                      background: "#fff",
+                      transition: "left 0.2s ease",
+                      boxShadow: "0 1px 2px rgba(0,0,0,0.25)",
+                    }}
+                  />
+                </button>
+              </div>
+
+              {showHiddenCosts && (
+                <div style={{ marginTop: 14 }}>
+                  {hiddenCosts.length === 0 ? (
+                    <p className="muted" style={{ fontSize: 13, margin: "0 0 14px" }}>
+                      No hidden cost items yet — add freight, labour, or other internal costs that are baked into the price but not itemized to the customer.
+                    </p>
+                  ) : (
+                    hiddenCosts.map((hc, idx) => (
+                      <div key={idx} className="hidden-cost-row">
+                        <input
+                          style={inputStyle}
+                          type="text"
+                          placeholder="Description (e.g. Freight, Labour)"
+                          value={hc.desc}
+                          onChange={(e) => updateHiddenCost(idx, "desc", e.target.value)}
+                        />
+                        <input
+                          style={inputStyle}
+                          type="number"
+                          min="0"
+                          step="1"
+                          placeholder="Qty"
+                          value={hc.qty}
+                          onChange={(e) => updateHiddenCost(idx, "qty", e.target.value)}
+                        />
+                        <input
+                          style={inputStyle}
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          placeholder="Cost"
+                          value={hc.cost}
+                          onChange={(e) => updateHiddenCost(idx, "cost", e.target.value)}
+                        />
+                        <select style={inputStyle} value={hc.currency || "AUD"} onChange={(e) => updateHiddenCost(idx, "currency", e.target.value)}>
+                          <option value="AUD">AUD</option>
+                          <option value="USD">USD</option>
+                        </select>
+                        <input
+                          style={inputStyle}
+                          type="text"
+                          placeholder="Supplier"
+                          value={hc.supplierName || ""}
+                          onChange={(e) => updateHiddenCost(idx, "supplierName", e.target.value)}
+                          title="Used to group this cost under the right supplier when generating POs"
+                        />
+                        <button
+                          onClick={() => removeHiddenCost(idx)}
+                          title="Remove"
+                          style={{ background: "none", border: "none", color: "#a3442e", cursor: "pointer", fontSize: 16, padding: 4 }}
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ))
+                  )}
+
+                  <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+                    <Btn variant="ghost" size="sm" onClick={addBlankHiddenCost}>
+                      + Add blank cost item
+                    </Btn>
+                    <Btn variant="ghost" size="sm" onClick={() => setShowPriceBookSearchForHiddenCost(true)}>
+                      🔍 Add from price book
+                    </Btn>
+                  </div>
+
+                  {hiddenCosts.length > 0 && (
+                    <div style={{ display: "flex", justifyContent: "space-between", marginTop: 14, paddingTop: 12, borderTop: "1px solid #e3d8c6" }}>
+                      <span style={{ color: "#6b5240", fontWeight: 600, fontSize: 13 }}>Total hidden cost (AUD):</span>
+                      <span style={{ fontWeight: 700, color: "#4a3527", fontSize: 13 }}>
+                        {fmtMoney(hiddenCosts.reduce((s, hc) => s + toAUD(parseFloat(hc.cost) || 0, hc.currency || "AUD", rate) * (parseFloat(hc.qty) || 0), 0), "AUD")}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              )}
+            </Panel>
+          )}
+
+          {showPriceBookSearchForHiddenCost && (
+            <PriceBookSearchModal
+              items={sortedItems}
+              isQuote={isQuote}
+              calcSellPrice={calcSellPrice}
+              onSelect={(item) => addItemToHiddenCosts(item)}
+              onClose={() => setShowPriceBookSearchForHiddenCost(false)}
+            />
+          )}
         </div>
 
         {showGPReport && (
@@ -7763,13 +7948,31 @@ ${clone?.innerHTML || ""}
 function POGenerationModal({ quote, items, suppliers, onCancel, onGenerate }) {
   // Group quote lines by supplier
   const supplierGroups = {};
+  const addToGroup = (supplierName, line) => {
+    const key = supplierName || "Unknown supplier";
+    if (!supplierGroups[key]) supplierGroups[key] = [];
+    supplierGroups[key].push(line);
+  };
   quote.lines.forEach((line) => {
     const item = items.find((i) => i.id === line.itemId);
-    const supplierName = item?.supplier || "Unknown supplier";
-    if (!supplierGroups[supplierName]) {
-      supplierGroups[supplierName] = [];
-    }
-    supplierGroups[supplierName].push(line);
+    addToGroup(item?.supplier, line);
+  });
+  // Hidden cost items (freight, labour, etc. — office use only, never shown on
+  // the customer quote) get grouped in exactly the same way, using either
+  // their linked price-book item's supplier or the manually-typed supplier
+  // name entered when the cost was added. They're flagged so handleGenerate
+  // keeps the cost as originally entered rather than re-deriving it from a
+  // price-book lookup, since a hidden cost's price-book link is optional.
+  (quote.hiddenCosts || []).forEach((hc) => {
+    const item = hc.itemId ? items.find((i) => i.id === hc.itemId) : null;
+    addToGroup(item?.supplier || hc.supplierName, {
+      desc: hc.desc,
+      qty: hc.qty,
+      price: hc.cost,
+      currency: hc.currency || "AUD",
+      itemId: null,
+      __fixedPrice: true,
+    });
   });
 
   const [selectedSuppliers, setSelectedSuppliers] = useState(Object.keys(supplierGroups));
@@ -7779,8 +7982,13 @@ function POGenerationModal({ quote, items, suppliers, onCancel, onGenerate }) {
     selectedSuppliers.forEach((supplierName) => {
       supplierMap[supplierName] = {
         name: supplierName,
-        // Replace line price with item cost for POs
+        // Replace line price with item cost for POs — except hidden cost items,
+        // which already carry their own entered cost and have no item to look up.
         lines: supplierGroups[supplierName].map((line) => {
+          if (line.__fixedPrice) {
+            const { __fixedPrice, ...rest } = line;
+            return rest;
+          }
           const item = items.find((i) => i.id === line.itemId);
           const costPrice = item ? (item.cost || 0) : 0;
           return { ...line, price: costPrice };
