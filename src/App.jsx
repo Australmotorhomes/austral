@@ -5479,6 +5479,13 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
   const hasCostData = costEntries.some((c) => c != null);
   const grossProfitPct = hasCostData && sellTotalForKnownCostLines > 0 ? ((sellTotalForKnownCostLines - knownCostTotal) / sellTotalForKnownCostLines) * 100 : null;
   const grossProfitAmount = hasCostData ? sellTotalForKnownCostLines - knownCostTotal : null;
+  // Total of hidden cost items (freight, labour, etc.), converted to AUD.
+  // Shown alongside — but deliberately kept separate from — the product cost
+  // total above; Gross Profit % still reflects product costs only.
+  const hiddenCostTotalAud = hiddenCosts.reduce(
+    (s, hc) => s + toAUD(parseFloat(hc.cost) || 0, hc.currency || "AUD", rate) * (parseFloat(hc.qty) || 0),
+    0
+  );
 
   function updateLine(idx, field, value) {
     setLines((prev) => {
@@ -7055,7 +7062,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
 
           {/* Gross Profit — moved out of the (now hidden) quote preview so it's
               always visible here, bottom-right, regardless of preview state. */}
-          {isQuote && hasCostData && (
+          {isQuote && (hasCostData || hiddenCosts.length > 0) && (
             <Panel>
               <div
                 onClick={() => setShowProfitSection(!showProfitSection)}
@@ -7076,9 +7083,15 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
               {showProfitSection && (
                 <div style={{ marginTop: 12 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
-                    <span style={{ color: "#6b5240", fontWeight: 600 }}>Total Cost (AUD):</span>
+                    <span style={{ color: "#6b5240", fontWeight: 600 }}>Total product cost (AUD):</span>
                     <span style={{ fontWeight: 700, color: "#4a3527" }}>{fmtMoney(knownCostTotal, "AUD")}</span>
                   </div>
+                  {hiddenCosts.length > 0 && (
+                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
+                      <span style={{ color: "#6b5240", fontWeight: 600 }}>Total hidden cost (AUD):</span>
+                      <span style={{ fontWeight: 700, color: "#4a3527" }}>{fmtMoney(hiddenCostTotalAud, "AUD")}</span>
+                    </div>
+                  )}
                   <div style={{ display: "flex", justifyContent: "space-between" }}>
                     <span style={{ color: "#6b5240", fontWeight: 600 }}>Gross Profit %:</span>
                     <span
@@ -7224,7 +7237,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                     <div style={{ display: "flex", justifyContent: "space-between", marginTop: 14, paddingTop: 12, borderTop: "1px solid #e3d8c6" }}>
                       <span style={{ color: "#6b5240", fontWeight: 600, fontSize: 13 }}>Total hidden cost (AUD):</span>
                       <span style={{ fontWeight: 700, color: "#4a3527", fontSize: 13 }}>
-                        {fmtMoney(hiddenCosts.reduce((s, hc) => s + toAUD(parseFloat(hc.cost) || 0, hc.currency || "AUD", rate) * (parseFloat(hc.qty) || 0), 0), "AUD")}
+                        {fmtMoney(hiddenCostTotalAud, "AUD")}
                       </span>
                     </div>
                   )}
@@ -7321,6 +7334,56 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                     Items showing "—" have no linked price book cost, so they're excluded from the cost/margin totals above.
                   </p>
                 ) : null}
+              </>
+            )}
+
+            {hiddenCosts.length > 0 && (
+              <>
+                <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "24px 0 12px" }}>
+                  <div style={{ flex: 1, height: 1, background: "#e3d8c6" }} />
+                  <span style={{ fontFamily: "Georgia,serif", color: "#4a3527", fontSize: 14, fontWeight: 700, whiteSpace: "nowrap" }}>
+                    Hidden Costs (office use only)
+                  </span>
+                  <div style={{ flex: 1, height: 1, background: "#e3d8c6" }} />
+                </div>
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                    <thead>
+                      <tr style={{ borderBottom: "2px solid #b5552b" }}>
+                        <th style={{ textAlign: "left", padding: "6px 8px 6px 0", fontSize: 11, color: "#6b5240" }}>Item</th>
+                        <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11, color: "#6b5240" }}>Supplier</th>
+                        <th style={{ textAlign: "right", padding: "6px 8px", fontSize: 11, color: "#6b5240" }}>Qty</th>
+                        <th style={{ textAlign: "right", padding: "6px 0", fontSize: 11, color: "#6b5240" }}>Cost (AUD)</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {hiddenCosts.map((hc, idx) => (
+                        <tr key={idx} style={{ borderBottom: "1px solid #e3d8c6" }}>
+                          <td style={{ padding: "8px 8px 8px 0", color: "#4a3527" }}>
+                            {hc.desc || <span className="muted">Untitled item</span>}
+                          </td>
+                          <td style={{ padding: "8px", color: "#6b5240" }}>
+                            {hc.supplierName || <span className="muted">—</span>}
+                          </td>
+                          <td style={{ textAlign: "right", padding: "8px" }}>{hc.qty || 0}</td>
+                          <td style={{ textAlign: "right", padding: "8px 0" }}>
+                            {fmtMoney(toAUD(parseFloat(hc.cost) || 0, hc.currency || "AUD", rate) * (parseFloat(hc.qty) || 0), "AUD")}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot>
+                      <tr style={{ borderTop: "2px solid #b5552b" }}>
+                        <td style={{ padding: "10px 8px 0 0", fontWeight: 700, color: "#4a3527" }}>Total hidden cost</td>
+                        <td></td>
+                        <td></td>
+                        <td style={{ textAlign: "right", padding: "10px 0 0", fontWeight: 700, color: "#4a3527" }}>
+                          {fmtMoney(hiddenCostTotalAud, "AUD")}
+                        </td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
               </>
             )}
           </Modal>
