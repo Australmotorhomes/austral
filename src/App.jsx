@@ -5312,6 +5312,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
   );
   const [showHiddenCosts, setShowHiddenCosts] = useState(false);
   const [showPriceBookSearchForHiddenCost, setShowPriceBookSearchForHiddenCost] = useState(false);
+  const [showPriceBookManager, setShowPriceBookManager] = useState(false);
 
   // Member PO editing state — used when a member PO tab is active in consolidated view
   const [memberEditId, setMemberEditId] = useState(null);
@@ -5596,7 +5597,9 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
       ...prev,
       { desc: `${item.model} — ${item.name}`, qty: 1, cost: item.cost || 0, currency: item.currency || "AUD", supplierName: item.supplier || "", itemId: item.id },
     ]);
-    setShowPriceBookSearchForHiddenCost(false);
+    // Deliberately not closing the picker here — PriceBookSearchModal is
+    // designed for adding several items in a row (it shows a brief "Added ✓"
+    // per item) and has its own "Done" button for the user to close when finished.
   }
 
   async function savePONotes(poId, newNotes) {
@@ -6791,6 +6794,9 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                     + New price book item
                   </Btn>
                 )}
+                <Btn variant="ghost" size="sm" onClick={() => setShowPriceBookManager(true)} style={{ marginLeft: 8 }} title="Opens the full price book in its own window so you can edit items without losing your place here">
+                  📖 Manage price book
+                </Btn>
               </div>
             </Panel>
 
@@ -7232,6 +7238,9 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                     <Btn variant="ghost" size="sm" onClick={() => setShowPriceBookSearchForHiddenCost(true)}>
                       🔍 Add from price book
                     </Btn>
+                    <Btn variant="ghost" size="sm" onClick={() => setShowPriceBookManager(true)} title="Opens the full price book in its own window so you can edit items without losing your place here">
+                      📖 Manage price book
+                    </Btn>
                   </div>
 
                   {hiddenCosts.length > 0 && (
@@ -7257,6 +7266,19 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
             />
           )}
         </div>
+
+        {showPriceBookManager && (
+          <Modal width={1100} onClose={() => setShowPriceBookManager(false)}>
+            <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 8 }}>
+              <Btn variant="ghost" size="sm" onClick={() => setShowPriceBookManager(false)}>Close</Btn>
+            </div>
+            {/* Full price book manager, embedded in its own window so it can stay
+                open — with its own search, filters, and item editor — alongside
+                whichever item picker (line items or hidden costs) is also open.
+                Closing this window doesn't affect the quote you're editing. */}
+            <PriceBookTab db={db} update={update} showToast={showToast} />
+          </Modal>
+        )}
 
         {showGPReport && (
           <Modal width={720} onClose={() => setShowGPReport(false)}>
