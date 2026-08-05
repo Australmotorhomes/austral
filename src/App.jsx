@@ -8397,14 +8397,27 @@ function CustomerKanbanBoard({ list, onOpen, onMove, onDelete, showCanceled, db 
     (byStage[key] || byStage.Deposit).push(c);
   });
 
+  // Hide columns with no cards — a card can still be moved into an empty/
+  // hidden stage via its own "Move to" dropdown, so nothing is lost, it's
+  // just not shown as its own (empty) column taking up board space.
+  const visibleStages = stagesToShow.filter((s) => (byStage[s.key] || []).length > 0);
+
   // Total value uses the same dedup-safe invoice calculation as the rest of
   // the app (Income/Sales, drill-downs) so a card's figure always matches
   // what's shown everywhere else — never a naive re-sum of the raw fields.
   const customerValue = (c) => getCustomerInvoicesForCalc(c).reduce((s, inv) => s + (parseFloat(inv.amount) || 0), 0);
 
+  if (visibleStages.length === 0) {
+    return (
+      <p className="muted" style={{ fontSize: 13, padding: "20px 0" }}>
+        No customers to show here.
+      </p>
+    );
+  }
+
   return (
     <div style={{ display: "flex", gap: 10, overflowX: "auto", paddingBottom: 8, width: "100%" }}>
-      {stagesToShow.map((stage) => {
+      {visibleStages.map((stage) => {
         const cards = byStage[stage.key] || [];
         const stageColor = CUSTOMER_STAGE_COLORS[stage.key] || { bg: "#f0e8d9", color: "#6b5240" };
         const totalValue = cards.reduce((s, c) => s + customerValue(c), 0);
@@ -9995,6 +10008,11 @@ function ProspectKanbanBoard({ list, onOpen, onMove, onDelete, showLost, db }) {
     });
   }
 
+  // Hide columns with no cards — a card can still be moved into an empty/
+  // hidden stage via its own "Move to" dropdown, so nothing is lost, it's
+  // just not shown as its own (empty) column taking up board space.
+  const visibleStages = stagesToShow.filter((s) => (byStage[s.key] || []).length > 0);
+
   return (
     <div>
       <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
@@ -10008,8 +10026,13 @@ function ProspectKanbanBoard({ list, onOpen, onMove, onDelete, showLost, db }) {
           <option value="followUpMonth">Follow-up month</option>
         </select>
       </div>
+      {visibleStages.length === 0 ? (
+        <p className="muted" style={{ fontSize: 13, padding: "20px 0" }}>
+          No prospects to show here.
+        </p>
+      ) : (
       <div style={{ display: "flex", gap: 10, overflowX: "auto", paddingBottom: 8, width: "100%" }}>
-      {stagesToShow.map((stage) => {
+      {visibleStages.map((stage) => {
         const cards = byStage[stage.key] || [];
         const stageColor = PROSPECT_STAGE_COLORS[stage.key] || { bg: "#f0e8d9", color: "#6b5240" };
         const totalValue = cards.reduce((s, p) => s + (parseFloat(p.salesValue) || 0), 0);
@@ -10139,6 +10162,7 @@ function ProspectKanbanBoard({ list, onOpen, onMove, onDelete, showLost, db }) {
         );
       })}
       </div>
+      )}
     </div>
   );
 }
