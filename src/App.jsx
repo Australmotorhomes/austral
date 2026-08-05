@@ -5127,21 +5127,30 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
                     notes: `Converted from prospect. Sales value: ${fmtMoney(prospect.salesValue || 0, "AUD")}`,
                   };
                   const customerResult = await supabaseREST("POST", "customers", newCustomer);
-                  
-                  // Delete prospect from Supabase
-                  await supabaseREST("DELETE", `crm_prospects?id=eq.${prospect.id}`, {});
-                  
+                  // supabaseREST POST returns an array of inserted rows (PostgREST
+                  // return=representation) — customerResult.id was always undefined,
+                  // which is what caused every later action on this customer (like
+                  // "Log activity") to PATCH `id=eq.undefined` and fail with a
+                  // "invalid input syntax for type uuid" error.
+                  const savedCustomerRow = Array.isArray(customerResult) ? customerResult[0] : customerResult;
+
+                  // Mark the prospect "Converted" instead of deleting it — same
+                  // reasoning as convertProspectToCustomer: the record is kept
+                  // (and hidden from active views, same as Lost) so funnel metrics
+                  // like conversion rate and lost rate have an accurate denominator.
+                  await supabaseREST("PATCH", `crm_prospects?id=eq.${prospect.id}`, { current_status: "converted" });
+
                   // Update local state
                   update((next) => {
                     // Add customer
                     next.customers.push({
-                      id: customerResult.id,
+                      id: savedCustomerRow.id,
                       ...newCustomer,
                       createdAt: todayISO(),
                     });
-                    // Remove prospect
-                    const idx = next.crm.findIndex((p) => p.id === conversionWorkflow.prospectId);
-                    if (idx >= 0) next.crm.splice(idx, 1);
+                    // Mark prospect converted (kept, not removed)
+                    const target = next.crm.find((p) => p.id === conversionWorkflow.prospectId);
+                    if (target) target.currentStatus = "converted";
                   });
                   showToast(`${conversionWorkflow.prospectName} converted to customer`);
                 } catch (err) {
