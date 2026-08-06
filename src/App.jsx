@@ -7076,76 +7076,20 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
             </Panel>
           </fieldset>
 
-          {/* Gross Profit — moved out of the (now hidden) quote preview so it's
-              always visible here, bottom-right, regardless of preview state. */}
-          {isQuote && (hasCostData || hiddenCosts.length > 0) && (
-            <Panel>
-              <div
-                onClick={() => setShowProfitSection(!showProfitSection)}
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  cursor: "pointer",
-                  fontSize: 13,
-                  fontWeight: 600,
-                  color: "#6b5240",
-                  userSelect: "none",
-                }}
-              >
-                <span style={{ fontFamily: "Georgia,serif", color: "#4a3527", fontSize: 16 }}>Gross Profit</span>
-                <span style={{ fontSize: 16, transition: "transform 0.3s ease", transform: showProfitSection ? "rotate(180deg)" : "rotate(0deg)" }}>▼</span>
-              </div>
-              {showProfitSection && (
-                <div style={{ marginTop: 12 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
-                    <span style={{ color: "#6b5240", fontWeight: 600 }}>Total product cost (AUD):</span>
-                    <span style={{ fontWeight: 700, color: "#4a3527" }}>{fmtMoney(knownCostTotal, "AUD")}</span>
-                  </div>
-                  {hiddenCosts.length > 0 && (
-                    <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
-                      <span style={{ color: "#6b5240", fontWeight: 600 }}>Total hidden cost (AUD):</span>
-                      <span style={{ fontWeight: 700, color: "#4a3527" }}>{fmtMoney(hiddenCostTotalAud, "AUD")}</span>
-                    </div>
-                  )}
-                  <div style={{ display: "flex", justifyContent: "space-between" }}>
-                    <span style={{ color: "#6b5240", fontWeight: 600 }}>Gross Profit %{hiddenCosts.length > 0 ? " (incl. hidden costs)" : ""}:</span>
-                    <span
-                      style={{
-                        fontWeight: 700,
-                        color: grossProfitPct != null && grossProfitPct < 0 ? "#a3442e" : "#5c7a4f",
-                      }}
-                    >
-                      {grossProfitPct != null ? `${grossProfitPct.toFixed(1)}%` : "—"}
-                    </span>
-                  </div>
-                  {lines.length > 0 && !hasCostData && (
-                    <div style={{ fontSize: 11, color: "#8a7a66", marginTop: 8 }}>
-                      Gross profit isn't shown for manually-added lines with no linked price book cost.
-                    </div>
-                  )}
-                  <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid #e3d8c6" }}>
-                    <Btn variant="ghost" size="sm" onClick={() => setShowGPReport(true)}>
-                      📊 Gross Profit report
-                    </Btn>
-                  </div>
-                </div>
-              )}
-            </Panel>
-          )}
-
-          {/* Hidden cost items — office use only. Never rendered into the
-              customer-facing quote preview/PDF (that only ever reads `lines`);
-              this is a separate array purely for internal cost tracking and
-              feeding Generate POs. Off by default via the toggle switch so it
-              doesn't show during a screen-share unless deliberately switched on. */}
+          {/* Office Use Only — combines what used to be two separate sections
+              (Gross Profit, and Hidden Cost Items) under one toggle. Never
+              rendered into the customer-facing quote preview/PDF (that only
+              ever reads `lines`); this is purely for internal cost tracking,
+              margin visibility, and feeding Generate POs. Off by default via
+              the toggle switch so it doesn't show during a screen-share
+              unless deliberately switched on. */}
           {isQuote && (
             <Panel>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                 <div>
-                  <span style={{ fontFamily: "Georgia,serif", color: "#4a3527", fontSize: 16 }}>Hidden Cost Items</span>
+                  <span style={{ fontFamily: "Georgia,serif", color: "#4a3527", fontSize: 16 }}>Office Use Only</span>
                   <div style={{ fontSize: 11, color: "#8a7a66", marginTop: 2 }}>
-                    Office use only — included in the price, never shown to the customer
+                    Hidden costs and gross profit — included in the price, never shown to the customer
                     {hiddenCosts.length > 0 ? ` · ${hiddenCosts.length} item${hiddenCosts.length !== 1 ? "s" : ""}` : ""}
                   </div>
                 </div>
@@ -7258,6 +7202,37 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                       <span style={{ fontWeight: 700, color: "#4a3527", fontSize: 13 }}>
                         {fmtMoney(hiddenCostTotalAud, "AUD")}
                       </span>
+                    </div>
+                  )}
+
+                  {/* Gross Profit — moved to the bottom of this combined section */}
+                  {(hasCostData || hiddenCosts.length > 0) && (
+                    <div style={{ marginTop: 18, paddingTop: 14, borderTop: "2px solid #e3d8c6" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
+                        <span style={{ color: "#6b5240", fontWeight: 600 }}>Total product cost (AUD):</span>
+                        <span style={{ fontWeight: 700, color: "#4a3527" }}>{fmtMoney(knownCostTotal, "AUD")}</span>
+                      </div>
+                      <div style={{ display: "flex", justifyContent: "space-between" }}>
+                        <span style={{ color: "#6b5240", fontWeight: 600 }}>Gross Profit %{hiddenCosts.length > 0 ? " (incl. hidden costs)" : ""}:</span>
+                        <span
+                          style={{
+                            fontWeight: 700,
+                            color: grossProfitPct != null && grossProfitPct < 0 ? "#a3442e" : "#5c7a4f",
+                          }}
+                        >
+                          {grossProfitPct != null ? `${grossProfitPct.toFixed(1)}%` : "—"}
+                        </span>
+                      </div>
+                      {lines.length > 0 && !hasCostData && (
+                        <div style={{ fontSize: 11, color: "#8a7a66", marginTop: 8 }}>
+                          Gross profit isn't shown for manually-added lines with no linked price book cost.
+                        </div>
+                      )}
+                      <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid #e3d8c6" }}>
+                        <Btn variant="ghost" size="sm" onClick={() => setShowGPReport(true)}>
+                          📊 Gross Profit report
+                        </Btn>
+                      </div>
                     </div>
                   )}
                 </div>
