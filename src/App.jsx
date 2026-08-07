@@ -425,6 +425,10 @@ function toSupabaseFormat(data, table) {
         copy.product_code = copy.productCode;
         delete copy.productCode;
       }
+      if (copy.groupIds !== undefined) {
+        copy.group_ids = copy.groupIds;
+        delete copy.groupIds;
+      }
       delete copy.createdAt;
       if (copy.updatedAt !== undefined) {
         copy.updated_at = copy.updatedAt;
@@ -572,6 +576,8 @@ function fromSupabaseFormat(data, table) {
       copy.notes = copy.notes || "";
       copy.itemDescription = copy.long_description || "";
       if (copy.product_code !== undefined) { copy.productCode = copy.product_code; delete copy.product_code; }
+      if (copy.group_ids !== undefined) { copy.groupIds = copy.group_ids; delete copy.group_ids; }
+      copy.groupIds = Array.isArray(copy.groupIds) ? copy.groupIds : [];
       if (copy.updated_at !== undefined) { copy.updatedAt = copy.updated_at || copy.created_at || null; delete copy.updated_at; }
       if (copy.created_at !== undefined) { copy.createdAt = copy.created_at; delete copy.created_at; }
       break;
@@ -659,6 +665,14 @@ async function loadAllData() {
       console.warn("app_settings not available yet (fine if its migration hasn't been run):", settingsErr);
     }
 
+    // Same fault-tolerant treatment for price_book_groups (Groups feature).
+    let priceBookGroups = [];
+    try {
+      priceBookGroups = await supabaseREST("GET", "price_book_groups");
+    } catch (groupsErr) {
+      console.warn("price_book_groups not available yet (fine if its migration hasn't been run):", groupsErr);
+    }
+
     return {
       items: items || [],
       quotes: quotes || [],
@@ -668,6 +682,7 @@ async function loadAllData() {
       crm: crm || [],
       categories: categories || [],
       appSettings: appSettings || [],
+      priceBookGroups: priceBookGroups || [],
     };
   } catch (err) {
     console.error('Load data error:', err);
@@ -2754,6 +2769,7 @@ function PriceBookTab({ db, update, showToast }) {
   const isMobile = useIsMobile();
   const [showCategoryManager, setShowCategoryManager] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
+  const [showGroupsManager, setShowGroupsManager] = useState(false);
 
   if (!db || !db.items) {
     return (
@@ -2840,6 +2856,59 @@ function PriceBookTab({ db, update, showToast }) {
     });
   }
 
+  // Groups (unlike models/categories above) are persisted for real —
+  // they're a brand-new feature and losing them on refresh would be a bad
+  // first impression. See add-price-book-groups.sql for the table.
+  async function createGroup(name) {
+    try {
+      const result = await supabaseREST("POST", "price_book_groups", { name });
+      const saved = Array.isArray(result) ? result[0] : result;
+      update((next) => {
+        next.priceBookGroups = next.priceBookGroups || [];
+        next.priceBookGroups.push(saved);
+      });
+      showToast(`Group "${name}" created`);
+    } catch (err) {
+      showToast(`Error creating group: ${err.message}`);
+      console.error("Create group error:", err);
+    }
+  }
+  async function renameGroup(id, name) {
+    try {
+      await supabaseREST("PATCH", `price_book_groups?id=eq.${id}`, { name, updated_at: todayISO() });
+      update((next) => {
+        const g = (next.priceBookGroups || []).find((x) => x.id === id);
+        if (g) g.name = name;
+      });
+      showToast("Group renamed");
+    } catch (err) {
+      showToast(`Error renaming group: ${err.message}`);
+      console.error("Rename group error:", err);
+    }
+  }
+  async function deleteGroup(id) {
+    try {
+      await supabaseREST("DELETE", `price_book_groups?id=eq.${id}`);
+      // Also strip this group id from any item that had it, so items don't
+      // carry a dangling reference to a group that no longer exists.
+      const affectedItems = (db.items || []).filter((i) => (i.groupIds || []).includes(id));
+      for (const it of affectedItems) {
+        const newGroupIds = (it.groupIds || []).filter((gid) => gid !== id);
+        await supabaseREST("PATCH", `items?id=eq.${it.id}`, toSupabaseFormat({ groupIds: newGroupIds }, "items"));
+      }
+      update((next) => {
+        next.priceBookGroups = (next.priceBookGroups || []).filter((g) => g.id !== id);
+        next.items.forEach((it) => {
+          if ((it.groupIds || []).includes(id)) it.groupIds = it.groupIds.filter((gid) => gid !== id);
+        });
+      });
+      showToast("Group deleted");
+    } catch (err) {
+      showToast(`Error deleting group: ${err.message}`);
+      console.error("Delete group error:", err);
+    }
+  }
+
   return (
     <section>
       <div className="toolbar-row">
@@ -2851,7 +2920,10 @@ function PriceBookTab({ db, update, showToast }) {
             Supplier costs for every model, variation, and option. Add new lines any time as your range grows.
           </p>
         </div>
-        <div style={{ display: "flex", gap: 10 }}>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+          <Btn variant="ghost" onClick={() => setShowGroupsManager(true)} style={{ fontSize: 13 }}>
+            🗂️ Groups
+          </Btn>
           <Btn variant="ghost" onClick={() => setShowImportModal(true)} style={{ fontSize: 13 }}>
             📥 Import CSV
           </Btn>
@@ -2972,6 +3044,8 @@ function PriceBookTab({ db, update, showToast }) {
           categories={db.categories}
           suppliers={db.suppliers}
           fx={db.fx}
+          groups={db.priceBookGroups || []}
+          allItems={db.items}
           onAddModel={addModel}
           onAddCategory={addCategory}
           onCancel={() => setEditingItem(undefined)}
@@ -3017,6 +3091,18 @@ function PriceBookTab({ db, update, showToast }) {
             setShowCategoryManager(false);
           }}
           onCancel={() => setShowCategoryManager(false)}
+        />
+      )}
+
+      {showGroupsManager && (
+        <GroupsModal
+          mode="manage"
+          groups={db.priceBookGroups || []}
+          items={db.items}
+          onCreateGroup={createGroup}
+          onRenameGroup={renameGroup}
+          onDeleteGroup={deleteGroup}
+          onClose={() => setShowGroupsManager(false)}
         />
       )}
 
@@ -3319,7 +3405,144 @@ function CategoryManager({ categories, onUpdate, onCancel }) {
   );
 }
 
-function ItemModal({ editing, models, categories, suppliers, fx, onAddModel, onAddCategory, onCancel, onSave }) {
+// Price Book Groups: named, reusable sets of price book items (e.g. "Solar
+// Package") that can be bulk-added to a quote's Line Items or Hidden Costs
+// in one action. One shared modal, two modes:
+//
+// - mode="manage": create/rename/delete groups. Opened via the "Groups"
+//   button at the top of the Price Book tab. New groups can ONLY be created
+//   here — the per-item picker below can check/uncheck existing groups but
+//   never create new ones, by design.
+// - mode="select": shown from a single item's "Add to Group" button.
+//   Checkboxes toggle which groups THIS item belongs to (an item can be in
+//   more than one group). Changes here are held in the item form's own
+//   local state and only persisted when that item's form is saved, same as
+//   every other field on the item (model, category, etc.) — not written
+//   to the database immediately.
+function GroupsModal({ mode, groups, item, itemGroupIds, items, onClose, onCreateGroup, onRenameGroup, onDeleteGroup, onToggleItemGroup }) {
+  const isMobile = useIsMobile();
+  const [newGroupName, setNewGroupName] = useState("");
+  const [editingId, setEditingId] = useState(null);
+  const [editingName, setEditingName] = useState("");
+
+  function startEdit(g) {
+    setEditingId(g.id);
+    setEditingName(g.name);
+  }
+  function saveEdit() {
+    const trimmed = editingName.trim();
+    if (trimmed) onRenameGroup(editingId, trimmed);
+    setEditingId(null);
+  }
+  function handleCreate() {
+    const trimmed = newGroupName.trim();
+    if (!trimmed) return;
+    onCreateGroup(trimmed);
+    setNewGroupName("");
+  }
+
+  return (
+    <Modal onClose={onClose} width={isMobile ? undefined : 520}>
+      <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: "0 0 4px", fontSize: 19 }}>
+        {mode === "manage" ? "Manage Groups" : `Add "${item?.name || item?.description || "item"}" to groups`}
+      </h3>
+      {mode === "select" && (
+        <p style={{ fontSize: 12, color: "#8a7a66", margin: "0 0 16px" }}>
+          Check any groups this item belongs to — it can be in more than one.
+        </p>
+      )}
+      {mode === "manage" && (
+        <p style={{ fontSize: 12, color: "#8a7a66", margin: "0 0 16px" }}>
+          Groups let you bulk-add a whole set of price book items to a quote's Line Items or Hidden Costs in one go. Add items to a group from that item's own edit screen.
+        </p>
+      )}
+
+      {(!groups || groups.length === 0) ? (
+        <p className="muted" style={{ fontSize: 13, margin: "10px 0" }}>
+          {mode === "manage" ? "No groups yet — create one below." : "No groups exist yet. Create one from the Price Book tab's \"Groups\" button first."}
+        </p>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: mode === "manage" ? 18 : 0, maxHeight: 360, overflowY: "auto" }}>
+          {groups.map((g) => {
+            const memberCount = (items || []).filter((i) => (i.groupIds || []).includes(g.id)).length;
+            if (mode === "select") {
+              const checked = (itemGroupIds || []).includes(g.id);
+              return (
+                <label
+                  key={g.id}
+                  style={{
+                    display: "flex", alignItems: "center", gap: 10, padding: "10px 12px",
+                    border: "1px solid #e3d8c6", borderRadius: 6, cursor: "pointer",
+                    background: checked ? "#faf3ea" : "#fff",
+                  }}
+                >
+                  <input type="checkbox" checked={checked} onChange={() => onToggleItemGroup(g.id, !checked)} style={{ width: 18, height: 18, flexShrink: 0 }} />
+                  <span style={{ flex: 1, fontSize: 14, color: "#4a3527" }}>{g.name}</span>
+                  <span style={{ fontSize: 11, color: "#8a7a66", flexShrink: 0 }}>{memberCount} item{memberCount !== 1 ? "s" : ""}</span>
+                </label>
+              );
+            }
+            // manage mode
+            return (
+              <div key={g.id} style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                {editingId === g.id ? (
+                  <>
+                    <input
+                      style={{ ...inputStyle, flex: 1, minWidth: 140, marginBottom: 0 }}
+                      type="text"
+                      value={editingName}
+                      onChange={(e) => setEditingName(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter") saveEdit(); if (e.key === "Escape") setEditingId(null); }}
+                      autoFocus
+                    />
+                    <Btn variant="primary" size="sm" onClick={saveEdit}>✓</Btn>
+                    <Btn variant="ghost" size="sm" onClick={() => setEditingId(null)}>✕</Btn>
+                  </>
+                ) : (
+                  <>
+                    <div style={{ flex: 1, minWidth: 140, padding: "8px 10px", border: "1px solid #e3d8c6", borderRadius: 6, fontSize: 14, color: "#4a3527" }}>
+                      {g.name} <span style={{ fontSize: 11, color: "#8a7a66" }}>· {memberCount} item{memberCount !== 1 ? "s" : ""}</span>
+                    </div>
+                    <Btn variant="ghost" size="sm" onClick={() => startEdit(g)}>Rename</Btn>
+                    <button
+                      onClick={() => { if (window.confirm(`Delete group "${g.name}"? Items stay in your price book — they're just removed from this group.`)) onDeleteGroup(g.id); }}
+                      style={{ background: "none", border: "none", color: "#a3442e", cursor: "pointer", fontSize: 16, padding: 4 }}
+                      title="Delete group"
+                    >
+                      ✕
+                    </button>
+                  </>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {mode === "manage" && (
+        <div style={{ display: "flex", gap: 8, borderTop: "1px solid #e3d8c6", paddingTop: 14, flexWrap: "wrap" }}>
+          <input
+            style={{ ...inputStyle, flex: 1, minWidth: 160, marginBottom: 0 }}
+            type="text"
+            placeholder="New group name (e.g. Solar Package)"
+            value={newGroupName}
+            onChange={(e) => setNewGroupName(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") handleCreate(); }}
+          />
+          <Btn variant="primary" onClick={handleCreate}>+ Add group</Btn>
+        </div>
+      )}
+
+      <div style={{ marginTop: 20, textAlign: "right" }}>
+        <Btn variant={mode === "select" ? "primary" : "ghost"} onClick={onClose}>
+          {mode === "select" ? "Done" : "Close"}
+        </Btn>
+      </div>
+    </Modal>
+  );
+}
+
+function ItemModal({ editing, models, categories, suppliers, fx, groups, allItems, onAddModel, onAddCategory, onCancel, onSave }) {
   // categories from Supabase may be objects like {id, name}; normalise to plain strings
   const categoryNames = (categories || []).map((c) => (typeof c === "string" ? c : c.name)).filter(Boolean);
   const modelNames = (models || []).map((m) => (typeof m === "string" ? m : m.name)).filter(Boolean);
@@ -3342,6 +3565,8 @@ function ItemModal({ editing, models, categories, suppliers, fx, onAddModel, onA
   const [notes, setNotes] = useState(editing ? editing.notes || "" : "");
   const [itemDescription, setItemDescription] = useState(editing ? editing.itemDescription || "" : "");
   const [productCode, setProductCode] = useState(editing ? editing.productCode || "" : "");
+  const [groupIds, setGroupIds] = useState(editing ? editing.groupIds || [] : []);
+  const [showGroupPicker, setShowGroupPicker] = useState(false);
   const [error, setError] = useState("");
   const [promptMode, setPromptMode] = useState(null); // null | "model" | "category"
 
@@ -3392,6 +3617,7 @@ function ItemModal({ editing, models, categories, suppliers, fx, onAddModel, onA
         supplier: supplier.trim(),
         notes: notes.trim(),
         itemDescription: itemDescription.trim(),
+        groupIds,
       },
       editing
     );
@@ -3505,6 +3731,32 @@ function ItemModal({ editing, models, categories, suppliers, fx, onAddModel, onA
           />
         </Field>
       </div>
+
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginTop: -6, marginBottom: 14 }}>
+        <Btn variant="ghost" size="sm" onClick={() => setShowGroupPicker(true)}>
+          🗂️ Add to Group
+        </Btn>
+        {groupIds.length > 0 && (
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {groupIds.map((gid) => {
+              const g = (groups || []).find((x) => x.id === gid);
+              if (!g) return null;
+              return (
+                <span
+                  key={gid}
+                  style={{
+                    fontSize: 11, fontWeight: 600, padding: "3px 8px", borderRadius: 5,
+                    background: "#faf3ea", color: "#b5552b", border: "1px solid #e3d8c6",
+                  }}
+                >
+                  {g.name}
+                </span>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
       {showAudPreview && (
         <div style={{ fontSize: 12.5, color: "#8a7a66", marginTop: -6, marginBottom: 13 }}>
           ≈ {fmtMoney(toAUD(parsedCostPreview, "USD", fx ? fx.usdAudRate : FALLBACK_USD_AUD_RATE), "AUD")} AUD at the current rate (1 USD = {(fx ? fx.usdAudRate : FALLBACK_USD_AUD_RATE).toFixed(4)} AUD)
@@ -3588,6 +3840,19 @@ function ItemModal({ editing, models, categories, suppliers, fx, onAddModel, onA
             }
             setPromptMode(null);
           }}
+        />
+      )}
+      {showGroupPicker && (
+        <GroupsModal
+          mode="select"
+          groups={groups || []}
+          items={allItems}
+          item={{ name, description: name }}
+          itemGroupIds={groupIds}
+          onToggleItemGroup={(gid, checked) => {
+            setGroupIds((prev) => (checked ? [...prev, gid] : prev.filter((x) => x !== gid)));
+          }}
+          onClose={() => setShowGroupPicker(false)}
         />
       )}
     </Modal>
@@ -5611,6 +5876,43 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
     // per item) and has its own "Done" button for the user to close when finished.
   }
 
+  // Bulk-add every item in a Group in one go, as separate lines each keeping
+  // its own qty/cost/supplier — same underlying add functions as adding one
+  // item at a time, just looped, so behavior stays consistent either way.
+  function addGroupToLines(groupId) {
+    const groupItems = (items || []).filter((i) => (i.groupIds || []).includes(groupId));
+    if (groupItems.length === 0) {
+      showToast("That group has no items in it yet");
+      return;
+    }
+    groupItems.forEach((item) => addItemToLines(item));
+    showToast(`Added ${groupItems.length} item${groupItems.length !== 1 ? "s" : ""} from group`);
+  }
+  function addGroupToHiddenCosts(groupId) {
+    const groupItems = (items || []).filter((i) => (i.groupIds || []).includes(groupId));
+    if (groupItems.length === 0) {
+      showToast("That group has no items in it yet");
+      return;
+    }
+    groupItems.forEach((item) => addItemToHiddenCosts(item));
+    showToast(`Added ${groupItems.length} item${groupItems.length !== 1 ? "s" : ""} from group`);
+  }
+  // Same idea, but for the isolated member-PO line items editor (mLines) —
+  // see lineItemsPoId above for why this is a separate array from `lines`.
+  function addGroupToMLines(groupId) {
+    const groupItems = (items || []).filter((i) => (i.groupIds || []).includes(groupId));
+    if (groupItems.length === 0) {
+      showToast("That group has no items in it yet");
+      return;
+    }
+    groupItems.forEach((item) => {
+      const defaultPrice = isQuote ? (item.sellPrice != null ? item.sellPrice : calcSellPrice(item.cost)) : item.cost;
+      setMLinesState((prev) => [...prev, { desc: `${item.model} — ${item.name}`, qty: 1, price: defaultPrice, currency: item.currency || "AUD", itemId: item.id }]);
+    });
+    setMLinesDirty(true);
+    showToast(`Added ${groupItems.length} item${groupItems.length !== 1 ? "s" : ""} from group`);
+  }
+
   async function savePONotes(poId, newNotes) {
     // Save notes for a specific PO (used for member POs in consolidated view)
     try {
@@ -6798,6 +7100,19 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                 <Btn variant="ghost" size="sm" onClick={addBlankLine}>
                   + Add blank line
                 </Btn>
+                {(db.priceBookGroups || []).length > 0 && (
+                  <select
+                    style={{ ...inputStyle, width: "auto", display: "inline-block", fontSize: 12, padding: "6px 10px", marginLeft: 8, marginBottom: 0 }}
+                    value=""
+                    onChange={(e) => { if (e.target.value) addGroupToLines(e.target.value); e.target.value = ""; }}
+                    title="Add every item in a group as its own line, in one go"
+                  >
+                    <option value="">🗂️ Add group…</option>
+                    {(db.priceBookGroups || []).map((g) => (
+                      <option key={g.id} value={g.id}>{g.name}</option>
+                    ))}
+                  </select>
+                )}
                 {onAddItem && (
                   <Btn variant="ghost" size="sm" onClick={() => setShowQuickAddItem(true)} style={{ marginLeft: 8 }}>
                     + New price book item
@@ -6935,10 +7250,23 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                       click the rate badge in the header to update it.
                     </div>
                   )}
-                  <div style={{ marginTop: 10, display: "flex", gap: 8, alignItems: "center" }}>
+                  <div style={{ marginTop: 10, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                     <Btn variant="ghost" size="sm" onClick={addBlankMLine}>
                       + Add blank line
                     </Btn>
+                    {(db.priceBookGroups || []).length > 0 && (
+                      <select
+                        style={{ ...inputStyle, width: "auto", display: "inline-block", fontSize: 12, padding: "6px 10px", marginBottom: 0 }}
+                        value=""
+                        onChange={(e) => { if (e.target.value) addGroupToMLines(e.target.value); e.target.value = ""; }}
+                        title="Add every item in a group as its own line, in one go"
+                      >
+                        <option value="">🗂️ Add group…</option>
+                        {(db.priceBookGroups || []).map((g) => (
+                          <option key={g.id} value={g.id}>{g.name}</option>
+                        ))}
+                      </select>
+                    )}
                     <Btn variant="primary" size="sm" onClick={saveMemberLines} disabled={!mLinesDirty}>
                       {mLinesDirty ? "Save line items" : "Saved"}
                     </Btn>
@@ -7184,10 +7512,23 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                     ))
                   )}
 
-                  <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+                  <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap", alignItems: "center" }}>
                     <Btn variant="ghost" size="sm" onClick={addBlankHiddenCost}>
                       + Add blank cost item
                     </Btn>
+                    {(db.priceBookGroups || []).length > 0 && (
+                      <select
+                        style={{ ...inputStyle, width: "auto", display: "inline-block", fontSize: 12, padding: "6px 10px", marginBottom: 0 }}
+                        value=""
+                        onChange={(e) => { if (e.target.value) addGroupToHiddenCosts(e.target.value); e.target.value = ""; }}
+                        title="Add every item in a group as its own hidden cost line, in one go"
+                      >
+                        <option value="">🗂️ Add group…</option>
+                        {(db.priceBookGroups || []).map((g) => (
+                          <option key={g.id} value={g.id}>{g.name}</option>
+                        ))}
+                      </select>
+                    )}
                     <Btn variant="ghost" size="sm" onClick={() => setShowPriceBookSearchForHiddenCost(true)}>
                       🔍 Add from price book
                     </Btn>
@@ -7952,6 +8293,8 @@ ${clone?.innerHTML || ""}
           categories={categories}
           suppliers={db ? db.suppliers : []}
           fx={fx}
+          groups={db ? db.priceBookGroups || [] : []}
+          allItems={db ? db.items : []}
           onAddModel={onAddModel}
           onAddCategory={onAddCategory}
           onCancel={() => setShowQuickAddItem(false)}
