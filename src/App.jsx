@@ -9631,25 +9631,63 @@ function ContactsTab({ kind, db, update, showToast, nextNumber, pendingOpen, cle
 function AttachmentsPanel({ recordId, recordType, attachments, onAttachmentsChange }) {
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState("");
+  const [showUploadModal, setShowUploadModal] = useState(false);
+  const [isDragOver, setIsDragOver] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(null); // { current, total }
   const bucket = "attachments";
+  const fileInputRef = useRef(null);
+  // Client-side courtesy limit only — catches an obviously-too-large file
+  // immediately with a friendly message rather than letting it fail partway
+  // through an upload. Not necessarily the same as your Supabase storage
+  // bucket's own configured limit — adjust this number if that differs.
+  const MAX_FILE_SIZE_MB = 25;
 
-  async function handleFileChange(e) {
-    const file = e.target.files[0];
-    if (!file) return;
+  async function uploadFiles(fileList) {
+    const files = Array.from(fileList || []);
+    if (files.length === 0) return;
+
+    const tooLarge = files.filter((f) => f.size > MAX_FILE_SIZE_MB * 1024 * 1024);
+    if (tooLarge.length > 0) {
+      setError(`${tooLarge.map((f) => f.name).join(", ")} exceed${tooLarge.length === 1 ? "s" : ""} the ${MAX_FILE_SIZE_MB}MB limit and won't be uploaded.`);
+    }
+    const uploadable = files.filter((f) => f.size <= MAX_FILE_SIZE_MB * 1024 * 1024);
+    if (uploadable.length === 0) return;
+
     setUploading(true);
-    setError("");
+    if (tooLarge.length === 0) setError("");
+    setUploadProgress({ current: 0, total: uploadable.length });
+    const newAttachments = [];
     try {
-      const path = `${recordType}/${recordId}/${Date.now()}_${file.name}`;
-      const url = await uploadAttachment(bucket, path, file);
-      const newAttachment = { name: file.name, url, path, uploadedAt: new Date().toISOString() };
-      const updated = [...(attachments || []), newAttachment];
-      onAttachmentsChange(updated);
+      for (let i = 0; i < uploadable.length; i++) {
+        const file = uploadable[i];
+        setUploadProgress({ current: i + 1, total: uploadable.length });
+        const path = `${recordType}/${recordId}/${Date.now()}_${file.name}`;
+        const url = await uploadAttachment(bucket, path, file);
+        newAttachments.push({ name: file.name, url, path, uploadedAt: new Date().toISOString() });
+      }
+      onAttachmentsChange([...(attachments || []), ...newAttachments]);
+      if (tooLarge.length === 0) setShowUploadModal(false);
     } catch (err) {
       setError(`Upload failed: ${err.message}`);
+      if (newAttachments.length > 0) {
+        onAttachmentsChange([...(attachments || []), ...newAttachments]);
+      }
     } finally {
       setUploading(false);
-      e.target.value = "";
+      setUploadProgress(null);
     }
+  }
+
+  function handleFileInputChange(e) {
+    uploadFiles(e.target.files);
+    e.target.value = "";
+  }
+
+  function handleDrop(e) {
+    e.preventDefault();
+    setIsDragOver(false);
+    if (uploading) return;
+    uploadFiles(e.dataTransfer.files);
   }
 
   async function handleDelete(att) {
@@ -9663,19 +9701,23 @@ function AttachmentsPanel({ recordId, recordType, attachments, onAttachmentsChan
 
   return (
     <div style={{ marginTop: 4 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
-        <label style={{
-          display: "inline-flex", alignItems: "center", gap: 6,
-          padding: "5px 12px", background: "#d4a574", color: "#fff",
-          borderRadius: 4, fontSize: 12, fontWeight: 600, cursor: "pointer",
-          opacity: uploading ? 0.6 : 1,
-        }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8, flexWrap: "wrap" }}>
+        <button
+          type="button"
+          onClick={() => { setError(""); setShowUploadModal(true); }}
+          disabled={uploading}
+          style={{
+            display: "inline-flex", alignItems: "center", gap: 6,
+            padding: "5px 12px", background: "#d4a574", color: "#fff",
+            border: "none", borderRadius: 4, fontSize: 12, fontWeight: 600, cursor: "pointer",
+            opacity: uploading ? 0.6 : 1,
+          }}
+        >
           {uploading ? "Uploading…" : "＋ Add file"}
-          <input type="file" style={{ display: "none" }} onChange={handleFileChange} disabled={uploading} />
-        </label>
+        </button>
         <span style={{ fontSize: 11, color: "#8a7a66" }}>PDF, images, Word docs, etc.</span>
       </div>
-      {error && <p style={{ fontSize: 12, color: "#a3442e", margin: "0 0 8px" }}>{error}</p>}
+      {error && !showUploadModal && <p style={{ fontSize: 12, color: "#a3442e", margin: "0 0 8px" }}>{error}</p>}
       {(attachments || []).length === 0 ? (
         <p style={{ fontSize: 12, color: "#aaa", margin: 0 }}>No attachments yet.</p>
       ) : (
@@ -9692,6 +9734,58 @@ function AttachmentsPanel({ recordId, recordType, attachments, onAttachmentsChan
             </div>
           ))}
         </div>
+      )}
+
+      {showUploadModal && (
+        <Modal onClose={() => { if (!uploading) setShowUploadModal(false); }} width={460}>
+          <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: "0 0 16px", fontSize: 18 }}>
+            Upload files
+          </h3>
+          <div
+            onDragOver={(e) => { e.preventDefault(); if (!uploading) setIsDragOver(true); }}
+            onDragLeave={() => setIsDragOver(false)}
+            onDrop={handleDrop}
+            style={{
+              border: `2px dashed ${isDragOver ? "#b5552b" : "#d3c9b8"}`,
+              borderRadius: 8,
+              padding: "36px 20px",
+              textAlign: "center",
+              background: isDragOver ? "#faf3ea" : "#faf7f2",
+              transition: "border-color 0.15s ease, background 0.15s ease",
+            }}
+          >
+            {uploading ? (
+              <p style={{ fontSize: 14, color: "#6b5240", margin: 0 }}>
+                Uploading {uploadProgress?.current} of {uploadProgress?.total}…
+              </p>
+            ) : (
+              <>
+                <p style={{ fontSize: 14, color: "#6b5240", margin: "0 0 16px" }}>
+                  Drag and drop file(s) or select manually
+                </p>
+                <Btn variant="secondary" onClick={() => fileInputRef.current && fileInputRef.current.click()}>
+                  Select files
+                </Btn>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  multiple
+                  style={{ display: "none" }}
+                  onChange={handleFileInputChange}
+                />
+              </>
+            )}
+          </div>
+          <p style={{ fontSize: 11, color: "#8a7a66", margin: "10px 0 0" }}>
+            {MAX_FILE_SIZE_MB} MB maximum file size. File types accepted: PDF, JPG, PNG, Word docs.
+          </p>
+          {error && <p style={{ fontSize: 12, color: "#a3442e", margin: "8px 0 0" }}>{error}</p>}
+          <div style={{ marginTop: 20, textAlign: "right" }}>
+            <Btn variant="ghost" onClick={() => setShowUploadModal(false)} disabled={uploading}>
+              Cancel
+            </Btn>
+          </div>
+        </Modal>
       )}
     </div>
   );
