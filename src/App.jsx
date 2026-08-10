@@ -12428,7 +12428,7 @@ function StockMovementTable({ db, collapsed, setCollapsed, fyEnd, setFyEnd, curr
       const lineValue = linePrice * qty;
       const freightShare = totalLineValue > 0 ? (lineValue / totalLineValue) * freight : 0;
       const entryValue = lineValue + freightShare;
-      if (!stockIN[code]) stockIN[code] = { code, desc: item?.name || item?.description || l.desc || l.description || code, qty: 0, value: 0, entries: [] };
+      if (!stockIN[code]) stockIN[code] = { code, desc: item?.name || item?.description || l.desc || l.description || code, model: item?.model || "", qty: 0, value: 0, entries: [] };
       stockIN[code].qty += qty;
       stockIN[code].value += entryValue;
       stockIN[code].entries.push({
@@ -12548,6 +12548,7 @@ function StockMovementTable({ db, collapsed, setCollapsed, fyEnd, setFyEnd, curr
                 const inVal = stockIN[code]?.value || 0;
                 const outVal = inQty > 0 ? (outQty / inQty) * inVal : 0;
                 const onHandVal = inVal - outVal;
+                const itemModel = stockIN[code]?.model || (db.items || []).find((i) => i.productCode === code)?.model || "";
                 return (
                   <div
                     key={code}
@@ -12556,7 +12557,10 @@ function StockMovementTable({ db, collapsed, setCollapsed, fyEnd, setFyEnd, curr
                   >
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
                       <span style={{ fontFamily: "monospace", fontWeight: 700, color: "#b5552b", fontSize: 13 }}>{code}</span>
-                      <span style={{ fontSize: 12, color: "#4a3527" }}>{(stockIN[code]?.desc || "").slice(0, 12)}</span>
+                      <span style={{ fontSize: 12, color: "#4a3527", textAlign: "right" }}>
+                        {itemModel && <span style={{ color: "#6b5240" }}>{itemModel} · </span>}
+                        {(stockIN[code]?.desc || "").slice(0, 12)}
+                      </span>
                     </div>
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 4 }}>
                       {[
@@ -12604,6 +12608,7 @@ function StockMovementTable({ db, collapsed, setCollapsed, fyEnd, setFyEnd, curr
                 <thead>
                   <tr style={{ background: "#e8f5ec", borderBottom: "2px solid #3a7a4a" }}>
                     <th style={{ ...thS, textAlign: "left", width: 90 }}>Code</th>
+                    <th style={{ ...thS, textAlign: "left" }}>Model</th>
                     <th style={{ ...thS, textAlign: "left" }}>Description</th>
                     <th style={{ ...thS, color: "#3a7a4a" }}>IN</th>
                     <th style={{ ...thS, color: "#b5552b" }}>OUT</th>
@@ -12614,7 +12619,7 @@ function StockMovementTable({ db, collapsed, setCollapsed, fyEnd, setFyEnd, curr
                 <tbody>
                   {allCodes.length === 0 ? (
                     <tr>
-                      <td colSpan={6} style={{ padding: 16, textAlign: "center", color: "#aaa", fontSize: 12 }}>
+                      <td colSpan={7} style={{ padding: 16, textAlign: "center", color: "#aaa", fontSize: 12 }}>
                         No stock data for {getFYRange(fyEnd).label}. Set a PO status to "Paid" to count stock IN.
                       </td>
                     </tr>
@@ -12625,6 +12630,7 @@ function StockMovementTable({ db, collapsed, setCollapsed, fyEnd, setFyEnd, curr
                     const inVal = stockIN[code]?.value || 0;
                     const outVal = inQty > 0 ? (outQty / inQty) * inVal : 0;
                     const onHandVal = inVal - outVal;
+                    const itemModel = stockIN[code]?.model || (db.items || []).find((i) => i.productCode === code)?.model || "";
                     return (
                       <tr
                         key={code}
@@ -12634,6 +12640,7 @@ function StockMovementTable({ db, collapsed, setCollapsed, fyEnd, setFyEnd, curr
                         onMouseLeave={(e) => (e.currentTarget.style.background = ri % 2 === 0 ? "#fff" : "#f4faf6")}
                       >
                         <td style={{ ...tdL, fontFamily: "monospace", fontWeight: 700, color: "#b5552b", fontSize: 11 }}>{code}</td>
+                        <td style={{ ...tdL, color: "#6b5240" }}>{itemModel || "—"}</td>
                         <td style={{ ...tdL, color: "#4a3527" }}>{(stockIN[code]?.desc || "").slice(0, 12)}</td>
                         <td style={{ ...tdS, color: "#3a7a4a", fontWeight: 600 }}>{inQty}</td>
                         <td style={{ ...tdS, color: "#b5552b", fontWeight: 600 }}>{outQty || "—"}</td>
@@ -12649,7 +12656,7 @@ function StockMovementTable({ db, collapsed, setCollapsed, fyEnd, setFyEnd, curr
                       onMouseEnter={(e) => (e.currentTarget.style.background = "#d8ecdf")}
                       onMouseLeave={(e) => (e.currentTarget.style.background = "#e8f5ec")}
                     >
-                      <td style={{ ...tdL, fontWeight: 700, color: "#2d5a38" }} colSpan={2}>Total</td>
+                      <td style={{ ...tdL, fontWeight: 700, color: "#2d5a38" }} colSpan={3}>Total</td>
                       <td style={{ ...tdS, color: "#3a7a4a", fontWeight: 700 }}>{totIN}</td>
                       <td style={{ ...tdS, color: "#b5552b", fontWeight: 700 }}>{totOUT || "—"}</td>
                       <td style={{ ...tdS, color: "#4a5f7f", fontWeight: 700 }}>{totOH}</td>
