@@ -438,7 +438,7 @@ function toSupabaseFormat(data, table) {
         copy.updated_at = copy.updatedAt;
         delete copy.updatedAt;
       } else {
-        copy.updated_at = new Date().toISOString().slice(0, 10);
+        copy.updated_at = nowISO();
       }
       if (!copy.number) copy.number = `ITEM-${Date.now()}`;
       break;
@@ -897,6 +897,15 @@ function fmtDateTime(iso) {
 }
 function todayISO() {
   return new Date().toISOString().slice(0, 10);
+}
+// Full timestamp (date + time), unlike todayISO() above which is date-only.
+// Use this for any "updatedAt"/"updated_at" field — a date-only string like
+// "2026-08-12" gets parsed by JS as midnight UTC, which then displays as
+// 10:00 AM in AEST (UTC+10) regardless of when the save actually happened.
+// todayISO() is still correct for genuine date-only fields (due dates, ETAs,
+// invoice dates, etc.) where only the day matters, not the time.
+function nowISO() {
+  return new Date().toISOString();
 }
 // Convert a cost in its native currency to AUD using the current USD->AUD rate.
 function toAUD(amount, currency, usdAudRate) {
@@ -2821,18 +2830,18 @@ function PriceBookTab({ db, update, showToast }) {
       try {
         if (editing) {
           // Update existing item in Supabase
-          const updatePayload = toSupabaseFormat({ ...payload, updatedAt: todayISO() }, "items");
+          const updatePayload = toSupabaseFormat({ ...payload, updatedAt: nowISO() }, "items");
           await supabaseREST("PATCH", `items?id=eq.${editing.id}`, updatePayload);
           // Then update local state
           update((next) => {
             const target = next.items.find((i) => i.id === editing.id);
-            Object.assign(target, payload, { updatedAt: todayISO() });
+            Object.assign(target, payload, { updatedAt: nowISO() });
           });
         } else {
           // Create new item in Supabase — let Postgres generate the real UUID
           const newItem = {
             createdAt: todayISO(),
-            updatedAt: todayISO(),
+            updatedAt: nowISO(),
             ...payload,
           };
           const createPayload = toSupabaseFormat(newItem, "items");
@@ -2891,7 +2900,7 @@ function PriceBookTab({ db, update, showToast }) {
   }
   async function renameGroup(id, name) {
     try {
-      await supabaseREST("PATCH", `price_book_groups?id=eq.${id}`, { name, updated_at: todayISO() });
+      await supabaseREST("PATCH", `price_book_groups?id=eq.${id}`, { name, updated_at: nowISO() });
       update((next) => {
         const g = (next.priceBookGroups || []).find((x) => x.id === id);
         if (g) g.name = name;
@@ -3933,7 +3942,7 @@ function ImportCSVModal({ models, categories, onImport, onCancel, onAddModel, on
         supplier: row.supplier || "",
         cost: cost,
         createdAt: todayISO(),
-        updatedAt: todayISO(),
+        updatedAt: nowISO(),
       });
     }
 
@@ -4139,7 +4148,7 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
       try {
         const newItem = {
           createdAt: todayISO(),
-          updatedAt: todayISO(),
+          updatedAt: nowISO(),
           ...payload,
         };
         const createPayload = toSupabaseFormat(newItem, "items");
@@ -4294,14 +4303,14 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
     (async () => {
       try {
         const table = isQuote ? "quotes" : "purchase_orders";
-        const updatePayload = toSupabaseFormat({ paymentMilestones: milestones, updatedAt: todayISO() }, table);
+        const updatePayload = toSupabaseFormat({ paymentMilestones: milestones, updatedAt: nowISO() }, table);
         await supabaseRESTWithSchemaFallback("PATCH", `${table}?id=eq.${doc.id}`, updatePayload);
         update((next) => {
           const coll = isQuote ? next.quotes : next.pos;
           const target = coll.find((d) => d.id === doc.id);
           if (target) {
             target.paymentMilestones = milestones;
-            target.updatedAt = todayISO();
+            target.updatedAt = nowISO();
           }
 
           // If this is a quote, sync milestones to the matching customer record.
@@ -4537,7 +4546,7 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
           const updatePayload = toSupabaseFormat(
             {
               ...supabasePayload,
-              updatedAt: todayISO(),
+              updatedAt: nowISO(),
               ...(isQuote ? { customerId } : { supplierId }),
             },
             table
@@ -4548,7 +4557,7 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
             const coll = isQuote ? next.quotes : next.pos;
             const target = coll.find((d) => d.id === editing.id);
             Object.assign(target, payload, {
-              updatedAt: todayISO(),
+              updatedAt: nowISO(),
               ...(isQuote ? { customerId } : { supplierId }),
             });
           });
@@ -4583,7 +4592,7 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
               const prospect = next.crm.find((p) => p.name === payload.party);
               if (prospect && payload.total != null && payload.total > 0) {
                 prospect.salesValue = payload.total;
-                prospect.updatedAt = todayISO();
+                prospect.updatedAt = nowISO();
               }
             }
           });
@@ -4635,7 +4644,7 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
           total: mergedTotal,
           subtotal: mergedTotal,
           consolidatedMemberIds: memberIds,
-          updatedAt: todayISO(),
+          updatedAt: nowISO(),
         }, "purchase_orders");
         await supabaseRESTWithSchemaFallback("PATCH", `purchase_orders?id=eq.${primaryPO.id}`, primaryUpdate);
 
@@ -4643,7 +4652,7 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
         for (const mpo of memberPOs) {
           const memberUpdate = toSupabaseFormat({
             consolidatedGroupId: primaryPO.id,
-            updatedAt: todayISO(),
+            updatedAt: nowISO(),
           }, "purchase_orders");
           await supabaseRESTWithSchemaFallback("PATCH", `purchase_orders?id=eq.${mpo.id}`, memberUpdate);
         }
@@ -4698,7 +4707,7 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
           total: primaryTotal,
           subtotal: primaryTotal,
           consolidatedMemberIds: [],
-          updatedAt: todayISO(),
+          updatedAt: nowISO(),
         }, "purchase_orders");
         await supabaseRESTWithSchemaFallback("PATCH", `purchase_orders?id=eq.${groupPO.id}`, primaryUpdate);
 
@@ -4706,7 +4715,7 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
         for (const mpo of memberPOs) {
           const memberUpdate = toSupabaseFormat({
             consolidatedGroupId: null,
-            updatedAt: todayISO(),
+            updatedAt: nowISO(),
           }, "purchase_orders");
           await supabaseRESTWithSchemaFallback("PATCH", `purchase_orders?id=eq.${mpo.id}`, memberUpdate);
         }
@@ -4864,7 +4873,7 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
         // For POs: auto-archive when status changes to "Received", unarchive when status changes away from "Received"
         const updatePayload = {
           status,
-          updated_at: todayISO(),
+          updated_at: nowISO(),
         };
 
         // Stock only actually leaves once the order is Delivered, not when the
@@ -5695,7 +5704,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
       }, 0);
       const newTotal = newSubtotal + (Number(member.customsClearance) || 0);
       const payload = toSupabaseFormat(
-        { lines: mLines, subtotal: newSubtotal, total: newTotal, updatedAt: todayISO() },
+        { lines: mLines, subtotal: newSubtotal, total: newTotal, updatedAt: nowISO() },
         "purchase_orders"
       );
       await supabaseRESTWithSchemaFallback("PATCH", `purchase_orders?id=eq.${member.id}`, payload);
@@ -5932,7 +5941,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
   async function savePONotes(poId, newNotes) {
     // Save notes for a specific PO (used for member POs in consolidated view)
     try {
-      const update = toSupabaseFormat({ notes: newNotes, updatedAt: todayISO() }, "purchase_orders");
+      const update = toSupabaseFormat({ notes: newNotes, updatedAt: nowISO() }, "purchase_orders");
       await supabaseRESTWithSchemaFallback("PATCH", `purchase_orders?id=eq.${poId}`, update);
     } catch (err) {
       console.error("Error saving PO notes:", err);
@@ -5941,7 +5950,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
 
   async function savePOSupplierNote(poId, newSupplierNote) {
     try {
-      const update = toSupabaseFormat({ supplierNote: newSupplierNote, updatedAt: todayISO() }, "purchase_orders");
+      const update = toSupabaseFormat({ supplierNote: newSupplierNote, updatedAt: nowISO() }, "purchase_orders");
       await supabaseRESTWithSchemaFallback("PATCH", `purchase_orders?id=eq.${poId}`, update);
     } catch (err) {
       console.error("Error saving PO supplier note:", err);
@@ -5951,7 +5960,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
   async function saveMemberPOField(poId, fields) {
     // Save any fields for a member PO directly to Supabase and update local db state
     try {
-      const payload = toSupabaseFormat({ ...fields, updatedAt: todayISO() }, "purchase_orders");
+      const payload = toSupabaseFormat({ ...fields, updatedAt: nowISO() }, "purchase_orders");
       await supabaseRESTWithSchemaFallback("PATCH", `purchase_orders?id=eq.${poId}`, payload);
       showToast("Saved");
     } catch (err) {
@@ -6153,7 +6162,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
             try {
               const payload = toSupabaseFormat({
                 party: mParty, contact: mContact, eta: mEta, status: mStatus,
-                paymentMilestones: mMilestones, notes: mNotes, updatedAt: todayISO(),
+                paymentMilestones: mMilestones, notes: mNotes, updatedAt: nowISO(),
               }, "purchase_orders");
               await supabaseRESTWithSchemaFallback("PATCH", `purchase_orders?id=eq.${activeMember.id}`, payload);
               update(next => {
@@ -9098,7 +9107,7 @@ function ContactsTab({ kind, db, update, showToast, nextNumber, pendingOpen, cle
         
         if (editing) {
           // Convert to Supabase format and PATCH
-          const updatePayload = toSupabaseFormat({ ...payload, updatedAt: todayISO() }, table);
+          const updatePayload = toSupabaseFormat({ ...payload, updatedAt: nowISO() }, table);
           const result = await supabaseRESTWithSchemaFallback("PATCH", `${table}?id=eq.${editing.id}`, updatePayload);
           // Use the full returned row to update local state so JSONB fields
           // like `activities` that aren't part of the form payload are preserved.
@@ -10871,7 +10880,7 @@ function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOp
           const target = next.crm.find((p) => p.id === prospect.id);
           if (target) {
             target.activities = updatedActivities;
-            target.updatedAt = todayISO();
+            target.updatedAt = nowISO();
           }
         });
         
@@ -10895,7 +10904,7 @@ function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOp
     (async () => {
       try {
         if (editing) {
-          const updatePayload = toSupabaseFormat({ ...payload, updatedAt: todayISO() }, "crm_prospects");
+          const updatePayload = toSupabaseFormat({ ...payload, updatedAt: nowISO() }, "crm_prospects");
           const result = await supabaseREST("PATCH", `crm_prospects?id=eq.${editing.id}`, updatePayload);
           // Supabase returns the full updated row (Prefer: return=representation).
           // Using it here guarantees JSONB fields like `activities` and `attachments`
