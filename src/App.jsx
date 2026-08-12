@@ -272,7 +272,8 @@ function toSupabaseFormat(data, table) {
       delete copy.invoices; delete copy.invoiceNumber; delete copy.invoiceAmount;
       delete copy.lastQuoteNumber; delete copy.lastQuoteValue;
       delete copy.attachments; delete copy.status; delete copy.product; delete copy.source;
-      delete copy.createdAt; delete copy.updatedAt;
+      if (copy.createdAt !== undefined) { copy.created_at = copy.createdAt; delete copy.createdAt; }
+      if (copy.updatedAt !== undefined) { copy.updated_at = copy.updatedAt; delete copy.updatedAt; }
       break;
 
     case "customers":
@@ -354,6 +355,8 @@ function toSupabaseFormat(data, table) {
         copy.is_archived = copy.archived;
         delete copy.archived;
       }
+      if (copy.createdAt !== undefined) { copy.created_at = copy.createdAt; delete copy.createdAt; }
+      if (copy.updatedAt !== undefined) { copy.updated_at = copy.updatedAt; delete copy.updatedAt; }
       break;
       
     case "crm_prospects":
@@ -393,9 +396,10 @@ function toSupabaseFormat(data, table) {
         copy.next_action = copy.nextAction;
         delete copy.nextAction;
       }
-      // Remove non-existent columns
-      delete copy.createdAt;
-      delete copy.updatedAt;
+      // Now that the columns exist (see add-contact-prospect-timestamps.sql),
+      // convert rather than strip so "Updated" actually reflects the latest save.
+      if (copy.createdAt !== undefined) { copy.created_at = copy.createdAt; delete copy.createdAt; }
+      if (copy.updatedAt !== undefined) { copy.updated_at = copy.updatedAt; delete copy.updatedAt; }
       // activities is a JSONB column — keep it so it gets written
       break;
       
@@ -550,6 +554,8 @@ function fromSupabaseFormat(data, table) {
       if (copy.last_quote_number !== undefined) copy.lastQuoteNumber = copy.last_quote_number;
       if (copy.last_quote_value !== undefined) copy.lastQuoteValue = copy.last_quote_value;
       if (copy.is_archived !== undefined) copy.archived = copy.is_archived;
+      if (copy.created_at !== undefined) { copy.createdAt = copy.created_at; delete copy.created_at; }
+      if (copy.updated_at !== undefined) { copy.updatedAt = copy.updated_at; delete copy.updated_at; }
       copy.attachments = Array.isArray(copy.attachments) ? copy.attachments : [];
       copy.activities = parseActivities(copy.activities);
       break;
@@ -564,6 +570,8 @@ function fromSupabaseFormat(data, table) {
       if (copy.enquiry_product !== undefined) copy.enquiryProduct = copy.enquiry_product;
       copy.salesValue = parseFloat(copy.sales_value || copy.value) || 0;
       if (copy.next_action !== undefined) { copy.nextAction = copy.next_action; delete copy.next_action; }
+      if (copy.created_at !== undefined) { copy.createdAt = copy.created_at; delete copy.created_at; }
+      if (copy.updated_at !== undefined) { copy.updatedAt = copy.updated_at; delete copy.updated_at; }
       copy.activities = parseActivities(copy.activities);
       copy.attachments = Array.isArray(copy.attachments) ? copy.attachments : [];
       break;
@@ -1186,8 +1194,9 @@ function Panel({ children, style, padded = true }) {
   );
 }
 
-function Modal({ onClose, children, width = 640 }) {
+function Modal({ onClose, children, width = 640, record }) {
   const backdropRef = useRef(null);
+  const showStamp = record && (record.createdAt || record.updatedAt);
   return (
     <div
       ref={backdropRef}
@@ -1222,6 +1231,13 @@ function Modal({ onClose, children, width = 640 }) {
         }}
       >
         {children}
+        {showStamp && (
+          <div style={{ marginTop: 18, paddingTop: 8, borderTop: "1px solid #f2ebe0", textAlign: "right", fontSize: 10.5, color: "#c9bda9", lineHeight: 1.5 }}>
+            {record.createdAt && <span>Created {fmtDateTime(record.createdAt)}</span>}
+            {record.createdAt && record.updatedAt && <span> &nbsp;·&nbsp; </span>}
+            {record.updatedAt && <span>Updated {fmtDateTime(record.updatedAt)}</span>}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -3629,7 +3645,7 @@ function ItemModal({ editing, models, categories, suppliers, fx, groups, allItem
   const showSellAudPreview = currency === "USD" && !isNaN(parsedSellPreview) && parsedSellPreview > 0;
 
   return (
-    <Modal onClose={onCancel}>
+    <Modal onClose={onCancel} record={editing}>
       <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: "0 0 16px", fontSize: 19 }}>
         {editing ? "Edit price item" : "Add price item"}
       </h3>
@@ -6029,7 +6045,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
   };
 
   return (
-    <Modal width={modalWidth} onClose={onCancel}>
+    <Modal width={modalWidth} onClose={onCancel} record={editing}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 8 }}>
         <h3
           style={{
@@ -9081,8 +9097,8 @@ function ContactsTab({ kind, db, update, showToast, nextNumber, pendingOpen, cle
         const table = isSupplier ? "suppliers" : "customers";
         
         if (editing) {
-          // Convert to Supabase format and PATCH (WITHOUT updatedAt since column doesn't exist)
-          const updatePayload = toSupabaseFormat(payload, table);
+          // Convert to Supabase format and PATCH
+          const updatePayload = toSupabaseFormat({ ...payload, updatedAt: todayISO() }, table);
           const result = await supabaseRESTWithSchemaFallback("PATCH", `${table}?id=eq.${editing.id}`, updatePayload);
           // Use the full returned row to update local state so JSONB fields
           // like `activities` that aren't part of the form payload are preserved.
@@ -9921,7 +9937,7 @@ function ContactModal({ kind, editing, onCancel, onSave, onCreateQuote, onConver
       : [];
 
   return (
-    <Modal onClose={onCancel}>
+    <Modal onClose={onCancel} record={editing}>
       <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: "0 0 12px", fontSize: 19 }}>
         {editing ? `Edit ${isSupplier ? "supplier" : "customer"}` : `Add ${isSupplier ? "supplier" : "customer"}`}
         {editing?.archived && (
@@ -10879,7 +10895,7 @@ function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOp
     (async () => {
       try {
         if (editing) {
-          const updatePayload = toSupabaseFormat(payload, "crm_prospects");
+          const updatePayload = toSupabaseFormat({ ...payload, updatedAt: todayISO() }, "crm_prospects");
           const result = await supabaseREST("PATCH", `crm_prospects?id=eq.${editing.id}`, updatePayload);
           // Supabase returns the full updated row (Prefer: return=representation).
           // Using it here guarantees JSONB fields like `activities` and `attachments`
@@ -11442,7 +11458,7 @@ function CRMModal({ editing, db, onCancel, onSave, openRecord, onLogActivity, on
   }
 
   return (
-    <Modal onClose={onCancel}>
+    <Modal onClose={onCancel} record={editing}>
       <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: "0 0 16px", fontSize: isMobile ? 16 : 19 }}>
         {editing ? "Edit prospect" : "Add prospect"}
       </h3>
