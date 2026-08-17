@@ -2944,9 +2944,6 @@ function PriceBookTab({ db, update, showToast }) {
           <Btn variant="ghost" onClick={() => setShowGroupsManager(true)} style={{ fontSize: 13 }}>
             🗂️ Groups
           </Btn>
-          <Btn variant="ghost" onClick={() => setShowImportModal(true)} style={{ fontSize: 13 }}>
-            📥 Import CSV
-          </Btn>
           <Btn variant="ghost" onClick={() => setShowCategoryManager(true)} style={{ fontSize: 13 }}>
             ⚙️ Categories
           </Btn>
@@ -4980,24 +4977,9 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
         </div>
         <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
           {isQuote && (
-            <>
-              <Btn variant="ghost" onClick={() => setLinkQuotesConfirm(true)}>
-                Link quotes to customers
-              </Btn>
-              <Btn variant="ghost" onClick={() => setRenumberConfirm(true)}>
-                Renumber quotes
-              </Btn>
-            </>
-          )}
-          {!isQuote && (
-            <>
-              <Btn variant="ghost" onClick={() => setLinkPOsConfirm(true)}>
-                Link POs to suppliers
-              </Btn>
-              <Btn variant="ghost" onClick={() => setRenumberConfirm(true)}>
-                Renumber POs
-              </Btn>
-            </>
+            <Btn variant="ghost" onClick={() => setLinkQuotesConfirm(true)}>
+              Link quotes to customers
+            </Btn>
           )}
           <Btn variant="primary" onClick={() => setDocModal(null)}>
             + New {isQuote ? "quote" : "purchase order"}
@@ -9354,9 +9336,6 @@ function ContactsTab({ kind, db, update, showToast, nextNumber, pendingOpen, cle
           </p>
         </div>
         <div style={{ display: "flex", gap: 10 }}>
-          <Btn variant="secondary" onClick={() => document.getElementById(`contacts-import-input-${kind}`)?.click()}>
-            ⬆ Import CSV
-          </Btn>
           <Btn variant="primary" onClick={() => setEditingContact(null)}>
             + Add {isSupplier ? "supplier" : "customer"}
           </Btn>
@@ -11068,9 +11047,6 @@ function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOp
           <p className="section-desc">Track prospects, manage enquiries, and log activity history.</p>
         </div>
         <div style={{ display: "flex", gap: 10 }}>
-          <Btn variant="secondary" onClick={() => document.getElementById("crm-import-input")?.click()}>
-            ⬆ Import CSV
-          </Btn>
           <Btn variant="primary" onClick={() => setEditingProspect(null)}>
             + Add prospect
           </Btn>
