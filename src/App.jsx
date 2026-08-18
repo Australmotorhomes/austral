@@ -6960,7 +6960,17 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                       // subtotal) so the figures on screen always add up to what's
                       // actually listed; the real total — freight included —
                       // still shows on the "Total" row below when it differs.
-                      const visibleLines = (po.lines || []).filter(
+                      // Use the live, in-progress line items for whichever PO is
+                      // currently being edited on the right-hand side — the same
+                      // fallback poTotal/poSubtotalVal above already use — instead
+                      // of always reading the last-saved `po.lines`. Without this,
+                      // items just added/edited in the editor wouldn't appear here
+                      // (and would show as "No line items on this PO") even though
+                      // the totals (which do fall back to live state) were correct.
+                      const effectiveLines = po.id === editing.id
+                        ? lines
+                        : (lineItemsPoId === po.id ? mLines : (po.lines || []));
+                      const visibleLines = (effectiveLines || []).filter(
                         (line) => !/freight\s*forward/i.test(line.desc || line.description || "")
                       );
                       const visibleSubtotal = visibleLines.reduce((s, line) => {
@@ -11833,15 +11843,19 @@ function getLastPaymentMonth(c) {
 }
 
 // A customer's product is an Austral Motorhome if it matches one of the
-// known Austral model names (db.models — e.g. Campo/Scout/Savanna, derived
-// from the price book same as everywhere else brand detection happens in
-// this app). Anything that doesn't match is treated as Platinum Pontoons,
-// since pontoon model codes (e.g. "22SE", "19ft") don't share that list and
-// have no other brand marker to key off.
+// known Austral model keywords (Campo/Scout/Savanna) via the same
+// matchSalesModel() matcher used by Sales by Model, which also recognises
+// Platinum Pontoons boats (by name or by size/trim code like "22SE"/"19ft").
+// Deliberately NOT keyed off db.models — that list is derived from every
+// price-book item regardless of brand, so it can end up containing pontoon
+// size/trim codes too, which would misclassify boats as Austral motorhomes.
+// Returns null (can't tell) if the product doesn't match any known keyword.
 function isAustralCustomerProduct(c, db) {
   const product = (c.product || "").trim().toLowerCase();
   if (!product) return null; // no product on file — can't tell either way
-  return (db?.models || []).some((m) => product.startsWith((m || "").trim().toLowerCase()));
+  const matched = matchSalesModel(product);
+  if (!matched) return null; // unrecognised product — can't tell either way
+  return matched !== "Pontoon Boat";
 }
 
 // Warranty window: 1 year from the final payment for Austral Motorhomes
