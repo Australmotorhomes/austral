@@ -6952,14 +6952,6 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                       PO-{stripPO(po.number)}
                     </div>
                     {(() => {
-                      // Freight forwarding is already surfaced separately (the
-                      // "Freight Forward Fee" field / Customs line above), so it's
-                      // hidden from this line-item list to avoid showing it twice.
-                      // The Subtotal shown here is recalculated from only the
-                      // visible lines (not the PO's real, freight-inclusive
-                      // subtotal) so the figures on screen always add up to what's
-                      // actually listed; the real total — freight included —
-                      // still shows on the "Total" row below when it differs.
                       // Use the live, in-progress line items for whichever PO is
                       // currently being edited on the right-hand side — the same
                       // fallback poTotal/poSubtotalVal above already use — instead
@@ -6970,8 +6962,21 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                       const effectiveLines = po.id === editing.id
                         ? lines
                         : (lineItemsPoId === po.id ? mLines : (po.lines || []));
+                      // A line item literally describing itself as freight
+                      // forwarding is only a duplicate to hide when this PO ALSO
+                      // has a separate "Freight Forward Fee" (customsClearance)
+                      // value set — that's the case this filter exists for, so a
+                      // freight-forward line doesn't get shown twice. If there's
+                      // no such fee set, the freight-forward line is the real
+                      // (and possibly only) content of the PO, so it must be shown
+                      // rather than hidden — otherwise a PO whose entire content is
+                      // one freight-forwarding line ends up wrongly displaying
+                      // "No line items on this PO".
+                      const effectiveCustomsClearance = po.id === editing.id
+                        ? (parseFloat(customsClearance) || 0)
+                        : (parseFloat(po.customsClearance) || 0);
                       const visibleLines = (effectiveLines || []).filter(
-                        (line) => !/freight\s*forward/i.test(line.desc || line.description || "")
+                        (line) => effectiveCustomsClearance <= 0 || !/freight\s*forward/i.test(line.desc || line.description || "")
                       );
                       const visibleSubtotal = visibleLines.reduce((s, line) => {
                         const qty = parseFloat(line.qty || line.quantity) || 1;
