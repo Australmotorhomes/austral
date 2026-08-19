@@ -9848,6 +9848,78 @@ function ContactModal({ kind, editing, onCancel, onSave, onCreateQuote, onConver
   const [suburb, setSuburb] = useState(String(editing?.address?.suburb || ""));
   const [state, setState] = useState(editing?.address?.state || "QLD");
   const [postcode, setPostcode] = useState(String(editing?.address?.postcode || ""));
+  // Address autocomplete — free lookup via OpenStreetMap's Nominatim API (no API
+  // key required). As the user types in the Street field, debounce ~500ms then
+  // query Nominatim for matching Australian addresses; selecting a suggestion
+  // fills in street/suburb/state/postcode automatically.
+  const [addressSuggestions, setAddressSuggestions] = useState([]);
+  const [showAddressSuggestions, setShowAddressSuggestions] = useState(false);
+  const [addressLookupLoading, setAddressLookupLoading] = useState(false);
+  const addressLookupTimerRef = useRef(null);
+  // Set right before we programmatically fill `street` from a selected
+  // suggestion, so that update doesn't immediately re-trigger a new lookup.
+  const suppressNextLookupRef = useRef(false);
+
+  const AU_STATE_NAME_TO_ABBREV = {
+    "queensland": "QLD",
+    "new south wales": "NSW",
+    "victoria": "VIC",
+    "tasmania": "TAS",
+    "south australia": "SA",
+    "western australia": "WA",
+    "northern territory": "NT",
+    "australian capital territory": "ACT",
+  };
+
+  useEffect(() => {
+    if (suppressNextLookupRef.current) {
+      suppressNextLookupRef.current = false;
+      return;
+    }
+    if (addressLookupTimerRef.current) clearTimeout(addressLookupTimerRef.current);
+    const query = street.trim();
+    if (query.length < 4) {
+      setAddressSuggestions([]);
+      setShowAddressSuggestions(false);
+      setAddressLookupLoading(false);
+      return;
+    }
+    setAddressLookupLoading(true);
+    addressLookupTimerRef.current = setTimeout(async () => {
+      try {
+        const res = await fetch(
+          `https://nominatim.openstreetmap.org/search?format=jsonv2&addressdetails=1&countrycodes=au&limit=5&q=${encodeURIComponent(query)}`
+        );
+        const data = await res.json();
+        setAddressSuggestions(Array.isArray(data) ? data : []);
+        setShowAddressSuggestions(true);
+      } catch (err) {
+        setAddressSuggestions([]);
+      } finally {
+        setAddressLookupLoading(false);
+      }
+    }, 500);
+    return () => clearTimeout(addressLookupTimerRef.current);
+  }, [street]);
+
+  function handleSelectAddressSuggestion(sugg) {
+    const a = sugg.address || {};
+    const houseNumber = a.house_number || "";
+    const road = a.road || a.pedestrian || a.footway || a.cycleway || "";
+    const streetLine = [houseNumber, road].filter(Boolean).join(" ").trim() || (sugg.display_name || "").split(",")[0];
+    const suburbVal = a.suburb || a.city_district || a.town || a.village || a.municipality || a.city || "";
+    const stateVal = AU_STATE_NAME_TO_ABBREV[(a.state || "").trim().toLowerCase()] || state;
+    const postcodeVal = a.postcode || "";
+
+    suppressNextLookupRef.current = true;
+    setStreet(streetLine);
+    setSuburb(suburbVal);
+    setState(stateVal);
+    setPostcode(postcodeVal);
+    setShowAddressSuggestions(false);
+    setAddressSuggestions([]);
+  }
+
   const [bankAccountName, setBankAccountName] = useState(String(editing?.bankAccount?.name || ""));
   const [bsb, setBsb] = useState(String(editing?.bankAccount?.bsb || ""));
   const [accountNumber, setAccountNumber] = useState(String(editing?.bankAccount?.account || ""));
@@ -10174,7 +10246,47 @@ function ContactModal({ kind, editing, onCancel, onSave, onCreateQuote, onConver
       <div style={{ borderTop: "1px solid #e3d8c6", paddingTop: 14, marginTop: 14 }}>
         <h4 style={{ fontSize: 13, fontWeight: 600, color: "#6b5240", margin: "0 0 10px" }}>Address</h4>
         <Field label="Street">
-          <input style={inputStyle} type="text" value={street} onChange={(e) => setStreet(e.target.value)} />
+          <div style={{ position: "relative" }}>
+            <input
+              style={inputStyle}
+              type="text"
+              value={street}
+              onChange={(e) => setStreet(e.target.value)}
+              onFocus={() => { if (addressSuggestions.length) setShowAddressSuggestions(true); }}
+              onBlur={() => setTimeout(() => setShowAddressSuggestions(false), 150)}
+              placeholder="Start typing an address…"
+              autoComplete="off"
+            />
+            {addressLookupLoading && (
+              <span style={{ position: "absolute", right: 10, top: "50%", transform: "translateY(-50%)", fontSize: 11, color: "#8a7a66" }}>
+                Searching…
+              </span>
+            )}
+            {showAddressSuggestions && addressSuggestions.length > 0 && (
+              <div
+                style={{
+                  position: "absolute", top: "calc(100% + 4px)", left: 0, right: 0, zIndex: 30,
+                  background: "#fff", border: "1px solid #d4a574", borderRadius: 6,
+                  boxShadow: "0 4px 14px rgba(74,53,39,0.18)", maxHeight: 220, overflowY: "auto",
+                }}
+              >
+                {addressSuggestions.map((sugg, i) => (
+                  <div
+                    key={sugg.place_id || i}
+                    onMouseDown={(e) => { e.preventDefault(); handleSelectAddressSuggestion(sugg); }}
+                    style={{
+                      padding: "8px 10px", fontSize: 12, color: "#4a3527", cursor: "pointer",
+                      borderBottom: i < addressSuggestions.length - 1 ? "1px solid #f0e8d9" : "none",
+                    }}
+                    onMouseEnter={(e) => (e.currentTarget.style.background = "#faf3e8")}
+                    onMouseLeave={(e) => (e.currentTarget.style.background = "#fff")}
+                  >
+                    {sugg.display_name}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
         </Field>
         <div className="grid2">
           <Field label="Suburb">
