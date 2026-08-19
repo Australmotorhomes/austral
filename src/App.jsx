@@ -12010,15 +12010,26 @@ function dedupeCustomerRows(customers) {
   return result;
 }
 
-function calculatePeriodSales(customers, startDate, endDate, status) {
+// brand: optional "AM" (Austral Motorhomes / campers) or "PP" (Platinum
+// Pontoons / boats) to restrict the total to just that business. Customers
+// whose product doesn't match any known model keyword (matchSalesModel
+// returns null) are excluded from both brand-filtered totals — they're
+// surfaced separately via unmatchedBrandRows so nothing silently vanishes.
+function calculatePeriodSales(customers, startDate, endDate, status, brand) {
   customers = dedupeCustomerRows(customers);
   const filtered = customers.filter((c) => {
     const hasInvoices = Array.isArray(c.invoices) && c.invoices.length > 0;
     const hasLegacyInvoice = getCustomerInvoicesForCalc(c).length > (hasInvoices ? c.invoices.length : 0);
     if (!hasInvoices && !hasLegacyInvoice) return false;
     const s = (c.status || "").trim();
-    if (status) return s === status.trim();
-    return s.toLowerCase() !== "canceled";
+    if (status) { if (s !== status.trim()) return false; }
+    else if (s.toLowerCase() === "canceled") return false;
+    if (brand) {
+      const isAustral = isAustralCustomerProduct(c);
+      if (brand === "AM" && isAustral !== true) return false;
+      if (brand === "PP" && isAustral !== false) return false;
+    }
+    return true;
   });
   const monthTotals = {};
   filtered.forEach((c) => {
@@ -12042,11 +12053,16 @@ function calculatePeriodSales(customers, startDate, endDate, status) {
 // invoice number in the current data model, confirmed by the Payment Schedule
 // editor's fields, which are just amount + month, not a place to enter a
 // distinct invoice number per payment).
-function getTransactionsForMonth(customers, monthKey) {
+function getTransactionsForMonth(customers, monthKey, brand) {
   const rows = [];
   (dedupeCustomerRows(customers) || []).forEach((c) => {
     const s = (c.status || "").trim().toLowerCase();
     if (s === "canceled") return;
+    if (brand) {
+      const isAustral = isAustralCustomerProduct(c);
+      if (brand === "AM" && isAustral !== true) return;
+      if (brand === "PP" && isAustral !== false) return;
+    }
     getCustomerInvoicesForCalc(c).forEach((inv) => {
       if (!inv || !inv.invoiceMonth) return;
       if (inv.invoiceMonth.slice(0, 7) !== monthKey) return;
@@ -13476,14 +13492,23 @@ function DashboardTab({ db, setTab, openRecord }) {
             <div style={{ display: "flex", gap: 10, overflowX: "auto", paddingBottom: 8 }}>
               {columns.map(fyEnd => {
                 const { start, end, label } = getFYRange(fyEnd);
-                const income = calculatePeriodSales(db.customers || [], start, end);
+                const amIncome = calculatePeriodSales(db.customers || [], start, end, undefined, "AM");
+                const ppIncome = calculatePeriodSales(db.customers || [], start, end, undefined, "PP");
                 const fyQuotes = (db.quotes || []).filter(q => (q.date || "").slice(0,10) >= start && (q.date || "").slice(0,10) <= end);
                 const acc = fyQuotes.filter(q => q.status === "Accepted" || q.status === "Delivered");
                 return (
                   <div key={fyEnd} style={{ ...card, minWidth: 155, flex: "0 0 auto", marginBottom: 0 }}>
                     <div style={{ fontSize: 12, fontWeight: 700, color: "#b5552b", marginBottom: 8 }}>{label}</div>
-                    <div style={{ fontSize: 10, color: "#8a7a66", marginBottom: 2 }}>Income (invoiced)</div>
-                    <div style={{ fontSize: 15, fontWeight: 700, color: "#4a3527", marginBottom: 10 }}>{fmtMoney(income.periodTotal, "AUD")}</div>
+                    <div style={{ display: "flex", gap: 14, marginBottom: 10 }}>
+                      <div>
+                        <div style={{ fontSize: 10, color: "#8a7a66", marginBottom: 2 }}>AM income</div>
+                        <div style={{ fontSize: 14, fontWeight: 700, color: "#4a3527" }}>{fmtMoney(amIncome.periodTotal, "AUD")}</div>
+                      </div>
+                      <div>
+                        <div style={{ fontSize: 10, color: "#8a7a66", marginBottom: 2 }}>PP income</div>
+                        <div style={{ fontSize: 14, fontWeight: 700, color: "#4a3527" }}>{fmtMoney(ppIncome.periodTotal, "AUD")}</div>
+                      </div>
+                    </div>
                     <div style={{ fontSize: 10, color: "#8a7a66", marginBottom: 2 }}>Orders accepted</div>
                     <div style={{ fontSize: 20, fontWeight: 700, color: "#4a3527" }}>{acc.length}</div>
                   </div>
@@ -13788,8 +13813,26 @@ function DashboardTab({ db, setTab, openRecord }) {
 
           const periodData = periods.map(period => ({
             ...period,
-            income: calculatePeriodSales(db.customers || [], period.start, period.end),
+            am: calculatePeriodSales(db.customers || [], period.start, period.end, undefined, "AM"),
+            pp: calculatePeriodSales(db.customers || [], period.start, period.end, undefined, "PP"),
           }));
+
+          // Customers whose product doesn't match any known AM/PP keyword (see
+          // matchSalesModel) are excluded from both split columns above so they
+          // don't get silently miscounted into the wrong business. Surface a
+          // note if that's actually hiding revenue in the FYs currently shown,
+          // the same way unmatched products are surfaced on Sales by Model.
+          const overallRangeStart = periods.reduce((min, p) => !min || p.start < min ? p.start : min, null);
+          const overallRangeEnd = periods.reduce((max, p) => !max || p.end > max ? p.end : max, null);
+          const unmatchedBrandCustomers = overallRangeStart
+            ? dedupeCustomerRows(db.customers || []).filter((c) => {
+                if ((c.status || "").trim().toLowerCase() === "canceled") return false;
+                if (isAustralCustomerProduct(c) !== null) return false;
+                return getCustomerInvoicesForCalc(c).some(
+                  (inv) => inv && inv.invoiceMonth && isInDateRange(inv.invoiceMonth, overallRangeStart, overallRangeEnd)
+                );
+              })
+            : [];
 
           const thStyle = { padding: "8px 10px", fontWeight: 700, fontSize: 12, textAlign: "right", whiteSpace: "nowrap" };
           const tdStyle = { padding: "6px 10px", fontSize: 12, textAlign: "right" };
@@ -13851,14 +13894,22 @@ function DashboardTab({ db, setTab, openRecord }) {
               </div>
               {!salesTableCollapsed && (
                 <>
-                  <p style={{ fontSize: 11, color: "#8a7a66", margin: "0 0 10px" }}>Click any monthly total to see the individual transactions behind it.</p>
-                  <div style={{ overflowX: "auto", marginBottom: 32 }}>
-                    <table style={{ width: "100%", borderCollapse: "collapse", background: "#fff", borderRadius: 6, overflow: "hidden", border: "1px solid #e3d8c6" }}>
+                  <p style={{ fontSize: 11, color: "#8a7a66", margin: "0 0 10px" }}>Click any monthly total to see the individual transactions behind it. <strong>AM</strong> = Austral Motorhomes (campers), <strong>PP</strong> = Platinum Pontoons (boats).</p>
+                  <div style={{ overflowX: "auto", marginBottom: unmatchedBrandCustomers.length ? 8 : 32, WebkitOverflowScrolling: "touch" }}>
+                    <table style={{ width: "100%", minWidth: 360 + periodData.length * 150, borderCollapse: "collapse", background: "#fff", borderRadius: 6, overflow: "hidden", border: "1px solid #e3d8c6" }}>
                       <thead>
-                        <tr style={{ background: "#f0e8d9", borderBottom: "2px solid #b5552b" }}>
-                          <th style={{ ...thStyle, textAlign: "left", width: 70 }}>Month</th>
+                        <tr style={{ background: "#f0e8d9", borderBottom: "1px solid #e3d8c6" }}>
+                          <th rowSpan={2} style={{ ...thStyle, textAlign: "left", width: 70, verticalAlign: "bottom" }}>Month</th>
                           {periodData.map((pd, i) => (
-                            <th key={i} style={{ ...thStyle, color: "#b5552b", borderLeft: "2px solid #e3d8c6" }}>{pd.label}</th>
+                            <th key={i} colSpan={2} style={{ ...thStyle, textAlign: "center", color: "#b5552b", borderLeft: "2px solid #e3d8c6" }}>{pd.label}</th>
+                          ))}
+                        </tr>
+                        <tr style={{ background: "#f0e8d9", borderBottom: "2px solid #b5552b" }}>
+                          {periodData.map((pd, i) => (
+                            <React.Fragment key={i}>
+                              <th style={{ ...thStyle, color: "#6b5240", borderLeft: "2px solid #e3d8c6", fontSize: 11 }}>AM</th>
+                              <th style={{ ...thStyle, color: "#6b5240", fontSize: 11 }}>PP</th>
+                            </React.Fragment>
                           ))}
                         </tr>
                       </thead>
@@ -13873,22 +13924,31 @@ function DashboardTab({ db, setTab, openRecord }) {
                                 const fyEndYear = columns[i];
                                 const calYear = monthNum >= 7 ? fyEndYear - 1 : fyEndYear;
                                 const key = `${calYear}-${String(monthNum).padStart(2, '0')}`;
-                                const val = pd.income.monthTotals[key];
+                                const amVal = pd.am.monthTotals[key];
+                                const ppVal = pd.pp.monthTotals[key];
+                                const cellStyle = (val) => ({
+                                  ...tdStyle,
+                                  borderLeft: "2px solid #e3d8c6",
+                                  color: "#b5552b",
+                                  cursor: val ? "pointer" : "default",
+                                  textDecoration: val ? "underline" : "none",
+                                  textDecorationColor: "#e3c9b5",
+                                });
                                 return (
-                                  <td
-                                    key={i}
-                                    onClick={() => val && setDrillDown({ key, label: `${mn} ${pd.label}` })}
-                                    style={{
-                                      ...tdStyle,
-                                      borderLeft: "2px solid #e3d8c6",
-                                      color: "#b5552b",
-                                      cursor: val ? "pointer" : "default",
-                                      textDecoration: val ? "underline" : "none",
-                                      textDecorationColor: "#e3c9b5",
-                                    }}
-                                  >
-                                    {val ? `$${val.toLocaleString()}` : "—"}
-                                  </td>
+                                  <React.Fragment key={i}>
+                                    <td
+                                      onClick={() => amVal && setDrillDown({ key, brand: "AM", label: `${mn} ${pd.label} — AM` })}
+                                      style={cellStyle(amVal)}
+                                    >
+                                      {amVal ? `$${amVal.toLocaleString()}` : "—"}
+                                    </td>
+                                    <td
+                                      onClick={() => ppVal && setDrillDown({ key, brand: "PP", label: `${mn} ${pd.label} — PP` })}
+                                      style={{ ...cellStyle(ppVal), borderLeft: "1px solid #f0e8d9" }}
+                                    >
+                                      {ppVal ? `$${ppVal.toLocaleString()}` : "—"}
+                                    </td>
+                                  </React.Fragment>
                                 );
                               })}
                             </tr>
@@ -13897,14 +13957,24 @@ function DashboardTab({ db, setTab, openRecord }) {
                         <tr style={{ background: "#f0e8d9", borderTop: "2px solid #b5552b", fontWeight: 700 }}>
                           <td style={{ ...tdLeft, fontWeight: 700 }}>Total</td>
                           {periodData.map((pd, i) => (
-                            <td key={i} style={{ ...tdStyle, borderLeft: "2px solid #e3d8c6", color: "#b5552b", fontWeight: 700 }}>
-                              ${pd.income.periodTotal.toLocaleString()}
-                            </td>
+                            <React.Fragment key={i}>
+                              <td style={{ ...tdStyle, borderLeft: "2px solid #e3d8c6", color: "#b5552b", fontWeight: 700 }}>
+                                ${pd.am.periodTotal.toLocaleString()}
+                              </td>
+                              <td style={{ ...tdStyle, borderLeft: "1px solid #f0e8d9", color: "#b5552b", fontWeight: 700 }}>
+                                ${pd.pp.periodTotal.toLocaleString()}
+                              </td>
+                            </React.Fragment>
                           ))}
                         </tr>
                       </tbody>
                     </table>
                   </div>
+                  {unmatchedBrandCustomers.length > 0 && (
+                    <p style={{ fontSize: 11, color: "#a06a3f", margin: "0 0 32px" }}>
+                      {unmatchedBrandCustomers.length} customer{unmatchedBrandCustomers.length > 1 ? "s" : ""} with a payment in the FYs shown couldn't be matched to a Campo/Scout/Savanna (AM) or Pontoon Boat (PP) product, so {unmatchedBrandCustomers.length > 1 ? "they're" : "it's"} excluded from both columns above. Open the customer record and check the Product field to have it counted.
+                    </p>
+                  )}
                 </>
               )}
 
@@ -14714,7 +14784,7 @@ function DashboardTab({ db, setTab, openRecord }) {
             Individual invoices contributing to this month's total.
           </p>
           {(() => {
-            const allRows = getTransactionsForMonth(db.customers, drillDown.key);
+            const allRows = getTransactionsForMonth(db.customers, drillDown.key, drillDown.brand);
             const rows = drillDown.filterCustomer
               ? allRows.filter(r => r.customerName === drillDown.filterCustomer)
               : allRows;
