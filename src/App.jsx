@@ -620,6 +620,12 @@ function fromSupabaseFormat(data, table) {
         delete copy.consolidated_member_ids; 
       }
       else { copy.consolidatedMemberIds = copy.consolidatedMemberIds || []; }
+      // Self-heal: the old auto-archive rule set archived=true purely because
+      // status became "Received" — there was no manual archive action before
+      // this fix, so any Received PO that's still flagged archived got that
+      // way from the old flawed rule, not a deliberate choice. Surface it
+      // again; the user can archive it explicitly if they want it hidden.
+      if (copy.status === "Received" && copy.archived) copy.archived = false;
       break;
   }
   return copy;
@@ -4638,6 +4644,31 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
     setPendingDelete(doc);
   }
 
+  // Manual archive/restore — decoupled from status entirely. A PO's status
+  // (Draft/Paid/In Transit/Received/Cancelled) reflects where it is in the
+  // supplier workflow and drives Stock Movement / open-PO calculations
+  // elsewhere; archiving is a separate, purely visual "hide from the default
+  // list" action the user takes deliberately, same as Archive/Restore
+  // already works for customers. A Received (or Cancelled) PO stays fully
+  // visible with its real status until explicitly archived here.
+  function archiveDoc(doc, archived) {
+    (async () => {
+      try {
+        const table = isQuote ? "quotes" : "purchase_orders";
+        await supabaseREST("PATCH", `${table}?id=eq.${doc.id}`, { archived, updated_at: nowISO() });
+        update((next) => {
+          const coll = isQuote ? next.quotes : next.pos;
+          const target = coll.find((d) => d.id === doc.id);
+          if (target) target.archived = archived;
+        });
+        showToast(archived ? `PO-${doc.number} archived` : `PO-${doc.number} restored`);
+      } catch (err) {
+        showToast("Archive failed");
+        console.error("Archive PO error:", err);
+      }
+    })();
+  }
+
   function handleGeneratePOs(quote) {
     setPoGenerationQuote(quote);
   }
@@ -4907,9 +4938,12 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
           updatePayload.delivered_date = todayISO();
         }
 
-        if (!isQuote) {
-          updatePayload.archived = status === "Received" ? true : false;
-        }
+        // Note: POs are no longer auto-archived by status (previously "Received"
+        // triggered this, which hid fully valid received POs from the default
+        // list). Archiving a PO is now a separate, manual action — see
+        // archiveDoc() — that leaves status untouched. Quotes keep their
+        // existing auto-archive-on-Delivered/Declined behaviour below, which
+        // wasn't part of this issue.
         if (isQuote) {
           updatePayload.archived = (status === "Delivered" || status === "Declined") ? true : false;
         }
@@ -4953,10 +4987,8 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
             target.deliveredDate = todayISO();
           }
 
-          // For POs: set archived status based on whether status is "Received"
-          if (!isQuote) {
-            target.archived = status === "Received" ? true : false;
-          }
+          // POs: archiving is now a separate manual action (see archiveDoc) —
+          // status changes no longer touch the archived flag.
           if (isQuote) {
             target.archived = (status === "Delivered" || status === "Declined") ? true : false;
           }
@@ -5338,6 +5370,7 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
           onCreateCustomsPO={!isQuote ? createCustomsPO : null}
           onConsolidatePOs={!isQuote ? consolidatePOs : null}
           onReverseConsolidation={!isQuote ? reverseConsolidation : null}
+          onArchive={!isQuote ? archiveDoc : null}
           openRecord={openRecord}
           showToast={showToast}
           update={update}
@@ -5554,7 +5587,7 @@ function PriceBookSearchModal({ items, isQuote, calcSellPrice, onSelect, onClose
   );
 }
 
-function DocModal({ kind, editing, db, items, models, categories, fx, statusOptions, onCancel, onSave, onSaveMilestones, onAddItem, onAddModel, onAddCategory, onStatusChange, onDelete, onGeneratePOs, onCreateCustomsPO, onConsolidatePOs, onReverseConsolidation, openRecord, showToast, update }) {
+function DocModal({ kind, editing, db, items, models, categories, fx, statusOptions, onCancel, onSave, onSaveMilestones, onAddItem, onAddModel, onAddCategory, onStatusChange, onDelete, onArchive, onGeneratePOs, onCreateCustomsPO, onConsolidatePOs, onReverseConsolidation, openRecord, showToast, update }) {
   const isQuote = kind === "quote";
   const isMobile = useIsMobile();
   const isTablet = useIsMobile(880); // covers iPad-width viewports where the desktop payment-schedule grid gets too tight
@@ -8118,10 +8151,19 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
       )}
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 18, flexWrap: "wrap", gap: 10 }}>
-        <div>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
           {!isNew && onDelete && (
             <Btn variant="danger" onClick={() => onDelete(editing)}>
               Delete
+            </Btn>
+          )}
+          {!isNew && onArchive && (
+            <Btn
+              variant="ghost"
+              onClick={() => onArchive(editing, !editing.archived)}
+              style={editing.archived ? { color: "#5c7a4f" } : { color: "#a3442e" }}
+            >
+              {editing.archived ? "Restore PO" : "Archive PO"}
             </Btn>
           )}
         </div>
