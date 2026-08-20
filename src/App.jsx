@@ -518,15 +518,17 @@ function toSupabaseFormat(data, table) {
         copy.consolidated_member_ids = copy.consolidatedMemberIds;
         delete copy.consolidatedMemberIds;
       }
+      if (copy.preArchiveStatus !== undefined) {
+        copy.pre_archive_status = copy.preArchiveStatus;
+        delete copy.preArchiveStatus;
+      }
       // Strip camelCase timestamps — columns are created_at/updated_at (server defaults)
       delete copy.createdAt;
       delete copy.updatedAt;
       break;
   }
   return copy;
-}
-
-function fromSupabaseFormat(data, table) {
+}function fromSupabaseFormat(data, table) {
   if (!data) return data;
   const copy = { ...data };
   
@@ -605,6 +607,7 @@ function fromSupabaseFormat(data, table) {
       if (copy.quote_number !== undefined) { copy.quoteNumber = copy.quote_number; delete copy.quote_number; }
       if (copy.hidden_costs !== undefined) { copy.hiddenCosts = copy.hidden_costs; delete copy.hidden_costs; }
       if (copy.supplier_note !== undefined) { copy.supplierNote = copy.supplier_note; delete copy.supplier_note; }
+      if (copy.pre_archive_status !== undefined) { copy.preArchiveStatus = copy.pre_archive_status; delete copy.pre_archive_status; }
       copy.lines = Array.isArray(copy.lines) ? copy.lines : [];
       copy.hiddenCosts = Array.isArray(copy.hiddenCosts) ? copy.hiddenCosts : [];
       copy.paymentMilestones = Array.isArray(copy.paymentMilestones) ? copy.paymentMilestones : [];
@@ -889,6 +892,16 @@ function fmtMoney(n, currency = "AUD") {
 function normalizePOStatus(s) {
   return (s === "Accepted" || s === "Sent") ? "In Transit" : s;
 }
+// "Archived" is a real, selectable status (so a Received or Cancelled PO can
+// be moved straight to Archived from the status dropdown), but calculations
+// that key off the real workflow state — e.g. Stock Movement counting
+// received stock — need to know what the PO actually was before archiving.
+// preArchiveStatus is captured the moment a PO is archived, and this is what
+// most business logic should check instead of the raw .status field.
+function poEffectiveStatus(po) {
+  if (po.status === "Archived" && po.preArchiveStatus) return normalizePOStatus(po.preArchiveStatus);
+  return normalizePOStatus(po.status);
+}
 function fmtDate(iso) {
   if (!iso) return "—";
   const d = new Date(iso);
@@ -1049,6 +1062,7 @@ function Badge({ children, tone = "model" }) {
     received: { bg: "#e3ecdc", fg: "#5c7a4f" },
     declined: { bg: "#f5e2dd", fg: "#a3442e" },
     cancelled: { bg: "#f5e2dd", fg: "#a3442e" },
+    archived: { bg: "#fbeae5", fg: "#a3442e" },
   };
   const t = tones[tone] || tones.model;
   return (
@@ -4238,7 +4252,7 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
 
   const collection = isQuote ? db.quotes : db.pos;
 
-  const statusOptions = isQuote ? ["Draft", "Sent", "Accepted", "Declined", "Delivered"] : ["Draft", "Paid", "In Transit", "Received", "Cancelled"];
+  const statusOptions = isQuote ? ["Draft", "Sent", "Accepted", "Declined", "Delivered"] : ["Draft", "Paid", "In Transit", "Received", "Cancelled", "Archived"];
   // POs saved before the "Accepted" → "In Transit" rename still have the old
   // value in the database — read status through this so filtering/searching/
   // display all agree on the current name. Quotes are untouched.
@@ -4644,31 +4658,6 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
     setPendingDelete(doc);
   }
 
-  // Manual archive/restore — decoupled from status entirely. A PO's status
-  // (Draft/Paid/In Transit/Received/Cancelled) reflects where it is in the
-  // supplier workflow and drives Stock Movement / open-PO calculations
-  // elsewhere; archiving is a separate, purely visual "hide from the default
-  // list" action the user takes deliberately, same as Archive/Restore
-  // already works for customers. A Received (or Cancelled) PO stays fully
-  // visible with its real status until explicitly archived here.
-  function archiveDoc(doc, archived) {
-    (async () => {
-      try {
-        const table = isQuote ? "quotes" : "purchase_orders";
-        await supabaseREST("PATCH", `${table}?id=eq.${doc.id}`, { archived, updated_at: nowISO() });
-        update((next) => {
-          const coll = isQuote ? next.quotes : next.pos;
-          const target = coll.find((d) => d.id === doc.id);
-          if (target) target.archived = archived;
-        });
-        showToast(archived ? `PO-${doc.number} archived` : `PO-${doc.number} restored`);
-      } catch (err) {
-        showToast("Archive failed");
-        console.error("Archive PO error:", err);
-      }
-    })();
-  }
-
   function handleGeneratePOs(quote) {
     setPoGenerationQuote(quote);
   }
@@ -4938,18 +4927,32 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
           updatePayload.delivered_date = todayISO();
         }
 
-        // Note: POs are no longer auto-archived by status (previously "Received"
-        // triggered this, which hid fully valid received POs from the default
-        // list). Archiving a PO is now a separate, manual action — see
-        // archiveDoc() — that leaves status untouched. Quotes keep their
-        // existing auto-archive-on-Delivered/Declined behaviour below, which
-        // wasn't part of this issue.
+        // "Archived" is a real, selectable status for POs (so a Received or
+        // Cancelled PO can be moved straight to Archived). Moving TO Archived
+        // remembers the real status it's leaving (preArchiveStatus) so Stock
+        // Movement and similar calculations — see poEffectiveStatus() — still
+        // treat it correctly; moving AWAY from Archived to an explicitly
+        // chosen status clears that. The `archived` boolean (used by the
+        // existing list filtering/"Archived" filter option) is kept in sync
+        // with status here. Quotes are untouched — they keep their existing
+        // auto-archive-on-Delivered/Declined behaviour below.
+        if (!isQuote) {
+          if (status === "Archived" && doc.status !== "Archived") {
+            updatePayload.pre_archive_status = doc.status;
+            updatePayload.archived = true;
+          } else if (status !== "Archived") {
+            updatePayload.pre_archive_status = null;
+            updatePayload.archived = false;
+          }
+        }
         if (isQuote) {
           updatePayload.archived = (status === "Delivered" || status === "Declined") ? true : false;
         }
         
-        // Update status in Supabase
-        await supabaseREST("PATCH", `${table}?id=eq.${doc.id}`, updatePayload);
+        // Update status in Supabase — schema-fallback in case pre_archive_status
+        // hasn't been added as a column in Supabase yet (it'll just be dropped
+        // with a console warning rather than failing the whole status change).
+        await supabaseRESTWithSchemaFallback("PATCH", `${table}?id=eq.${doc.id}`, updatePayload);
         
         // If quote accepted, also persist the linked customer's last-quote info,
         // and advance the linked prospect's sales-funnel stage to "Deposit" —
@@ -4987,8 +4990,19 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
             target.deliveredDate = todayISO();
           }
 
-          // POs: archiving is now a separate manual action (see archiveDoc) —
-          // status changes no longer touch the archived flag.
+          // POs: "Archived" is a real status — capture/restore preArchiveStatus
+          // and keep the archived boolean in sync, mirroring the Supabase
+          // write above. Uses doc.status (the value before this change) since
+          // target.status was just overwritten above.
+          if (!isQuote) {
+            if (status === "Archived" && doc.status !== "Archived") {
+              target.preArchiveStatus = doc.status;
+              target.archived = true;
+            } else if (status !== "Archived") {
+              target.preArchiveStatus = null;
+              target.archived = false;
+            }
+          }
           if (isQuote) {
             target.archived = (status === "Delivered" || status === "Declined") ? true : false;
           }
@@ -5167,7 +5181,7 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
                 <div style={{ minWidth: 0 }}>
                   <div style={{ fontSize: 14, fontWeight: 600, color: "#4a3527", display: "flex", alignItems: "center", gap: 8 }}>
                     #{d.number} · {d.party}
-                    {d.archived && (
+                    {d.archived && displayStatus(d) !== "Archived" && (
                       <span style={{ fontSize: 11, fontWeight: 700, color: "#a3442e", background: "#fbeae5", padding: "2px 6px", borderRadius: 3 }}>ARCHIVED</span>
                     )}
                   </div>
@@ -5213,7 +5227,7 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
                   <tr key={d.id} onClick={() => setDocModal(d)} style={{ cursor: "pointer" }}>
                     <td>
                       <strong>{d.number}</strong>
-                      {d.archived && (
+                      {d.archived && displayStatus(d) !== "Archived" && (
                         <span style={{ marginLeft: 8, fontSize: 11, fontWeight: 700, color: "#a3442e", background: "#fbeae5", padding: "2px 6px", borderRadius: 3 }}>ARCHIVED</span>
                       )}
                     </td>
@@ -5370,7 +5384,6 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
           onCreateCustomsPO={!isQuote ? createCustomsPO : null}
           onConsolidatePOs={!isQuote ? consolidatePOs : null}
           onReverseConsolidation={!isQuote ? reverseConsolidation : null}
-          onArchive={!isQuote ? archiveDoc : null}
           openRecord={openRecord}
           showToast={showToast}
           update={update}
@@ -5587,7 +5600,7 @@ function PriceBookSearchModal({ items, isQuote, calcSellPrice, onSelect, onClose
   );
 }
 
-function DocModal({ kind, editing, db, items, models, categories, fx, statusOptions, onCancel, onSave, onSaveMilestones, onAddItem, onAddModel, onAddCategory, onStatusChange, onDelete, onArchive, onGeneratePOs, onCreateCustomsPO, onConsolidatePOs, onReverseConsolidation, openRecord, showToast, update }) {
+function DocModal({ kind, editing, db, items, models, categories, fx, statusOptions, onCancel, onSave, onSaveMilestones, onAddItem, onAddModel, onAddCategory, onStatusChange, onDelete, onGeneratePOs, onCreateCustomsPO, onConsolidatePOs, onReverseConsolidation, openRecord, showToast, update }) {
   const isQuote = kind === "quote";
   const isMobile = useIsMobile();
   const isTablet = useIsMobile(880); // covers iPad-width viewports where the desktop payment-schedule grid gets too tight
@@ -8157,15 +8170,6 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
               Delete
             </Btn>
           )}
-          {!isNew && onArchive && (
-            <Btn
-              variant="ghost"
-              onClick={() => onArchive(editing, !editing.archived)}
-              style={editing.archived ? { color: "#5c7a4f" } : { color: "#a3442e" }}
-            >
-              {editing.archived ? "Restore PO" : "Archive PO"}
-            </Btn>
-          )}
         </div>
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
           {!isNew && (
@@ -9264,11 +9268,13 @@ function ContactsTab({ kind, db, update, showToast, nextNumber, pendingOpen, cle
           createdAt: todayISO(),
         };
         const updatedActivities = [...(contact.activities || []), newActivity];
+        const table = isSupplier ? "suppliers" : "customers";
         // Use supabaseREST directly (not schema fallback) so a missing `activities`
         // column produces a visible error rather than silently dropping the data.
-        await supabaseREST("PATCH", `customers?id=eq.${contact.id}`, { activities: updatedActivities });
+        await supabaseREST("PATCH", `${table}?id=eq.${contact.id}`, { activities: updatedActivities });
         update((next) => {
-          const target = next.customers.find((c) => c.id === contact.id);
+          const coll = isSupplier ? next.suppliers : next.customers;
+          const target = coll.find((c) => c.id === contact.id);
           if (target) target.activities = updatedActivities;
         });
         // Refresh the open modal so activities appear immediately
@@ -9290,9 +9296,11 @@ function ContactsTab({ kind, db, update, showToast, nextNumber, pendingOpen, cle
         const updatedActivities = (contact.activities || []).map((a, i) =>
           i === index ? { ...a, date: activityData.date, type: activityData.type, notes: activityData.notes } : a
         );
-        await supabaseREST("PATCH", `customers?id=eq.${contact.id}`, { activities: updatedActivities });
+        const table = isSupplier ? "suppliers" : "customers";
+        await supabaseREST("PATCH", `${table}?id=eq.${contact.id}`, { activities: updatedActivities });
         update((next) => {
-          const target = next.customers.find((c) => c.id === contact.id);
+          const coll = isSupplier ? next.suppliers : next.customers;
+          const target = coll.find((c) => c.id === contact.id);
           if (target) target.activities = updatedActivities;
         });
         setEditingContact((prev) =>
@@ -9311,9 +9319,11 @@ function ContactsTab({ kind, db, update, showToast, nextNumber, pendingOpen, cle
     (async () => {
       try {
         const updatedActivities = (contact.activities || []).filter((_, i) => i !== index);
-        await supabaseREST("PATCH", `customers?id=eq.${contact.id}`, { activities: updatedActivities });
+        const table = isSupplier ? "suppliers" : "customers";
+        await supabaseREST("PATCH", `${table}?id=eq.${contact.id}`, { activities: updatedActivities });
         update((next) => {
-          const target = next.customers.find((c) => c.id === contact.id);
+          const coll = isSupplier ? next.suppliers : next.customers;
+          const target = coll.find((c) => c.id === contact.id);
           if (target) target.activities = updatedActivities;
         });
         setEditingContact((prev) =>
@@ -9609,8 +9619,8 @@ function ContactsTab({ kind, db, update, showToast, nextNumber, pendingOpen, cle
           onCreateQuote={!isSupplier ? createQuoteFromCustomer : undefined}
           onConvertToProspect={!isSupplier ? (contact) => { convertCustomerToProspect(contact); setEditingContact(undefined); } : undefined}
           onArchive={!isSupplier ? (contact, archived) => { archiveContact(contact, archived); setEditingContact(undefined); } : undefined}
-          onLogActivity={!isSupplier ? () => setLoggingActivityFor({ contact: editingContact, activity: null, index: null }) : undefined}
-          onEditActivity={!isSupplier ? (activity, index) => setLoggingActivityFor({ contact: editingContact, activity, index }) : undefined}
+          onLogActivity={() => setLoggingActivityFor({ contact: editingContact, activity: null, index: null })}
+          onEditActivity={(activity, index) => setLoggingActivityFor({ contact: editingContact, activity, index })}
           db={db}
           openRecord={openRecord}
         />
@@ -10418,7 +10428,7 @@ function ContactModal({ kind, editing, onCancel, onSave, onCreateQuote, onConver
         </div>
       )}
 
-      {editing && !isSupplier && (
+      {editing && (
         <div style={{ borderTop: "1px solid #e3d8c6", paddingTop: 14, marginTop: 14 }}>
           <h4 style={{ fontSize: 13, fontWeight: 600, color: "#6b5240", margin: "0 0 10px" }}>
             Activity timeline ({(editing.activities || []).length})
@@ -12602,10 +12612,13 @@ function StockMovementTable({ db, collapsed, setCollapsed, fyEnd, setFyEnd, curr
 
   // ── IN: POs with status "Paid" or "Received" within FY ──
   // "Received" comes after "Paid" in the workflow, so stock remains counted IN
+  // Uses the PO's effective status (its real workflow state even if it's now
+  // Archived) so archiving a Received PO doesn't make its stock disappear
+  // from this count.
   // For POs: l.price = the actual amount paid to supplier (not l.cost which is a quote concept)
   const stockIN = {};
   (db.pos || []).filter(po => {
-    if (!["Paid", "Received"].includes(po.status)) return false;
+    if (!["Paid", "Received"].includes(poEffectiveStatus(po))) return false;
     const d = (po.date || po.createdAt || "").slice(0, 10); // normalise to YYYY-MM-DD
     return d >= fyRange.start && d <= fyRange.end;
   }).forEach(po => {
@@ -13279,7 +13292,7 @@ function DashboardTab({ db, setTab, openRecord }) {
     monthDue: po.eta ? monthKeyLabel(po.eta.slice(0, 7)) : "—",
     amount: parseFloat(po.total) || 0,
   }));
-  const openPORows = db.pos.filter((po) => !["Draft", "Received", "Cancelled"].includes(po.status)).map((po) => ({
+  const openPORows = db.pos.filter((po) => !["Draft", "Received", "Cancelled", "Archived"].includes(po.status)).map((po) => ({
     poId: po.id,
     supplier: po.party || "Unknown",
     product: productLabelOf(po),
@@ -13333,7 +13346,7 @@ function DashboardTab({ db, setTab, openRecord }) {
   // POs are excluded — once a shipment has arrived (or was cancelled) it's no
   // longer "in shipping".
   const intlShippingRows = db.pos
-    .filter((po) => !po.consolidatedGroupId && !["Received", "Cancelled"].includes(po.status))
+    .filter((po) => !po.consolidatedGroupId && !["Received", "Cancelled", "Archived"].includes(po.status))
     .map((po) => {
       const members = (po.consolidatedMemberIds || []).length > 0
         ? db.pos.filter((p) => (po.consolidatedMemberIds || []).includes(p.id))
@@ -13356,7 +13369,7 @@ function DashboardTab({ db, setTab, openRecord }) {
   // top-level POs / consolidated groups where NO PO in the group has a
   // freight forwarding fee. Same Received/Cancelled exclusion as above.
   const domesticShippingRows = db.pos
-    .filter((po) => !po.consolidatedGroupId && !["Received", "Cancelled"].includes(po.status))
+    .filter((po) => !po.consolidatedGroupId && !["Received", "Cancelled", "Archived"].includes(po.status))
     .map((po) => {
       const members = (po.consolidatedMemberIds || []).length > 0
         ? db.pos.filter((p) => (po.consolidatedMemberIds || []).includes(p.id))
@@ -14651,7 +14664,7 @@ function DashboardTab({ db, setTab, openRecord }) {
           // Show only POs with a Freight Forward fee, not yet received — indicates containers still arriving at port
           const shipments = (db.pos || []).filter((po) =>
             (po.customsClearance || 0) > 0 &&
-            !["Cancelled", "Received"].includes(po.status)
+            !["Cancelled", "Received", "Archived"].includes(po.status)
           );
 
           if (shipments.length === 0) {
@@ -14964,7 +14977,7 @@ function ShippingTab({ db, openRecord }) {
   // excluded — once a shipment has arrived (or was cancelled) it's no longer
   // "in shipping".
   const groups = db.pos
-    .filter((po) => !po.consolidatedGroupId && !["Received", "Cancelled"].includes(po.status))
+    .filter((po) => !po.consolidatedGroupId && !["Received", "Cancelled", "Archived"].includes(po.status))
     .filter((po) => statusFilter === "All" || po.status === statusFilter)
     .map((po) => {
       const members = (po.consolidatedMemberIds || []).length > 0
