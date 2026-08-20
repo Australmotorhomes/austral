@@ -1,5 +1,5 @@
 /* eslint-disable no-unused-vars, react-hooks/exhaustive-deps */
-import React, { useState, useEffect, useCallback, useRef } from "react";
+import React, { useState, useEffect, useLayoutEffect, useCallback, useRef } from "react";
 import html2pdf from "html2pdf.js";
 
 /* ============================================================
@@ -1184,6 +1184,37 @@ const inputStyle = {
   color: "#2b2018",
   boxSizing: "border-box",
 };
+
+// A <textarea> that grows to fit its content automatically — on first render
+// (so a modal opened with a long saved note shows it all immediately, instead
+// of clipping to a fixed `rows` count) and again on every keystroke as the
+// user types. Still resizable by hand (dragging just gets overridden by the
+// next content change, same as most auto-grow textareas).
+function AutoGrowTextarea({ value, style, minRows = 2, ...rest }) {
+  const ref = useRef(null);
+
+  const resize = () => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  };
+
+  useLayoutEffect(() => {
+    resize();
+  }, [value]);
+
+  return (
+    <textarea
+      ref={ref}
+      value={value}
+      rows={minRows}
+      onInput={resize}
+      style={{ overflow: "hidden", ...style }}
+      {...rest}
+    />
+  );
+}
 
 function Panel({ children, style, padded = true }) {
   return (
@@ -7245,11 +7276,10 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                               ✕
                             </button>
                           </div>
-                          <textarea
+                          <AutoGrowTextarea
                             placeholder="One feature per line — internal notes for this line item"
                             value={li.lineNote || ""}
                             onChange={(e) => updateMLine(idx, "lineNote", e.target.value)}
-                            rows={2}
                             style={{
                               width: "100%", marginTop: 4, marginBottom: 8,
                               fontSize: 12, color: "#6b5240", padding: "6px 8px",
@@ -7373,11 +7403,10 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                         ✕
                       </button>
                     </div>
-                    <textarea
+                    <AutoGrowTextarea
                       placeholder="One feature per line — each becomes a bullet point on the quote"
                       value={li.lineNote || ""}
                       onChange={(e) => updateLine(idx, "lineNote", e.target.value)}
-                      rows={2}
                       style={{
                         width: "100%", marginTop: 4, marginBottom: 8,
                         fontSize: 12, color: "#6b5240", padding: "6px 8px",
