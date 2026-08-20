@@ -13004,6 +13004,7 @@ function DashboardTab({ db, setTab, openRecord }) {
   const [stockTableCollapsed, setStockTableCollapsed] = React.useState(true);
   const [salesDashboardCollapsed, setSalesDashboardCollapsed] = React.useState(false);
   const [shipmentsDueCollapsed, setShipmentsDueCollapsed] = React.useState(true);
+  const [incomeDepositsCollapsed, setIncomeDepositsCollapsed] = React.useState(false);
   // Default to current FY — July 2026 is in FY26/27
   const [stockFYEnd, setStockFYEnd] = React.useState(currentFYEnd);
   const [salesModelCollapsed, setSalesModelCollapsed] = React.useState(false);
@@ -13023,11 +13024,12 @@ function DashboardTab({ db, setTab, openRecord }) {
   // Sales by Model) can be dragged into whatever order the user prefers.
   // The order is saved to the app_settings table so it persists across
   // sessions/devices, not just this browser tab.
-  const DEFAULT_SECTION_ORDER = ["salesDashboard", "stockMovement", "salesByModel", "shipmentsDue"];
+  const DEFAULT_SECTION_ORDER = ["salesDashboard", "stockMovement", "salesByModel", "incomeDeposits", "shipmentsDue"];
   const SECTION_LABELS = {
     salesDashboard: "Sales Dashboard",
     stockMovement: "Stock Movement",
     salesByModel: "Sales by Model",
+    incomeDeposits: "Income / Deposits",
     shipmentsDue: "Shipments Due",
   };
   const savedSectionOrder = (db.appSettings || []).find((s) => s.key === "dashboard_section_order")?.value;
@@ -13780,280 +13782,6 @@ function DashboardTab({ db, setTab, openRecord }) {
         <>
         <p className="section-desc">Overview of your sales pipeline, purchase orders, and expected profitability. Click any stat to view details.</p>
 
-        {/* FY Column selector */}
-        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
-          <span style={{ fontSize: 12, fontWeight: 600, color: "#6b5240" }}>Columns:</span>
-          {columns.map(fyEnd => (
-            <span key={fyEnd} style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "4px 10px", background: "#b5552b", color: "#fff", borderRadius: 4, fontSize: 12, fontWeight: 600 }}>
-              {getFYRange(fyEnd).label}
-              {columns.length > 1 && (
-                <button onClick={() => removeColumn(fyEnd)} style={{ background: "none", border: "none", color: "#fff", cursor: "pointer", fontSize: 14, lineHeight: 1, padding: 0, marginLeft: 2 }}>×</button>
-              )}
-            </span>
-          ))}
-          {columns.length < 4 && (
-            <select
-              onChange={(e) => { if (e.target.value) { addColumn(parseInt(e.target.value)); e.target.value = ""; }}}
-              style={{ padding: "4px 8px", fontSize: 12, border: "1px solid #d4a574", borderRadius: 4, color: "#6b5240", background: "#fff" }}
-              defaultValue=""
-            >
-              <option value="">+ Add FY…</option>
-              {[currentFYEnd + 1, currentFYEnd, currentFYEnd - 1, currentFYEnd - 2, currentFYEnd - 3, currentFYEnd - 4].filter(y => !columns.includes(y)).map(y => (
-                <option key={y} value={y}>{getFYRange(y).label}</option>
-              ))}
-            </select>
-          )}
-        </div>
-
-        {periods.length === 0 ? (
-          <p style={{ fontSize: 13, color: "#8a7a66" }}>Add at least one FY column above.</p>
-        ) : (() => {
-          const monthNames = ["Jul","Aug","Sep","Oct","Nov","Dec","Jan","Feb","Mar","Apr","May","Jun"];
-          const monthNumbers = [7,8,9,10,11,12,1,2,3,4,5,6]; // calendar month number for each row, in FY order
-
-          const periodData = periods.map(period => ({
-            ...period,
-            am: calculatePeriodSales(db.customers || [], period.start, period.end, undefined, "AM"),
-            pp: calculatePeriodSales(db.customers || [], period.start, period.end, undefined, "PP"),
-          }));
-
-          // Customers whose product doesn't match any known AM/PP keyword (see
-          // matchSalesModel) are excluded from both split columns above so they
-          // don't get silently miscounted into the wrong business. Surface a
-          // note if that's actually hiding revenue in the FYs currently shown,
-          // the same way unmatched products are surfaced on Sales by Model.
-          const overallRangeStart = periods.reduce((min, p) => !min || p.start < min ? p.start : min, null);
-          const overallRangeEnd = periods.reduce((max, p) => !max || p.end > max ? p.end : max, null);
-          const unmatchedBrandCustomers = overallRangeStart
-            ? dedupeCustomerRows(db.customers || []).filter((c) => {
-                if ((c.status || "").trim().toLowerCase() === "canceled") return false;
-                if (isAustralCustomerProduct(c) !== null) return false;
-                return getCustomerInvoicesForCalc(c).some(
-                  (inv) => inv && inv.invoiceMonth && isInDateRange(inv.invoiceMonth, overallRangeStart, overallRangeEnd)
-                );
-              })
-            : [];
-
-          const thStyle = { padding: "8px 10px", fontWeight: 700, fontSize: 12, textAlign: "right", whiteSpace: "nowrap" };
-          const tdStyle = { padding: "6px 10px", fontSize: 12, textAlign: "right" };
-          const tdLeft  = { padding: "6px 10px", fontSize: 12, textAlign: "left", color: "#6b5240" };
-
-          // ---- Build "Deposits Received + Forecast" table data ----
-          // Source: Quote payment schedules (milestones with a due date and amount)
-          // Rows = one per accepted/active quote, Columns = month of each milestone
-          const cutoff = (() => {
-            const d = new Date();
-            return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-          })();
-
-          const depositRowsRaw = (db.quotes || [])
-            .filter(q => !["Declined", "Draft"].includes(q.status) && !q.archived)
-            .map(q => {
-              const byKey = {};
-              (q.paymentMilestones || []).forEach(m => {
-                if (!m.due || !m.amount) return;
-                const key = String(m.due).slice(0, 7); // YYYY-MM
-                byKey[key] = (byKey[key] || 0) + (parseFloat(m.amount) || 0);
-              });
-              return {
-                customer: q.party || q.customer || "—",
-                product: q.model || (q.lines?.[0]?.desc || "—").slice(0, 20),
-                customerId: q.id, // used for click navigation — opens quote
-                quoteId: q.id,
-                byKey,
-              };
-            })
-            .filter(r => Object.keys(r.byKey).some(k => k >= cutoff));
-
-          const allDepositMonthKeys = [...new Set(depositRowsRaw.flatMap(r => Object.keys(r.byKey)))]
-            .filter(k => k >= cutoff)
-            .sort();
-          const depositColumnsTrimmed = allDepositMonthKeys.map(key => {
-            const [y, m] = key.split('-');
-            return { key, label: `${m}/${String(y).slice(-2)}` };
-          });
-
-          const depositMonthTotals = {};
-          depositColumnsTrimmed.forEach(col => {
-            depositMonthTotals[col.key] = depositRowsRaw.reduce((sum, r) => sum + (r.byKey[col.key] || 0), 0);
-          });
-          const depositGrandTotal = Object.values(depositMonthTotals).reduce((s, v) => s + v, 0);
-
-          return (
-            <>
-              {/* ── Income / Sales table ── */}
-              <div
-                onClick={() => setSalesTableCollapsed(v => !v)}
-                style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", userSelect: "none", marginBottom: salesTableCollapsed ? 16 : 4 }}
-              >
-                <span style={{ fontSize: 16, color: "#b5552b", lineHeight: 1 }}>{salesTableCollapsed ? "▶" : "▼"}</span>
-                <h3 style={{ fontSize: 14, fontWeight: 700, color: "#6b5240", margin: 0 }}>Income / Sales</h3>
-                {salesTableCollapsed && (
-                  <span style={{ fontSize: 11, color: "#b5552b", marginLeft: 4 }}>click to expand</span>
-                )}
-              </div>
-              {!salesTableCollapsed && (
-                <>
-                  <p style={{ fontSize: 11, color: "#8a7a66", margin: "0 0 10px" }}>Click any monthly total to see the individual transactions behind it. <strong>AM</strong> = Austral Motorhomes (campers), <strong>PP</strong> = Platinum Pontoons (boats).</p>
-                  <div style={{ overflowX: "auto", marginBottom: unmatchedBrandCustomers.length ? 8 : 32, WebkitOverflowScrolling: "touch" }}>
-                    <table style={{ width: "100%", minWidth: 360 + periodData.length * 150, borderCollapse: "collapse", background: "#fff", borderRadius: 6, overflow: "hidden", border: "1px solid #e3d8c6" }}>
-                      <thead>
-                        <tr style={{ background: "#f0e8d9", borderBottom: "1px solid #e3d8c6" }}>
-                          <th rowSpan={2} style={{ ...thStyle, textAlign: "left", width: 70, verticalAlign: "bottom" }}>Month</th>
-                          {periodData.map((pd, i) => (
-                            <th key={i} colSpan={2} style={{ ...thStyle, textAlign: "center", color: "#b5552b", borderLeft: "2px solid #e3d8c6" }}>{pd.label}</th>
-                          ))}
-                        </tr>
-                        <tr style={{ background: "#f0e8d9", borderBottom: "2px solid #b5552b" }}>
-                          {periodData.map((pd, i) => (
-                            <React.Fragment key={i}>
-                              <th style={{ ...thStyle, color: "#6b5240", borderLeft: "2px solid #e3d8c6", fontSize: 11 }}>AM</th>
-                              <th style={{ ...thStyle, color: "#6b5240", fontSize: 11 }}>PP</th>
-                            </React.Fragment>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {monthNames.map((mn, mi) => {
-                          const monthNum = monthNumbers[mi];
-                          return (
-                            <tr key={mn} style={{ background: mi % 2 === 0 ? "#fff" : "#faf7f3", borderBottom: "1px solid #f0e8d9" }}>
-                              <td style={tdLeft}>{mn}</td>
-                              {periodData.map((pd, i) => {
-                                // figure out the actual YYYY-MM key for this FY column + month row
-                                const fyEndYear = columns[i];
-                                const calYear = monthNum >= 7 ? fyEndYear - 1 : fyEndYear;
-                                const key = `${calYear}-${String(monthNum).padStart(2, '0')}`;
-                                const amVal = pd.am.monthTotals[key];
-                                const ppVal = pd.pp.monthTotals[key];
-                                const cellStyle = (val) => ({
-                                  ...tdStyle,
-                                  borderLeft: "2px solid #e3d8c6",
-                                  color: "#b5552b",
-                                  cursor: val ? "pointer" : "default",
-                                  textDecoration: val ? "underline" : "none",
-                                  textDecorationColor: "#e3c9b5",
-                                });
-                                return (
-                                  <React.Fragment key={i}>
-                                    <td
-                                      onClick={() => amVal && setDrillDown({ key, brand: "AM", label: `${mn} ${pd.label} — AM` })}
-                                      style={cellStyle(amVal)}
-                                    >
-                                      {amVal ? `$${amVal.toLocaleString()}` : "—"}
-                                    </td>
-                                    <td
-                                      onClick={() => ppVal && setDrillDown({ key, brand: "PP", label: `${mn} ${pd.label} — PP` })}
-                                      style={{ ...cellStyle(ppVal), borderLeft: "1px solid #f0e8d9" }}
-                                    >
-                                      {ppVal ? `$${ppVal.toLocaleString()}` : "—"}
-                                    </td>
-                                  </React.Fragment>
-                                );
-                              })}
-                            </tr>
-                          );
-                        })}
-                        <tr style={{ background: "#f0e8d9", borderTop: "2px solid #b5552b", fontWeight: 700 }}>
-                          <td style={{ ...tdLeft, fontWeight: 700 }}>Total</td>
-                          {periodData.map((pd, i) => (
-                            <React.Fragment key={i}>
-                              <td style={{ ...tdStyle, borderLeft: "2px solid #e3d8c6", color: "#b5552b", fontWeight: 700 }}>
-                                ${pd.am.periodTotal.toLocaleString()}
-                              </td>
-                              <td style={{ ...tdStyle, borderLeft: "1px solid #f0e8d9", color: "#b5552b", fontWeight: 700 }}>
-                                ${pd.pp.periodTotal.toLocaleString()}
-                              </td>
-                            </React.Fragment>
-                          ))}
-                        </tr>
-                      </tbody>
-                    </table>
-                  </div>
-                  {unmatchedBrandCustomers.length > 0 && (
-                    <p style={{ fontSize: 11, color: "#a06a3f", margin: "0 0 32px" }}>
-                      {unmatchedBrandCustomers.length} customer{unmatchedBrandCustomers.length > 1 ? "s" : ""} with a payment in the FYs shown couldn't be matched to a Campo/Scout/Savanna (AM) or Pontoon Boat (PP) product, so {unmatchedBrandCustomers.length > 1 ? "they're" : "it's"} excluded from both columns above. Open the customer record and check the Product field to have it counted.
-                    </p>
-                  )}
-                </>
-              )}
-
-              {/* ── Deposits Received + Forecast table: rows = customer + product, columns = current month → forward ── */}
-              <div
-                onClick={() => setDepositsTableCollapsed(v => !v)}
-                style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", userSelect: "none", marginBottom: depositsTableCollapsed ? 16 : 4 }}
-              >
-                <span style={{ fontSize: 16, color: "#4a5f7f", lineHeight: 1 }}>{depositsTableCollapsed ? "▶" : "▼"}</span>
-                <h3 style={{ fontSize: 14, fontWeight: 700, color: "#4a5f7f", margin: 0 }}>Deposits Received & Forecast</h3>
-                {depositsTableCollapsed && (
-                  <span style={{ fontSize: 11, color: "#4a5f7f", marginLeft: 4 }}>click to expand</span>
-                )}
-              </div>
-              {!depositsTableCollapsed && (
-                <>
-                  <p style={{ fontSize: 11, color: "#8a7a66", margin: "0 0 10px" }}>First column is this month's payments received; remaining columns are scheduled/forecast. Click any monthly total to see individual transactions.</p>
-                  <div style={{ overflowX: "auto" }}>
-                    <table style={{ width: "100%", borderCollapse: "collapse", background: "#fff", borderRadius: 6, overflow: "hidden", border: "1px solid #c8d8e8", fontSize: 11 }}>
-                      <thead>
-                        <tr style={{ background: "#e8eef5", borderBottom: "2px solid #6b8fc4" }}>
-                          <th style={{ ...thStyle, textAlign: "left", color: "#4a5f7f" }}>Customer</th>
-                          <th style={{ ...thStyle, textAlign: "left", color: "#4a5f7f" }}>Product</th>
-                          {depositColumnsTrimmed.map(col => (
-                            <th key={col.key} style={{ ...thStyle, color: "#4a5f7f", borderLeft: "1px solid #c8d8e8" }}>{col.label}</th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {depositRowsRaw.length === 0 && (
-                          <tr><td colSpan={2 + depositColumnsTrimmed.length} style={{ padding: 12, textAlign: "center", color: "#aaa" }}>No upcoming deposits.</td></tr>
-                        )}
-                        {depositRowsRaw.map((r, ri) => (
-                          <tr key={ri} style={{ background: ri % 2 === 0 ? "#fff" : "#f7fafc", borderBottom: "1px solid #e8eef5" }}>
-                            <td style={{ ...tdLeft, color: "#4a5f7f" }}>{r.customer}</td>
-                            <td style={{ ...tdLeft, color: "#4a5f7f" }}>{r.product}</td>
-                            {depositColumnsTrimmed.map(col => (
-                              <td
-                                key={col.key}
-                                onClick={() => r.byKey[col.key] && openRecord && openRecord("quote", r.quoteId)}
-                                style={{
-                                  ...tdStyle, color: "#6b8fc4", borderLeft: "1px solid #e8eef5",
-                                  cursor: r.byKey[col.key] ? "pointer" : "default",
-                                  textDecoration: r.byKey[col.key] ? "underline" : "none",
-                                  textDecorationColor: "#a8c4e8",
-                                }}
-                              >
-                                {r.byKey[col.key] ? `$${r.byKey[col.key].toLocaleString()}` : "—"}
-                              </td>
-                            ))}
-                          </tr>
-                        ))}
-                        {depositRowsRaw.length > 0 && (
-                          <tr style={{ background: "#e8eef5", borderTop: "2px solid #6b8fc4", fontWeight: 700 }}>
-                            <td style={{ ...tdLeft, fontWeight: 700, color: "#4a5f7f" }} colSpan={2}>Total (${depositGrandTotal.toLocaleString()})</td>
-                            {depositColumnsTrimmed.map(col => (
-                              <td
-                                key={col.key}
-                                onClick={() => depositMonthTotals[col.key] && setDrillDown({ key: col.key, label: col.label })}
-                                style={{
-                                  ...tdStyle, color: "#4a5f7f", borderLeft: "1px solid #c8d8e8", fontWeight: 700,
-                                  cursor: depositMonthTotals[col.key] ? "pointer" : "default",
-                                  textDecoration: depositMonthTotals[col.key] ? "underline" : "none",
-                                  textDecorationColor: "#a8c4e8",
-                                }}
-                              >
-                                {depositMonthTotals[col.key] ? `$${depositMonthTotals[col.key].toLocaleString()}` : "—"}
-                              </td>
-                            ))}
-                          </tr>
-                        )}
-                      </tbody>
-                    </table>
-                  </div>
-                </>
-              )}
-            </>
-          );
-        })()}
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 14 }}>
         <Panel>
@@ -14387,6 +14115,296 @@ function DashboardTab({ db, setTab, openRecord }) {
         </>
         )}
       </section>
+  );
+
+  // ── INCOME / DEPOSITS ──
+  const incomeDepositsSection = (
+      <Panel style={{ marginTop: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: incomeDepositsCollapsed ? 0 : 16 }}>
+          <h3 style={{ fontFamily: "Georgia,serif", fontSize: 16, color: "#4a3527", margin: 0 }}>Income / Deposits</h3>
+          <ToggleSwitch checked={!incomeDepositsCollapsed} onChange={() => setIncomeDepositsCollapsed(v => !v)} label="Show Income / Deposits" />
+        </div>
+        {!incomeDepositsCollapsed && (() => {
+          const thStyle = { padding: "8px 10px", fontWeight: 700, fontSize: 12, textAlign: "right", whiteSpace: "nowrap" };
+          const tdStyle = { padding: "6px 10px", fontSize: 12, textAlign: "right" };
+          const tdLeft  = { padding: "6px 10px", fontSize: 12, textAlign: "left", color: "#6b5240" };
+
+          return (
+            <>
+              {/* FY Column selector */}
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16, flexWrap: "wrap" }}>
+                <span style={{ fontSize: 12, fontWeight: 600, color: "#6b5240" }}>Columns:</span>
+                {columns.map(fyEnd => (
+                  <span key={fyEnd} style={{ display: "inline-flex", alignItems: "center", gap: 4, padding: "4px 10px", background: "#b5552b", color: "#fff", borderRadius: 4, fontSize: 12, fontWeight: 600 }}>
+                    {getFYRange(fyEnd).label}
+                    {columns.length > 1 && (
+                      <button onClick={() => removeColumn(fyEnd)} style={{ background: "none", border: "none", color: "#fff", cursor: "pointer", fontSize: 14, lineHeight: 1, padding: 0, marginLeft: 2 }}>×</button>
+                    )}
+                  </span>
+                ))}
+                {columns.length < 4 && (
+                  <select
+                    onChange={(e) => { if (e.target.value) { addColumn(parseInt(e.target.value)); e.target.value = ""; }}}
+                    style={{ padding: "4px 8px", fontSize: 12, border: "1px solid #d4a574", borderRadius: 4, color: "#6b5240", background: "#fff" }}
+                    defaultValue=""
+                  >
+                    <option value="">+ Add FY…</option>
+                    {[currentFYEnd + 1, currentFYEnd, currentFYEnd - 1, currentFYEnd - 2, currentFYEnd - 3, currentFYEnd - 4].filter(y => !columns.includes(y)).map(y => (
+                      <option key={y} value={y}>{getFYRange(y).label}</option>
+                    ))}
+                  </select>
+                )}
+              </div>
+
+              {periods.length === 0 ? (
+                <p style={{ fontSize: 13, color: "#8a7a66" }}>Add at least one FY column above.</p>
+              ) : (() => {
+                const monthNames = ["Jul","Aug","Sep","Oct","Nov","Dec","Jan","Feb","Mar","Apr","May","Jun"];
+                const monthNumbers = [7,8,9,10,11,12,1,2,3,4,5,6]; // calendar month number for each row, in FY order
+
+                const periodData = periods.map(period => ({
+                  ...period,
+                  am: calculatePeriodSales(db.customers || [], period.start, period.end, undefined, "AM"),
+                  pp: calculatePeriodSales(db.customers || [], period.start, period.end, undefined, "PP"),
+                }));
+
+                // Customers whose product doesn't match any known AM/PP keyword (see
+                // matchSalesModel) are excluded from both split columns above so they
+                // don't get silently miscounted into the wrong business. Surface a
+                // note if that's actually hiding revenue in the FYs currently shown,
+                // the same way unmatched products are surfaced on Sales by Model.
+                const overallRangeStart = periods.reduce((min, p) => !min || p.start < min ? p.start : min, null);
+                const overallRangeEnd = periods.reduce((max, p) => !max || p.end > max ? p.end : max, null);
+                const unmatchedBrandCustomers = overallRangeStart
+                  ? dedupeCustomerRows(db.customers || []).filter((c) => {
+                      if ((c.status || "").trim().toLowerCase() === "canceled") return false;
+                      if (isAustralCustomerProduct(c) !== null) return false;
+                      return getCustomerInvoicesForCalc(c).some(
+                        (inv) => inv && inv.invoiceMonth && isInDateRange(inv.invoiceMonth, overallRangeStart, overallRangeEnd)
+                      );
+                    })
+                  : [];
+
+                // ---- Build "Deposits Received + Forecast" table data ----
+                // Source: Quote payment schedules (milestones with a due date and amount)
+                // Rows = one per accepted/active quote, Columns = month of each milestone
+                const cutoff = (() => {
+                  const d = new Date();
+                  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+                })();
+
+                const depositRowsRaw = (db.quotes || [])
+                  .filter(q => !["Declined", "Draft"].includes(q.status) && !q.archived)
+                  .map(q => {
+                    const byKey = {};
+                    (q.paymentMilestones || []).forEach(m => {
+                      if (!m.due || !m.amount) return;
+                      const key = String(m.due).slice(0, 7); // YYYY-MM
+                      byKey[key] = (byKey[key] || 0) + (parseFloat(m.amount) || 0);
+                    });
+                    return {
+                      customer: q.party || q.customer || "—",
+                      product: q.model || (q.lines?.[0]?.desc || "—").slice(0, 20),
+                      customerId: q.id, // used for click navigation — opens quote
+                      quoteId: q.id,
+                      byKey,
+                    };
+                  })
+                  .filter(r => Object.keys(r.byKey).some(k => k >= cutoff));
+
+                const allDepositMonthKeys = [...new Set(depositRowsRaw.flatMap(r => Object.keys(r.byKey)))]
+                  .filter(k => k >= cutoff)
+                  .sort();
+                const depositColumnsTrimmed = allDepositMonthKeys.map(key => {
+                  const [y, m] = key.split('-');
+                  return { key, label: `${m}/${String(y).slice(-2)}` };
+                });
+
+                const depositMonthTotals = {};
+                depositColumnsTrimmed.forEach(col => {
+                  depositMonthTotals[col.key] = depositRowsRaw.reduce((sum, r) => sum + (r.byKey[col.key] || 0), 0);
+                });
+                const depositGrandTotal = Object.values(depositMonthTotals).reduce((s, v) => s + v, 0);
+
+                return (
+                  <>
+                    {/* ── Income / Sales table ── */}
+                    <div
+                      onClick={() => setSalesTableCollapsed(v => !v)}
+                      style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", userSelect: "none", marginBottom: salesTableCollapsed ? 16 : 4 }}
+                    >
+                      <span style={{ fontSize: 16, color: "#b5552b", lineHeight: 1 }}>{salesTableCollapsed ? "▶" : "▼"}</span>
+                      <h3 style={{ fontSize: 14, fontWeight: 700, color: "#6b5240", margin: 0 }}>Income / Sales</h3>
+                      {salesTableCollapsed && (
+                        <span style={{ fontSize: 11, color: "#b5552b", marginLeft: 4 }}>click to expand</span>
+                      )}
+                    </div>
+                    {!salesTableCollapsed && (
+                      <>
+                        <p style={{ fontSize: 11, color: "#8a7a66", margin: "0 0 10px" }}>Click any monthly total to see the individual transactions behind it. <strong>AM</strong> = Austral Motorhomes (campers), <strong>PP</strong> = Platinum Pontoons (boats).</p>
+                        <div style={{ overflowX: "auto", marginBottom: unmatchedBrandCustomers.length ? 8 : 32, WebkitOverflowScrolling: "touch" }}>
+                          <table style={{ width: "100%", minWidth: 360 + periodData.length * 150, borderCollapse: "collapse", background: "#fff", borderRadius: 6, overflow: "hidden", border: "1px solid #e3d8c6" }}>
+                            <thead>
+                              <tr style={{ background: "#f0e8d9", borderBottom: "1px solid #e3d8c6" }}>
+                                <th rowSpan={2} style={{ ...thStyle, textAlign: "left", width: 70, verticalAlign: "bottom" }}>Month</th>
+                                {periodData.map((pd, i) => (
+                                  <th key={i} colSpan={2} style={{ ...thStyle, textAlign: "center", color: "#b5552b", borderLeft: "2px solid #e3d8c6" }}>{pd.label}</th>
+                                ))}
+                              </tr>
+                              <tr style={{ background: "#f0e8d9", borderBottom: "2px solid #b5552b" }}>
+                                {periodData.map((pd, i) => (
+                                  <React.Fragment key={i}>
+                                    <th style={{ ...thStyle, color: "#6b5240", borderLeft: "2px solid #e3d8c6", fontSize: 11 }}>AM</th>
+                                    <th style={{ ...thStyle, color: "#6b5240", fontSize: 11 }}>PP</th>
+                                  </React.Fragment>
+                                ))}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {monthNames.map((mn, mi) => {
+                                const monthNum = monthNumbers[mi];
+                                return (
+                                  <tr key={mn} style={{ background: mi % 2 === 0 ? "#fff" : "#faf7f3", borderBottom: "1px solid #f0e8d9" }}>
+                                    <td style={tdLeft}>{mn}</td>
+                                    {periodData.map((pd, i) => {
+                                      // figure out the actual YYYY-MM key for this FY column + month row
+                                      const fyEndYear = columns[i];
+                                      const calYear = monthNum >= 7 ? fyEndYear - 1 : fyEndYear;
+                                      const key = `${calYear}-${String(monthNum).padStart(2, '0')}`;
+                                      const amVal = pd.am.monthTotals[key];
+                                      const ppVal = pd.pp.monthTotals[key];
+                                      const cellStyle = (val) => ({
+                                        ...tdStyle,
+                                        borderLeft: "2px solid #e3d8c6",
+                                        color: "#b5552b",
+                                        cursor: val ? "pointer" : "default",
+                                        textDecoration: val ? "underline" : "none",
+                                        textDecorationColor: "#e3c9b5",
+                                      });
+                                      return (
+                                        <React.Fragment key={i}>
+                                          <td
+                                            onClick={() => amVal && setDrillDown({ key, brand: "AM", label: `${mn} ${pd.label} — AM` })}
+                                            style={cellStyle(amVal)}
+                                          >
+                                            {amVal ? `$${amVal.toLocaleString()}` : "—"}
+                                          </td>
+                                          <td
+                                            onClick={() => ppVal && setDrillDown({ key, brand: "PP", label: `${mn} ${pd.label} — PP` })}
+                                            style={{ ...cellStyle(ppVal), borderLeft: "1px solid #f0e8d9" }}
+                                          >
+                                            {ppVal ? `$${ppVal.toLocaleString()}` : "—"}
+                                          </td>
+                                        </React.Fragment>
+                                      );
+                                    })}
+                                  </tr>
+                                );
+                              })}
+                              <tr style={{ background: "#f0e8d9", borderTop: "2px solid #b5552b", fontWeight: 700 }}>
+                                <td style={{ ...tdLeft, fontWeight: 700 }}>Total</td>
+                                {periodData.map((pd, i) => (
+                                  <React.Fragment key={i}>
+                                    <td style={{ ...tdStyle, borderLeft: "2px solid #e3d8c6", color: "#b5552b", fontWeight: 700 }}>
+                                      ${pd.am.periodTotal.toLocaleString()}
+                                    </td>
+                                    <td style={{ ...tdStyle, borderLeft: "1px solid #f0e8d9", color: "#b5552b", fontWeight: 700 }}>
+                                      ${pd.pp.periodTotal.toLocaleString()}
+                                    </td>
+                                  </React.Fragment>
+                                ))}
+                              </tr>
+                            </tbody>
+                          </table>
+                        </div>
+                        {unmatchedBrandCustomers.length > 0 && (
+                          <p style={{ fontSize: 11, color: "#a06a3f", margin: "0 0 32px" }}>
+                            {unmatchedBrandCustomers.length} customer{unmatchedBrandCustomers.length > 1 ? "s" : ""} with a payment in the FYs shown couldn't be matched to a Campo/Scout/Savanna (AM) or Pontoon Boat (PP) product, so {unmatchedBrandCustomers.length > 1 ? "they're" : "it's"} excluded from both columns above. Open the customer record and check the Product field to have it counted.
+                          </p>
+                        )}
+                      </>
+                    )}
+
+                    {/* ── Deposits Received + Forecast table: rows = customer + product, columns = current month → forward ── */}
+                    <div
+                      onClick={() => setDepositsTableCollapsed(v => !v)}
+                      style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", userSelect: "none", marginBottom: depositsTableCollapsed ? 16 : 4 }}
+                    >
+                      <span style={{ fontSize: 16, color: "#4a5f7f", lineHeight: 1 }}>{depositsTableCollapsed ? "▶" : "▼"}</span>
+                      <h3 style={{ fontSize: 14, fontWeight: 700, color: "#4a5f7f", margin: 0 }}>Deposits Received & Forecast</h3>
+                      {depositsTableCollapsed && (
+                        <span style={{ fontSize: 11, color: "#4a5f7f", marginLeft: 4 }}>click to expand</span>
+                      )}
+                    </div>
+                    {!depositsTableCollapsed && (
+                      <>
+                        <p style={{ fontSize: 11, color: "#8a7a66", margin: "0 0 10px" }}>First column is this month's payments received; remaining columns are scheduled/forecast. Click any monthly total to see individual transactions.</p>
+                        <div style={{ overflowX: "auto" }}>
+                          <table style={{ width: "100%", borderCollapse: "collapse", background: "#fff", borderRadius: 6, overflow: "hidden", border: "1px solid #c8d8e8", fontSize: 11 }}>
+                            <thead>
+                              <tr style={{ background: "#e8eef5", borderBottom: "2px solid #6b8fc4" }}>
+                                <th style={{ ...thStyle, textAlign: "left", color: "#4a5f7f" }}>Customer</th>
+                                <th style={{ ...thStyle, textAlign: "left", color: "#4a5f7f" }}>Product</th>
+                                {depositColumnsTrimmed.map(col => (
+                                  <th key={col.key} style={{ ...thStyle, color: "#4a5f7f", borderLeft: "1px solid #c8d8e8" }}>{col.label}</th>
+                                ))}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {depositRowsRaw.length === 0 && (
+                                <tr><td colSpan={2 + depositColumnsTrimmed.length} style={{ padding: 12, textAlign: "center", color: "#aaa" }}>No upcoming deposits.</td></tr>
+                              )}
+                              {depositRowsRaw.map((r, ri) => (
+                                <tr key={ri} style={{ background: ri % 2 === 0 ? "#fff" : "#f7fafc", borderBottom: "1px solid #e8eef5" }}>
+                                  <td style={{ ...tdLeft, color: "#4a5f7f" }}>{r.customer}</td>
+                                  <td style={{ ...tdLeft, color: "#4a5f7f" }}>{r.product}</td>
+                                  {depositColumnsTrimmed.map(col => (
+                                    <td
+                                      key={col.key}
+                                      onClick={() => r.byKey[col.key] && openRecord && openRecord("quote", r.quoteId)}
+                                      style={{
+                                        ...tdStyle, color: "#6b8fc4", borderLeft: "1px solid #e8eef5",
+                                        cursor: r.byKey[col.key] ? "pointer" : "default",
+                                        textDecoration: r.byKey[col.key] ? "underline" : "none",
+                                        textDecorationColor: "#a8c4e8",
+                                      }}
+                                    >
+                                      {r.byKey[col.key] ? `$${r.byKey[col.key].toLocaleString()}` : "—"}
+                                    </td>
+                                  ))}
+                                </tr>
+                              ))}
+                              {depositRowsRaw.length > 0 && (
+                                <tr style={{ background: "#e8eef5", borderTop: "2px solid #6b8fc4", fontWeight: 700 }}>
+                                  <td style={{ ...tdLeft, fontWeight: 700, color: "#4a5f7f" }} colSpan={2}>Total (${depositGrandTotal.toLocaleString()})</td>
+                                  {depositColumnsTrimmed.map(col => (
+                                    <td
+                                      key={col.key}
+                                      onClick={() => depositMonthTotals[col.key] && setDrillDown({ key: col.key, label: col.label })}
+                                      style={{
+                                        ...tdStyle, color: "#4a5f7f", borderLeft: "1px solid #c8d8e8", fontWeight: 700,
+                                        cursor: depositMonthTotals[col.key] ? "pointer" : "default",
+                                        textDecoration: depositMonthTotals[col.key] ? "underline" : "none",
+                                        textDecorationColor: "#a8c4e8",
+                                      }}
+                                    >
+                                      {depositMonthTotals[col.key] ? `$${depositMonthTotals[col.key].toLocaleString()}` : "—"}
+                                    </td>
+                                  ))}
+                                </tr>
+                              )}
+                            </tbody>
+                          </table>
+                        </div>
+                      </>
+                    )}
+                  </>
+                );
+              })()}
+            </>
+          );
+        })()}
+      </Panel>
   );
 
   // ── STOCK MOVEMENT TABLE ──
@@ -14734,6 +14752,7 @@ function DashboardTab({ db, setTab, openRecord }) {
     salesDashboard: salesDashboardSection,
     stockMovement: stockMovementSection,
     salesByModel: salesByModelSection,
+    incomeDeposits: incomeDepositsSection,
     shipmentsDue: shipmentsDueSection,
   };
 
