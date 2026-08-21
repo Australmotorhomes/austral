@@ -98,13 +98,29 @@ async function refreshAuthSession(session) {
 // ---- Supabase Storage helpers ----
 async function uploadAttachment(bucket, path, file) {
   const url = `${SUPABASE_URL}/storage/v1/object/${bucket}/${path}`;
+  // Safari on iOS sometimes reports an empty file.type for HEIC/HEIF photos —
+  // fall back to a guess from the extension, or a generic binary type, rather
+  // than sending an empty Content-Type header (which some storage backends
+  // reject or mishandle).
+  const contentType = file.type || guessContentTypeFromName(file.name) || "application/octet-stream";
   const resp = await fetch(url, {
     method: "POST",
-    headers: getSupabaseHeaders({ "Content-Type": file.type }),
+    headers: getSupabaseHeaders({ "Content-Type": contentType }),
     body: file,
   });
   if (!resp.ok) { const e = await resp.json(); throw new Error(e.message || "Upload failed"); }
   return `${SUPABASE_URL}/storage/v1/object/public/${bucket}/${path}`;
+}
+
+function guessContentTypeFromName(name) {
+  const ext = (name || "").split(".").pop().toLowerCase();
+  const map = {
+    heic: "image/heic", heif: "image/heif", jpg: "image/jpeg", jpeg: "image/jpeg",
+    png: "image/png", gif: "image/gif", webp: "image/webp", pdf: "application/pdf",
+    doc: "application/msword",
+    docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  };
+  return map[ext] || "";
 }
 
 async function deleteAttachment(bucket, path) {
@@ -9741,15 +9757,22 @@ function AttachmentsPanel({ recordId, recordType, attachments, onAttachmentsChan
     const files = Array.from(fileList || []);
     if (files.length === 0) return;
 
-    const tooLarge = files.filter((f) => f.size > MAX_FILE_SIZE_MB * 1024 * 1024);
+    // A photo picked from the Photos app that hasn't fully downloaded from
+    // iCloud yet can come through as a 0-byte placeholder — catch that with a
+    // clear message rather than silently "uploading" a broken empty file.
+    const empty = files.filter((f) => f.size === 0);
+    const tooLarge = files.filter((f) => f.size > 0 && f.size > MAX_FILE_SIZE_MB * 1024 * 1024);
+    if (empty.length > 0) {
+      setError(`${empty.map((f) => f.name).join(", ")} appear${empty.length === 1 ? "s" : ""} empty — if this is an iPhone photo, it may still be downloading from iCloud. Wait a moment and try again.`);
+    }
     if (tooLarge.length > 0) {
       setError(`${tooLarge.map((f) => f.name).join(", ")} exceed${tooLarge.length === 1 ? "s" : ""} the ${MAX_FILE_SIZE_MB}MB limit and won't be uploaded.`);
     }
-    const uploadable = files.filter((f) => f.size <= MAX_FILE_SIZE_MB * 1024 * 1024);
+    const uploadable = files.filter((f) => f.size > 0 && f.size <= MAX_FILE_SIZE_MB * 1024 * 1024);
     if (uploadable.length === 0) return;
 
     setUploading(true);
-    if (tooLarge.length === 0) setError("");
+    if (tooLarge.length === 0 && empty.length === 0) setError("");
     setUploadProgress({ current: 0, total: uploadable.length });
     const newAttachments = [];
     try {
@@ -9761,7 +9784,7 @@ function AttachmentsPanel({ recordId, recordType, attachments, onAttachmentsChan
         newAttachments.push({ name: file.name, url, path, uploadedAt: new Date().toISOString() });
       }
       onAttachmentsChange([...(attachments || []), ...newAttachments]);
-      if (tooLarge.length === 0) setShowUploadModal(false);
+      if (tooLarge.length === 0 && empty.length === 0) setShowUploadModal(false);
     } catch (err) {
       setError(`Upload failed: ${err.message}`);
       if (newAttachments.length > 0) {
@@ -9865,7 +9888,13 @@ function AttachmentsPanel({ recordId, recordType, attachments, onAttachmentsChan
                   ref={fileInputRef}
                   type="file"
                   multiple
-                  style={{ display: "none" }}
+                  accept="image/*,.heic,.heif,application/pdf,.doc,.docx,.pages"
+                  // NOT display:none — iOS Safari can silently fail to fire the
+                  // change event when a photo is picked via the Photos/Camera
+                  // sheet (as opposed to Browse/Files) on inputs that aren't
+                  // actually in the render tree. This keeps it laid out (so the
+                  // native picker wires up reliably) while making it invisible.
+                  style={{ position: "absolute", width: 1, height: 1, padding: 0, margin: -1, overflow: "hidden", clip: "rect(0,0,0,0)", whiteSpace: "nowrap", border: 0 }}
                   onChange={handleFileInputChange}
                 />
               </>
@@ -10416,12 +10445,12 @@ function ContactModal({ kind, editing, onCancel, onSave, onCreateQuote, onConver
         />
       </Field>
 
-      {editing && !isSupplier && (
+      {editing && (
         <div style={{ borderTop: "1px solid #e3d8c6", paddingTop: 14, marginTop: 14 }}>
           <h4 style={{ fontSize: 13, fontWeight: 600, color: "#6b5240", margin: "0 0 10px" }}>Attachments</h4>
           <AttachmentsPanel
             recordId={editing.id}
-            recordType="customers"
+            recordType={isSupplier ? "suppliers" : "customers"}
             attachments={attachments}
             onAttachmentsChange={setAttachments}
           />
