@@ -542,6 +542,22 @@ function toSupabaseFormat(data, table) {
       delete copy.createdAt;
       delete copy.updatedAt;
       break;
+
+    case "stock_units":
+      // stock_units: id, product_code, model, source_po_id, arrived_date, base_cost,
+      // cost_components (jsonb array), landed_cost, status, sold_quote_id, sold_date,
+      // created_at, updated_at
+      if (copy.productCode !== undefined) { copy.product_code = copy.productCode; delete copy.productCode; }
+      if (copy.sourcePoId !== undefined) { copy.source_po_id = copy.sourcePoId; delete copy.sourcePoId; }
+      if (copy.arrivedDate !== undefined) { copy.arrived_date = copy.arrivedDate; delete copy.arrivedDate; }
+      if (copy.baseCost !== undefined) { copy.base_cost = copy.baseCost; delete copy.baseCost; }
+      if (copy.costComponents !== undefined) { copy.cost_components = copy.costComponents; delete copy.costComponents; }
+      if (copy.landedCost !== undefined) { copy.landed_cost = copy.landedCost; delete copy.landedCost; }
+      if (copy.soldQuoteId !== undefined) { copy.sold_quote_id = copy.soldQuoteId; delete copy.soldQuoteId; }
+      if (copy.soldDate !== undefined) { copy.sold_date = copy.soldDate; delete copy.soldDate; }
+      if (copy.createdAt !== undefined) { copy.created_at = copy.createdAt; delete copy.createdAt; }
+      if (copy.updatedAt !== undefined) { copy.updated_at = copy.updatedAt; delete copy.updatedAt; }
+      break;
   }
   return copy;
 }function fromSupabaseFormat(data, table) {
@@ -646,6 +662,29 @@ function toSupabaseFormat(data, table) {
       // again; the user can archive it explicitly if they want it hidden.
       if (copy.status === "Received" && copy.archived) copy.archived = false;
       break;
+
+    case "stock_units":
+      if (copy.product_code !== undefined) { copy.productCode = copy.product_code; delete copy.product_code; }
+      if (copy.source_po_id !== undefined) { copy.sourcePoId = copy.source_po_id; delete copy.source_po_id; }
+      if (copy.arrived_date !== undefined) { copy.arrivedDate = copy.arrived_date; delete copy.arrived_date; }
+      if (copy.base_cost !== undefined) { copy.baseCost = parseFloat(copy.base_cost) || 0; delete copy.base_cost; }
+      if (copy.cost_components !== undefined) {
+        let parsed = copy.cost_components;
+        if (typeof parsed === "string") {
+          try { parsed = JSON.parse(parsed); } catch { parsed = []; }
+        }
+        copy.costComponents = Array.isArray(parsed) ? parsed : [];
+        delete copy.cost_components;
+      } else {
+        copy.costComponents = copy.costComponents || [];
+      }
+      if (copy.landed_cost !== undefined) { copy.landedCost = parseFloat(copy.landed_cost) || 0; delete copy.landed_cost; }
+      if (copy.sold_quote_id !== undefined) { copy.soldQuoteId = copy.sold_quote_id; delete copy.sold_quote_id; }
+      if (copy.sold_date !== undefined) { copy.soldDate = copy.sold_date; delete copy.sold_date; }
+      if (copy.created_at !== undefined) { copy.createdAt = copy.created_at; delete copy.created_at; }
+      if (copy.updated_at !== undefined) { copy.updatedAt = copy.updated_at; delete copy.updated_at; }
+      copy.status = copy.status || "in_stock";
+      break;
   }
   return copy;
 }
@@ -706,6 +745,15 @@ async function loadAllData() {
       console.warn("price_book_groups not available yet (fine if its migration hasn't been run):", groupsErr);
     }
 
+    // Same fault-tolerant treatment for stock_units (FIFO stock lot tracking —
+    // new table, may not exist yet until its migration is run).
+    let stockUnits = [];
+    try {
+      stockUnits = await supabaseREST("GET", "stock_units");
+    } catch (stockUnitsErr) {
+      console.warn("stock_units not available yet (fine if its migration hasn't been run):", stockUnitsErr);
+    }
+
     return {
       items: items || [],
       quotes: quotes || [],
@@ -716,6 +764,7 @@ async function loadAllData() {
       categories: categories || [],
       appSettings: appSettings || [],
       priceBookGroups: priceBookGroups || [],
+      stockUnits: stockUnits || [],
     };
   } catch (err) {
     console.error('Load data error:', err);
@@ -880,6 +929,102 @@ async function deleteCRMProspect(id) {
     console.error("Delete CRM prospect error:", err);
     throw err;
   }
+}
+
+// ---- Stock Units (FIFO lot tracking) ----
+// A stockUnit is one physical camper: created the moment a Chassis & Structure
+// PO line first becomes Paid/Received, then accumulates cost as further POs
+// (freight, electrical/gas works, gas bottles & leads, etc.) get applied to it
+// via applyPoToStockUnit(). landedCost is always baseCost + sum(costComponents),
+// recomputed here rather than trusted from the DB so it can never drift.
+function computeLandedCost(unit) {
+  const base = parseFloat(unit?.baseCost) || 0;
+  const componentsTotal = (unit?.costComponents || []).reduce((s, c) => s + (parseFloat(c.amount) || 0), 0);
+  return base + componentsTotal;
+}
+
+async function createStockUnit(unitData) {
+  try {
+    const payload = toSupabaseFormat({ ...unitData, landedCost: computeLandedCost(unitData) }, "stock_units");
+    const result = await createRecord("stock_units", payload);
+    return fromSupabaseFormat(result[0], "stock_units");
+  } catch (err) {
+    console.error("Create stock unit error:", err);
+    throw err;
+  }
+}
+
+async function updateStockUnit(id, unitData) {
+  try {
+    const payload = toSupabaseFormat(unitData, "stock_units");
+    const result = await updateRecord("stock_units", id, payload);
+    return fromSupabaseFormat(result[0], "stock_units");
+  } catch (err) {
+    console.error("Update stock unit error:", err);
+    throw err;
+  }
+}
+
+async function deleteStockUnit(id) {
+  try {
+    await deleteRecord("stock_units", id);
+  } catch (err) {
+    console.error("Delete stock unit error:", err);
+    throw err;
+  }
+}
+
+// Builds the stockUnit records a PO's Chassis & Structure lines should create,
+// once that PO first reaches Paid/Received. Mirrors the existing Stock
+// Movement apportionment: each unit's baseCost is its line value plus its
+// share of the PO's freight forwarding fee (customsClearance), split
+// proportionally by line value the same way StockMovementTable already does.
+// Returns [] if the PO has no Chassis & Structure lines (nothing to create),
+// so callers can skip the write entirely in that case.
+function buildStockUnitsForPO(po, items) {
+  const lines = po.lines || [];
+  const freight = parseFloat(po.customsClearance) || 0;
+  const totalLineValue = lines.reduce((s, l) => {
+    const qty = parseFloat(l.qty || l.quantity) || 1;
+    const price = parseFloat(l.price || l.unitPrice || l.cost || 0);
+    return s + price * qty;
+  }, 0);
+
+  const units = [];
+  lines.forEach((l) => {
+    let item = l.itemId ? (items || []).find((i) => i.id === l.itemId) : null;
+    if (!item) {
+      item = (items || []).find((i) =>
+        i.productCode && (l.desc || l.description || "").toUpperCase().includes(i.productCode.toUpperCase())
+      );
+    }
+    const code = item?.productCode;
+    if (!code || item?.category !== "Chassis & Structure") return;
+
+    const qty = Math.max(1, Math.round(parseFloat(l.qty || l.quantity) || 1));
+    const linePrice = parseFloat(l.price || l.unitPrice || l.cost || 0);
+    const lineValue = linePrice * qty;
+    const freightShare = totalLineValue > 0 ? (lineValue / totalLineValue) * freight : 0;
+    const perUnitCost = (lineValue + freightShare) / qty;
+
+    // One stockUnit per physical camper on the line, so a qty:2 line makes two
+    // separately-trackable units (each can go on to receive its own freight/
+    // electrical/gas costs and sell independently under FIFO).
+    for (let i = 0; i < qty; i++) {
+      units.push({
+        productCode: code,
+        model: item?.model || "",
+        sourcePoId: po.id,
+        arrivedDate: (po.date || po.createdAt || "").slice(0, 10) || todayISO(),
+        baseCost: perUnitCost,
+        costComponents: [],
+        status: "in_stock",
+        soldQuoteId: null,
+        soldDate: null,
+      });
+    }
+  });
+  return units;
 }
 
 function calcSellPrice(cost, margin = DEFAULT_MARGIN) {
@@ -1829,6 +1974,15 @@ export default function App() {
         // Convert quotes and purchase orders from Supabase format
         data.quotes = (data.quotes || []).map((q) => fromSupabaseFormat(q, "quotes"));
         data.pos = (data.pos || []).map((p) => fromSupabaseFormat(p, "purchase_orders"));
+
+        // Convert stock units from Supabase format, and recompute landedCost
+        // locally rather than trusting the stored value — cheap, and guarantees
+        // it can never silently drift out of sync with baseCost/costComponents.
+        data.stockUnits = (data.stockUnits || []).map((u) => {
+          const converted = fromSupabaseFormat(u, "stock_units");
+          converted.landedCost = computeLandedCost(converted);
+          return converted;
+        });
         
         data.fx = { usdAudRate: FALLBACK_USD_AUD_RATE, source: "default", updatedAt: null };
         // seq is a local-only counter, not stored in Supabase — derive it from existing data.
@@ -1904,6 +2058,7 @@ export default function App() {
           models: DEFAULT_MODELS.slice(),
           fx: { usdAudRate: FALLBACK_USD_AUD_RATE, source: "default", updatedAt: null },
           seq: { quote: 1, po: 1 },
+          stockUnits: [],
         };
         setDb(emptyData);
         setSyncStatus("ok");
@@ -1924,6 +2079,7 @@ export default function App() {
           models: DEFAULT_MODELS.slice(),
           fx: { usdAudRate: FALLBACK_USD_AUD_RATE, source: "default", updatedAt: null },
           seq: { quote: 1, po: 1 },
+          stockUnits: [],
         };
         setDb(emptyData);
       }
@@ -4970,6 +5126,30 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
         // with a console warning rather than failing the whole status change).
         await supabaseRESTWithSchemaFallback("PATCH", `${table}?id=eq.${doc.id}`, updatePayload);
         
+        // The moment a PO carrying a Chassis & Structure line first reaches
+        // Paid/Received, create one stockUnit per physical camper on that
+        // line (base cost + its share of the PO's freight forwarding fee).
+        // This is the FIFO lot each unit's later freight/electrical/gas costs
+        // get applied to, and what stock-on-hand value is now computed from.
+        // Guarded on both sides — an existing stockUnit for this PO, or the
+        // PO already having been in Paid/Received before this change — so
+        // toggling status back and forth never creates duplicate units.
+        let newStockUnits = [];
+        if (!isQuote && ["Paid", "Received"].includes(status)) {
+          const alreadyExists = (db.stockUnits || []).some((u) => u.sourcePoId === doc.id);
+          const wasAlreadyInStock = ["Paid", "Received"].includes(poEffectiveStatus(doc));
+          if (!alreadyExists && !wasAlreadyInStock) {
+            const toCreate = buildStockUnitsForPO(doc, db.items || []);
+            for (const u of toCreate) {
+              try {
+                newStockUnits.push(await createStockUnit(u));
+              } catch (err) {
+                console.error("Failed to create stock unit for PO", doc.id, err);
+              }
+            }
+          }
+        }
+
         // If quote accepted, also persist the linked customer's last-quote info,
         // and advance the linked prospect's sales-funnel stage to "Deposit" —
         // this was previously only updated in local state (customer part) or not
@@ -5004,6 +5184,10 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
           target.status = status;
           if (isQuote && status === "Delivered" && !target.deliveredDate) {
             target.deliveredDate = todayISO();
+          }
+
+          if (newStockUnits.length) {
+            next.stockUnits = [...(next.stockUnits || []), ...newStockUnits];
           }
 
           // POs: "Archived" is a real status — capture/restore preArchiveStatus
