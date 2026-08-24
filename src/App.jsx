@@ -553,6 +553,8 @@ function toSupabaseFormat(data, table) {
       if (copy.baseCost !== undefined) { copy.base_cost = copy.baseCost; delete copy.baseCost; }
       if (copy.costComponents !== undefined) { copy.cost_components = copy.costComponents; delete copy.costComponents; }
       if (copy.landedCost !== undefined) { copy.landed_cost = copy.landedCost; delete copy.landedCost; }
+      if (copy.serialNumber !== undefined) { copy.serial_number = copy.serialNumber; delete copy.serialNumber; }
+      if (copy.linkedQuoteId !== undefined) { copy.linked_quote_id = copy.linkedQuoteId; delete copy.linkedQuoteId; }
       if (copy.soldQuoteId !== undefined) { copy.sold_quote_id = copy.soldQuoteId; delete copy.soldQuoteId; }
       if (copy.soldDate !== undefined) { copy.sold_date = copy.soldDate; delete copy.soldDate; }
       if (copy.createdAt !== undefined) { copy.created_at = copy.createdAt; delete copy.createdAt; }
@@ -679,6 +681,8 @@ function toSupabaseFormat(data, table) {
         copy.costComponents = copy.costComponents || [];
       }
       if (copy.landed_cost !== undefined) { copy.landedCost = parseFloat(copy.landed_cost) || 0; delete copy.landed_cost; }
+      if (copy.serial_number !== undefined) { copy.serialNumber = copy.serial_number; delete copy.serial_number; }
+      if (copy.linked_quote_id !== undefined) { copy.linkedQuoteId = copy.linked_quote_id; delete copy.linked_quote_id; }
       if (copy.sold_quote_id !== undefined) { copy.soldQuoteId = copy.sold_quote_id; delete copy.sold_quote_id; }
       if (copy.sold_date !== undefined) { copy.soldDate = copy.sold_date; delete copy.sold_date; }
       if (copy.created_at !== undefined) { copy.createdAt = copy.created_at; delete copy.created_at; }
@@ -937,6 +941,16 @@ async function deleteCRMProspect(id) {
 // (freight, electrical/gas works, gas bottles & leads, etc.) get applied to it
 // via applyPoToStockUnit(). landedCost is always baseCost + sum(costComponents),
 // recomputed here rather than trusted from the DB so it can never drift.
+//
+// linkedQuoteId marks a unit that was built for one specific customer (the PO
+// it came from was generated from an accepted quote, not a general stock
+// build) — see buildStockUnitsForPO. A linked unit is earmarked for that
+// exact quote and must be excluded from generic FIFO matching against other
+// sales: it isn't part of the shelf-stock pool other customers can be sold
+// from, and it doesn't compete on arrival-date ordering with units that are
+// genuinely sitting in stock (which, depending on the model, may sit for a
+// long time before anyone buys them). Only units with linkedQuoteId === null
+// are "true" stock and eligible for oldest-first FIFO matching.
 function computeLandedCost(unit) {
   const base = parseFloat(unit?.baseCost) || 0;
   const componentsTotal = (unit?.costComponents || []).reduce((s, c) => s + (parseFloat(c.amount) || 0), 0);
@@ -981,6 +995,14 @@ async function deleteStockUnit(id) {
 // proportionally by line value the same way StockMovementTable already does.
 // Returns [] if the PO has no Chassis & Structure lines (nothing to create),
 // so callers can skip the write entirely in that case.
+//
+// po.quoteId is set whenever the PO was generated from an accepted quote
+// (createPOsForSuppliers stamps it) — i.e. this camper was ordered for one
+// specific customer, not built for general stock. That gets carried onto the
+// unit as linkedQuoteId so FIFO matching (Stage 3) can tell the two apart:
+// a linked unit is reserved for that exact quote regardless of arrival order;
+// a plain stock build (quoteId null) goes into the shared FIFO pool and may
+// sit in stock for a long time depending on how quickly that model sells.
 function buildStockUnitsForPO(po, items) {
   const lines = po.lines || [];
   const freight = parseFloat(po.customsClearance) || 0;
@@ -1019,12 +1041,67 @@ function buildStockUnitsForPO(po, items) {
         baseCost: perUnitCost,
         costComponents: [],
         status: "in_stock",
+        linkedQuoteId: po.quoteId || null,
+        serialNumber: null,
         soldQuoteId: null,
         soldDate: null,
       });
     }
   });
   return units;
+}
+
+// Finds the Chassis & Structure item a set of lines refers to (by itemId
+// first, else by matching the item's productCode against the line
+// description) — shared between stock-unit creation and FIFO matching below,
+// so a quote and the PO that built its camper always agree on productCode.
+function findChassisItem(lines, items) {
+  for (const l of lines || []) {
+    let item = l.itemId ? (items || []).find((i) => i.id === l.itemId) : null;
+    if (!item) {
+      item = (items || []).find((i) =>
+        i.productCode && (l.desc || l.description || "").toUpperCase().includes(i.productCode.toUpperCase())
+      );
+    }
+    if (item && item.category === "Chassis & Structure") return item;
+  }
+  return null;
+}
+
+// Finds a stock unit by its serial number (case/whitespace-insensitive) — the
+// physical identifier printed on the camper itself, which is often how staff
+// actually think about "which unit is this" rather than by arrival order.
+function findStockUnitBySerial(serial, stockUnits) {
+  const needle = (serial || "").trim().toUpperCase();
+  if (!needle) return null;
+  return (stockUnits || []).find((u) => (u.serialNumber || "").trim().toUpperCase() === needle) || null;
+}
+
+// Picks which physical stockUnit fulfils a quote when it's marked Delivered:
+//  1. A unit already linked to this exact quote (linkedQuoteId === quote.id)
+//     always wins, regardless of arrival order. That link is set either
+//     automatically — its PO was generated from this quote, a custom build —
+//     or manually, by a staff member entering the unit's serial number
+//     against the quote before delivery (see the quote form's "Linked Stock
+//     Unit" field).
+//  2. Otherwise, the oldest unlinked in_stock unit whose productCode matches
+//     the quote's Chassis & Structure line — true FIFO: a plain stock unit
+//     only sells in the order it arrived, never by convenience, and a slower-
+//     moving model can sit for as long as it takes regardless of what else
+//     comes and goes around it.
+// Returns null if nothing matches, so the caller can warn rather than fail
+// the status change outright.
+function matchStockUnitForQuote(quote, items, stockUnits) {
+  const linked = (stockUnits || []).find((u) => u.linkedQuoteId === quote.id && u.status === "in_stock");
+  if (linked) return linked;
+
+  const chassisItem = findChassisItem(quote.lines, items);
+  if (!chassisItem) return null;
+
+  const candidates = (stockUnits || [])
+    .filter((u) => u.status === "in_stock" && !u.linkedQuoteId && u.productCode === chassisItem.productCode)
+    .sort((a, b) => (a.arrivedDate || "").localeCompare(b.arrivedDate || ""));
+  return candidates[0] || null;
 }
 
 function calcSellPrice(cost, margin = DEFAULT_MARGIN) {
@@ -1412,6 +1489,37 @@ function Panel({ children, style, padded = true }) {
     >
       {children}
     </div>
+  );
+}
+
+// Small "?" hint badge — native title tooltip on hover, same convention the
+// rest of the app already uses for explanatory text, just made discoverable
+// as a visible affordance next to feature names that aren't self-explanatory
+// (rather than requiring someone to stumble onto hovering plain text).
+function HelpHint({ text }) {
+  return (
+    <span
+      title={text}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        width: 15,
+        height: 15,
+        borderRadius: "50%",
+        background: "#e5d9c3",
+        color: "#6b5240",
+        fontSize: 10,
+        fontWeight: 700,
+        cursor: "help",
+        marginLeft: 6,
+        flexShrink: 0,
+        userSelect: "none",
+        verticalAlign: "middle",
+      }}
+    >
+      ?
+    </span>
   );
 }
 
@@ -5150,6 +5258,43 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
           }
         }
 
+        // Stage 3 — FIFO consumption: the moment a quote is marked Delivered,
+        // match it to the physical unit that fulfils it (see
+        // matchStockUnitForQuote — a linked/custom-build or serial-pinned
+        // unit always wins, otherwise the oldest unlinked in_stock unit of
+        // that model) and mark that unit sold, locking in its landedCost as
+        // this sale's COGS. If nothing matches, the status change still goes
+        // through — it's flagged in the toast so staff can link a unit
+        // manually (e.g. via serial number) rather than being blocked.
+        let soldStockUnit = null;
+        if (isQuote && status === "Delivered") {
+          const match = matchStockUnitForQuote(doc, db.items || [], db.stockUnits || []);
+          if (match) {
+            try {
+              await updateStockUnit(match.id, { status: "sold", soldQuoteId: doc.id, soldDate: todayISO() });
+              soldStockUnit = match;
+            } catch (err) {
+              console.error("Failed to mark stock unit sold:", err);
+            }
+          }
+        }
+
+        // If a quote carrying a custom-build (or manually serial-linked) unit
+        // falls through, release that unit back into the general FIFO pool
+        // instead of leaving it orphaned against a dead quote forever.
+        let releasedStockUnitId = null;
+        if (isQuote && status === "Declined") {
+          const linkedUnit = (db.stockUnits || []).find((u) => u.linkedQuoteId === doc.id && u.status === "in_stock");
+          if (linkedUnit) {
+            try {
+              await updateStockUnit(linkedUnit.id, { linkedQuoteId: null });
+              releasedStockUnitId = linkedUnit.id;
+            } catch (err) {
+              console.error("Failed to release stock unit:", err);
+            }
+          }
+        }
+
         // If quote accepted, also persist the linked customer's last-quote info,
         // and advance the linked prospect's sales-funnel stage to "Deposit" —
         // this was previously only updated in local state (customer part) or not
@@ -5188,6 +5333,20 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
 
           if (newStockUnits.length) {
             next.stockUnits = [...(next.stockUnits || []), ...newStockUnits];
+          }
+
+          if (soldStockUnit) {
+            const su = (next.stockUnits || []).find((u) => u.id === soldStockUnit.id);
+            if (su) {
+              su.status = "sold";
+              su.soldQuoteId = doc.id;
+              su.soldDate = todayISO();
+            }
+          }
+
+          if (releasedStockUnitId) {
+            const ru = (next.stockUnits || []).find((u) => u.id === releasedStockUnitId);
+            if (ru) ru.linkedQuoteId = null;
           }
 
           // POs: "Archived" is a real status — capture/restore preArchiveStatus
@@ -5231,7 +5390,13 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
           setConversionWorkflow({ quoteId: doc.id, prospectId: matchedProspect.id, prospectName: matchedProspect.name });
         }
         
-        showToast("Status updated");
+        showToast(
+          isQuote && status === "Delivered"
+            ? (soldStockUnit
+                ? `Delivered — ${soldStockUnit.serialNumber || soldStockUnit.productCode} marked sold`
+                : "Delivered — no matching stock unit found; link one manually above if needed")
+            : "Status updated"
+        );
       } catch (err) {
         showToast(`Error updating status: ${err.message}`);
         console.error("Set status error:", err);
@@ -5845,6 +6010,13 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
   const [customsClearance, setCustomsClearance] = useState(
     !isQuote && (editing?.customsClearance !== undefined && editing.customsClearance !== null) ? editing.customsClearance : 0
   );
+  // Stage 2: apply this PO's cost to an existing stock unit (freight,
+  // electrical/gas works, gas bottles & leads, etc. arriving on their own PO
+  // after the camper itself is already in stock). See handleApplyToStockUnit.
+  const [applyStockUnitId, setApplyStockUnitId] = useState("");
+  const [applyAmount, setApplyAmount] = useState(editing ? String(editing.total || "") : "");
+  const [applyLabel, setApplyLabel] = useState(editing ? `PO ${editing.number}` : "");
+  const [applyBusy, setApplyBusy] = useState(false);
   const [attachments, setAttachments] = useState(
     editing?.attachments ? editing.attachments : []
   );
@@ -6220,6 +6392,136 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
     } catch (err) {
       showToast("Save failed");
       console.error("Error saving member PO:", err);
+    }
+  }
+
+  // Stage 2: existing applications of this PO's cost onto stock units, so the
+  // form can show "already applied here" and let it be removed/re-entered
+  // rather than silently allowing the same invoice to be double-counted.
+  const stockUnitApplications = !isQuote && !isNew
+    ? (db.stockUnits || [])
+        .map((u) => ({ unit: u, components: (u.costComponents || []).filter((c) => c.sourcePoId === editing.id) }))
+        .filter((x) => x.components.length > 0)
+    : [];
+
+  // Stage 3: the physical units this PO itself created (its Chassis &
+  // Structure line(s) going Paid/Received) — shown so their serial numbers
+  // can be recorded once known, since that's usually not until the container
+  // is actually opened and inspected, well after the unit record exists.
+  const [serialDrafts, setSerialDrafts] = useState({});
+  const stockUnitsFromThisPO = !isQuote && !isNew
+    ? (db.stockUnits || []).filter((u) => u.sourcePoId === editing.id)
+    : [];
+
+  async function handleSaveSerialNumber(unitId) {
+    const value = (serialDrafts[unitId] ?? "").trim();
+    try {
+      await updateStockUnit(unitId, { serialNumber: value || null });
+      update((next) => {
+        const u = (next.stockUnits || []).find((x) => x.id === unitId);
+        if (u) u.serialNumber = value || null;
+      });
+      showToast("Serial number saved");
+    } catch (err) {
+      console.error("Save serial number error:", err);
+      showToast(`Error saving serial number: ${err.message}`);
+    }
+  }
+
+  // Stage 3 (quotes only): let staff pin this quote to a specific physical
+  // unit ahead of delivery — by serial number if it's known, otherwise by
+  // picking from the list. This sets linkedQuoteId the same way an
+  // automatically-generated custom-build unit would, so it takes priority
+  // over ordinary FIFO matching when the quote is later marked Delivered.
+  const [serialSearch, setSerialSearch] = useState("");
+  const linkedUnitForQuote = isQuote && !isNew
+    ? (db.stockUnits || []).find((u) => u.linkedQuoteId === editing.id)
+    : null;
+
+  async function handleLinkStockUnitToQuote(unit) {
+    try {
+      await updateStockUnit(unit.id, { linkedQuoteId: editing.id });
+      update((next) => {
+        const u = (next.stockUnits || []).find((x) => x.id === unit.id);
+        if (u) u.linkedQuoteId = editing.id;
+      });
+      showToast(`Linked ${unit.serialNumber || unit.productCode} to this quote`);
+      setSerialSearch("");
+    } catch (err) {
+      console.error("Link stock unit error:", err);
+      showToast(`Error linking stock unit: ${err.message}`);
+    }
+  }
+
+  async function handleUnlinkStockUnitFromQuote(unit) {
+    try {
+      await updateStockUnit(unit.id, { linkedQuoteId: null });
+      update((next) => {
+        const u = (next.stockUnits || []).find((x) => x.id === unit.id);
+        if (u) u.linkedQuoteId = null;
+      });
+      showToast("Unlinked stock unit from this quote");
+    } catch (err) {
+      console.error("Unlink stock unit error:", err);
+      showToast(`Error unlinking stock unit: ${err.message}`);
+    }
+  }
+
+  async function handleApplyToStockUnit() {
+    if (!applyStockUnitId) { showToast("Choose a stock unit to apply this to"); return; }
+    const unit = (db.stockUnits || []).find((u) => u.id === applyStockUnitId);
+    if (!unit) return;
+    const amount = parseFloat(applyAmount) || 0;
+    if (!amount) { showToast("Enter an amount to apply"); return; }
+    setApplyBusy(true);
+    try {
+      const newComponent = {
+        id: uid("cc"),
+        label: applyLabel.trim() || `PO ${editing.number}`,
+        amount,
+        date: todayISO(),
+        sourcePoId: editing.id,
+      };
+      const updatedComponents = [...(unit.costComponents || []), newComponent];
+      const landedCost = computeLandedCost({ ...unit, costComponents: updatedComponents });
+      await updateStockUnit(unit.id, { costComponents: updatedComponents, landedCost });
+      update((next) => {
+        const target = (next.stockUnits || []).find((u) => u.id === unit.id);
+        if (target) {
+          target.costComponents = updatedComponents;
+          target.landedCost = landedCost;
+        }
+      });
+      showToast(`Applied ${fmtMoney(amount, "AUD")} to ${unit.productCode}${unit.model ? " — " + unit.model : ""}`);
+      setApplyStockUnitId("");
+      setApplyAmount("");
+      setApplyLabel(`PO ${editing.number}`);
+    } catch (err) {
+      console.error("Apply to stock unit error:", err);
+      showToast(`Error applying cost: ${err.message}`);
+    } finally {
+      setApplyBusy(false);
+    }
+  }
+
+  async function handleRemoveStockUnitApplication(unitId, componentId) {
+    const unit = (db.stockUnits || []).find((u) => u.id === unitId);
+    if (!unit) return;
+    const updatedComponents = (unit.costComponents || []).filter((c) => c.id !== componentId);
+    const landedCost = computeLandedCost({ ...unit, costComponents: updatedComponents });
+    try {
+      await updateStockUnit(unit.id, { costComponents: updatedComponents, landedCost });
+      update((next) => {
+        const target = (next.stockUnits || []).find((u) => u.id === unitId);
+        if (target) {
+          target.costComponents = updatedComponents;
+          target.landedCost = landedCost;
+        }
+      });
+      showToast("Removed cost application");
+    } catch (err) {
+      console.error("Remove stock unit application error:", err);
+      showToast(`Error removing: ${err.message}`);
     }
   }
 
@@ -6950,6 +7252,230 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                   </div>
                 )}
               </div>
+            </Panel>
+          )}
+
+          {/* Serial numbers of the physical units this PO itself created
+              (its Chassis & Structure line going Paid/Received). Usually
+              filled in once the container's actually opened and inspected,
+              so it's shown separately from unit creation, editable any time. */}
+          {!isQuote && !isNew && stockUnitsFromThisPO.length > 0 && (
+            <Panel>
+              <h4 style={{ fontSize: 13, fontWeight: 700, color: "#4a3527", margin: "0 0 4px", display: "flex", alignItems: "center" }}>
+                Stock Units from this PO
+                <HelpHint text="Every time this PO's Chassis & Structure line first goes Paid or Received, one stock unit is created automatically per camper — that's what's listed here. Record each one's serial number once you've opened the container and can read it off the chassis; it can then be searched on a quote to pin that exact camper to a customer." />
+              </h4>
+              <p style={{ fontSize: 12, color: "#8a7a66", margin: "0 0 12px" }}>
+                Record each unit's serial number once known — it can then be used to link a specific customer's order to this exact camper.
+              </p>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {stockUnitsFromThisPO.map((u) => (
+                  <div key={u.id} style={{ display: "flex", alignItems: "flex-end", gap: 10, flexWrap: "wrap" }}>
+                    <div style={{ fontSize: 12, flex: "1 1 160px", paddingBottom: 8, color: "#4a3527" }}>
+                      <strong>{u.productCode}{u.model ? ` — ${u.model}` : ""}</strong>
+                      <div style={{ color: "#8a7a66" }}>
+                        {u.status === "sold" ? "Sold" : "In stock"} · landed {fmtMoney(u.landedCost, "AUD")}
+                        {u.linkedQuoteId ? " · custom build" : ""}
+                      </div>
+                    </div>
+                    <div style={{ flex: "1 1 180px" }}>
+                      <Field label="Serial number">
+                        <input
+                          style={inputStyle}
+                          type="text"
+                          value={serialDrafts[u.id] ?? u.serialNumber ?? ""}
+                          onChange={(e) => setSerialDrafts((d) => ({ ...d, [u.id]: e.target.value }))}
+                          placeholder="e.g. SAV-2026-014"
+                        />
+                      </Field>
+                    </div>
+                    <div style={{ paddingBottom: 2 }}>
+                      <Btn variant="secondary" size="sm" onClick={() => handleSaveSerialNumber(u.id)}>
+                        Save
+                      </Btn>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </Panel>
+          )}
+
+          {/* Apply this PO's cost onto a stock unit — for freight, electrical/
+              gas works, gas bottles & leads, or any other invoice that arrives
+              after the camper itself is already sitting in stock. */}
+          {!isQuote && !isNew && (
+            <Panel>
+              <h4 style={{ fontSize: 13, fontWeight: 700, color: "#4a3527", margin: "0 0 4px", display: "flex", alignItems: "center" }}>
+                Apply to Stock Unit
+                <HelpHint text="Use this for costs that arrive on their own invoice after the camper itself is already in stock — freight, electrical works, gas fitout, gas bottles & leads, etc. Applying adds this PO's amount onto the chosen unit's landed cost immediately, so stock-on-hand value stays accurate. Anything already applied from this PO is listed above and can be removed if it was a mistake." />
+              </h4>
+              <p style={{ fontSize: 12, color: "#8a7a66", margin: "0 0 12px" }}>
+                Add this PO's cost onto a specific camper already in stock — its landed cost updates immediately.
+              </p>
+
+              {stockUnitApplications.length > 0 && (
+                <div style={{ marginBottom: 12, display: "flex", flexDirection: "column", gap: 6 }}>
+                  {stockUnitApplications.map(({ unit, components }) =>
+                    components.map((c) => (
+                      <div
+                        key={c.id}
+                        style={{
+                          display: "flex", justifyContent: "space-between", alignItems: "center",
+                          fontSize: 12, background: "#f6efe0", borderRadius: 6, padding: "6px 10px",
+                        }}
+                      >
+                        <span>
+                          {fmtMoney(c.amount, "AUD")} → <strong>{unit.productCode}{unit.model ? ` — ${unit.model}` : ""}</strong>
+                          {" "}({unit.status === "sold" ? "sold" : "in stock"}, arrived {fmtDate(unit.arrivedDate)})
+                        </span>
+                        <button
+                          onClick={() => handleRemoveStockUnitApplication(unit.id, c.id)}
+                          style={{ background: "none", border: "none", color: "#a3442e", cursor: "pointer", fontSize: 14, padding: "0 4px" }}
+                          title="Remove"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+
+              <div style={{ display: "flex", flexWrap: "wrap", alignItems: "flex-end", gap: 10 }}>
+                <div style={{ flex: "2 1 220px" }}>
+                  <Field label="Stock unit">
+                    <select
+                      style={inputStyle}
+                      value={applyStockUnitId}
+                      onChange={(e) => setApplyStockUnitId(e.target.value)}
+                    >
+                      <option value="">Select a stock unit…</option>
+                      {(db.stockUnits || [])
+                        .filter((u) => u.status === "in_stock")
+                        .sort((a, b) => (a.arrivedDate || "").localeCompare(b.arrivedDate || ""))
+                        .map((u) => (
+                          <option key={u.id} value={u.id}>
+                            {u.productCode}{u.model ? ` — ${u.model}` : ""} — arrived {fmtDate(u.arrivedDate)} — landed {fmtMoney(u.landedCost, "AUD")}
+                            {u.linkedQuoteId ? " (custom build)" : ""}
+                          </option>
+                        ))}
+                    </select>
+                  </Field>
+                </div>
+                <div style={{ flex: "1 1 120px" }}>
+                  <Field label="Amount (AUD)">
+                    <input
+                      style={inputStyle}
+                      type="number"
+                      step="0.01"
+                      min="0"
+                      value={applyAmount}
+                      onChange={(e) => setApplyAmount(e.target.value)}
+                    />
+                  </Field>
+                </div>
+                <div style={{ flex: "1 1 160px" }}>
+                  <Field label="Description">
+                    <input
+                      style={inputStyle}
+                      type="text"
+                      value={applyLabel}
+                      onChange={(e) => setApplyLabel(e.target.value)}
+                      placeholder="e.g. Electrical works"
+                    />
+                  </Field>
+                </div>
+                <div style={{ paddingBottom: 2 }}>
+                  <Btn variant="secondary" size="sm" onClick={handleApplyToStockUnit} disabled={applyBusy}>
+                    {applyBusy ? "Applying…" : "+ Apply"}
+                  </Btn>
+                </div>
+              </div>
+            </Panel>
+          )}
+
+          {/* Pin this quote to a specific physical unit by serial number —
+              takes priority over ordinary FIFO matching once the quote is
+              marked Delivered. Custom-build quotes get this automatically
+              (their generated PO carries quoteId), but this lets a plain
+              stock sale be promised against a known, already-arrived serial
+              too, ahead of time. */}
+          {isQuote && !isNew && (
+            <Panel>
+              <h4 style={{ fontSize: 13, fontWeight: 700, color: "#4a3527", margin: "0 0 4px", display: "flex", alignItems: "center" }}>
+                Linked Stock Unit
+                <HelpHint text="Optional. Custom-build orders get linked to their unit automatically. For an ordinary stock sale, search a known serial number (or product code) here to promise this exact camper to the customer — when the quote is marked Delivered, this unit is sold instead of whichever one FIFO would otherwise pick next. Leave unlinked to let FIFO choose automatically (oldest matching unit in stock)." />
+              </h4>
+              <p style={{ fontSize: 12, color: "#8a7a66", margin: "0 0 12px" }}>
+                Optional — pin this quote to a specific camper (by serial number) so delivery sells that exact unit instead of the next one in line.
+              </p>
+
+              {linkedUnitForQuote ? (
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12, background: "#f6efe0", borderRadius: 6, padding: "8px 10px" }}>
+                  <span>
+                    <strong>{linkedUnitForQuote.serialNumber || linkedUnitForQuote.productCode}</strong>
+                    {linkedUnitForQuote.model ? ` — ${linkedUnitForQuote.model}` : ""}
+                    {" "}({linkedUnitForQuote.status === "sold" ? "sold" : "in stock"}, landed {fmtMoney(linkedUnitForQuote.landedCost, "AUD")})
+                  </span>
+                  {linkedUnitForQuote.status !== "sold" && (
+                    <button
+                      onClick={() => handleUnlinkStockUnitFromQuote(linkedUnitForQuote)}
+                      style={{ background: "none", border: "none", color: "#a3442e", cursor: "pointer", fontSize: 12, padding: "0 4px" }}
+                    >
+                      Unlink
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <>
+                  <div style={{ display: "flex", gap: 10, alignItems: "flex-end", flexWrap: "wrap" }}>
+                    <div style={{ flex: "1 1 220px" }}>
+                      <Field label="Search by serial number or product code">
+                        <input
+                          style={inputStyle}
+                          type="text"
+                          value={serialSearch}
+                          onChange={(e) => setSerialSearch(e.target.value)}
+                          placeholder="e.g. SAV-2026-014 or SAV42U"
+                        />
+                      </Field>
+                    </div>
+                  </div>
+                  {serialSearch.trim() && (
+                    <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 6 }}>
+                      {(db.stockUnits || [])
+                        .filter((u) => u.status === "in_stock" && !u.linkedQuoteId)
+                        .filter((u) => {
+                          const needle = serialSearch.trim().toUpperCase();
+                          return (u.serialNumber || "").toUpperCase().includes(needle) || (u.productCode || "").toUpperCase().includes(needle);
+                        })
+                        .slice(0, 8)
+                        .map((u) => (
+                          <div
+                            key={u.id}
+                            onClick={() => handleLinkStockUnitToQuote(u)}
+                            style={{
+                              display: "flex", justifyContent: "space-between", alignItems: "center",
+                              fontSize: 12, background: "#f6efe0", borderRadius: 6, padding: "6px 10px", cursor: "pointer",
+                            }}
+                          >
+                            <span>
+                              {u.serialNumber ? <strong>{u.serialNumber}</strong> : <em>no serial yet</em>} — {u.productCode}
+                              {u.model ? ` — ${u.model}` : ""} — arrived {fmtDate(u.arrivedDate)}
+                            </span>
+                            <span style={{ color: "#8a7a66" }}>Link →</span>
+                          </div>
+                        ))}
+                      {(db.stockUnits || []).filter((u) => u.status === "in_stock" && !u.linkedQuoteId).filter((u) => {
+                        const needle = serialSearch.trim().toUpperCase();
+                        return (u.serialNumber || "").toUpperCase().includes(needle) || (u.productCode || "").toUpperCase().includes(needle);
+                      }).length === 0 && (
+                        <div style={{ fontSize: 12, color: "#8a7a66" }}>No matching unlinked stock units.</div>
+                      )}
+                    </div>
+                  )}
+                </>
+              )}
             </Panel>
           )}
 
