@@ -287,7 +287,7 @@ function toSupabaseFormat(data, table) {
       // Strip customer-only fields not present on suppliers table
       delete copy.invoices; delete copy.invoiceNumber; delete copy.invoiceAmount;
       delete copy.lastQuoteNumber; delete copy.lastQuoteValue;
-      delete copy.attachments; delete copy.status; delete copy.product; delete copy.source;
+      delete copy.status; delete copy.product; delete copy.source;
       if (copy.createdAt !== undefined) { copy.created_at = copy.createdAt; delete copy.createdAt; }
       if (copy.updatedAt !== undefined) { copy.updated_at = copy.updatedAt; delete copy.updatedAt; }
       break;
@@ -8157,8 +8157,32 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
             <div style={{ fontSize: 11, color: "#8a7a66", marginTop: 10 }}>
               All prices include GST.
               {lines.some((l) => (l.currency || "AUD") === "USD") && ` USD lines converted at 1 USD = ${rate.toFixed(4)} AUD.`}
-              {isQuote && " Quote valid for 7 days."}
             </div>
+
+            {isQuote && (
+              <div className="pdf-line-item-group" style={{ marginTop: 22, paddingTop: 16, borderTop: "1px solid #e3d8c6", fontSize: 12, color: "#2b2018", lineHeight: 1.6 }}>
+                <p style={{ margin: "0 0 10px" }}>
+                  <strong>Quote validity</strong><br />
+                  This Quote is valid for 7 days from the date of issue. Prices, specifications and lead times may change after this period.
+                </p>
+                <p style={{ margin: "0 0 10px" }}>
+                  <strong>Payment terms</strong><br />
+                  Payment is due in three instalments: 33% on acceptance of this Quote (before manufacturing commences), 33% on substantial completion of manufacturing, and 34% prior to collection or delivery. The initial 33% deposit is non-refundable once paid, except where cancelled within 48 hours of payment (refunded less a $500 administrative fee). Full terms are set out in our <a href="https://australmotorhomes.com.au/wp-content/uploads/2026/08/Austral_Motorhomes_Terms_of_Trade.pdf" data-pdf-link="terms" style={{ color: "#b5552b", textDecoration: "underline" }}>Terms of Trade and Cancellation Policy</a>, which form part of this Order.
+                </p>
+                <p style={{ margin: "0 0 10px" }}>
+                  <strong>Delivery</strong><br />
+                  Delivery and completion dates are estimates only and may change. We will let you know as soon as practicable if your estimated date changes.
+                </p>
+                <p style={{ margin: "0 0 18px" }}>
+                  <strong>Acceptance</strong><br />
+                  By signing below, you accept this Quote and confirm you have read and agree to our Terms of Trade, including the Cancellation Policy.
+                </p>
+                <div style={{ display: "flex", gap: 40 }}>
+                  <div style={{ flex: 1, borderTop: "1px solid #4a3527", paddingTop: 4, fontSize: 11, color: "#6b5240" }}>Signature</div>
+                  <div style={{ flex: 1, borderTop: "1px solid #4a3527", paddingTop: 4, fontSize: 11, color: "#6b5240" }}>Date</div>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -8318,15 +8342,54 @@ ${clone?.innerHTML || ""}
 </body>
 </html>`;
                     // Real PDF generation via html2pdf.js (html2canvas + jsPDF under the
-                    // hood) — confirmed API: html2pdf().set(opt).from(src, 'string').save()
+                    // hood). We use the low-level chain (.toContainer/.toCanvas/.toPdf)
+                    // rather than a plain .save() so we can find the Terms-of-Trade
+                    // link's actual on-page position and add a real, clickable PDF link
+                    // annotation there. html2canvas alone rasterizes everything to a flat
+                    // image — the link text would look clickable but wouldn't actually be
+                    // one without this extra step.
+                    const filename = `${editing?.number || "quote"}.pdf`;
                     const worker = html2pdf().set({
                       margin: 10,
-                      filename: `${editing?.number || "quote"}.pdf`,
+                      filename,
                       image: { type: "jpeg", quality: 0.98 },
                       html2canvas: { scale: 2 },
                       jsPDF: { unit: "mm", format: "a4", orientation: "portrait" },
                       pagebreak: { mode: ["css", "legacy"], avoid: [".pdf-line-item-group", "tr", "img"] },
                     }).from(html, "string");
+
+                    const buildPdf = () => worker.toContainer().then(() => {
+                      // At this point html2pdf has rendered the source HTML into a real,
+                      // attached-to-document container — same layout that's about to be
+                      // rasterized — so we can measure the link's exact position here.
+                      const container = worker.prop.container;
+                      const linkEl = container ? container.querySelector('[data-pdf-link="terms"]') : null;
+                      const linkRect = linkEl ? linkEl.getBoundingClientRect() : null;
+                      const containerRect = container ? container.getBoundingClientRect() : null;
+                      const linkHref = linkEl ? linkEl.getAttribute("href") : null;
+
+                      return worker.toCanvas().toPdf().get("pdf").then((pdf) => {
+                        if (linkEl && linkRect && containerRect && linkHref) {
+                          const pageWidthMM = pdf.internal.pageSize.getWidth();
+                          const pageHeightMM = pdf.internal.pageSize.getHeight();
+                          const scaleX = pageWidthMM / containerRect.width;
+                          const scaleY = pageHeightMM / containerRect.height;
+                          // NOTE: assumes the link lands on page 1, which covers the
+                          // normal case (this Terms section is near the end of a
+                          // typically single-page quote). If a quote has enough line
+                          // items to push Terms onto page 2+, this link annotation
+                          // would need the page-break offset accounted for too.
+                          pdf.link(
+                            (linkRect.left - containerRect.left) * scaleX,
+                            (linkRect.top - containerRect.top) * scaleY,
+                            linkRect.width * scaleX,
+                            linkRect.height * scaleY,
+                            { url: linkHref }
+                          );
+                        }
+                        return pdf;
+                      });
+                    });
 
                     if (isMobile) {
                       // .save() relies on a synthetic <a download> click, which is
@@ -8336,14 +8399,17 @@ ${clone?.innerHTML || ""}
                       // Share/Save option) — a more reliable path on mobile.
                       // NOTE: this has not been tested on an actual mobile device;
                       // please verify it works on yours after deploying.
-                      worker.outputPdf("blob").then((blob) => {
+                      buildPdf().then((pdf) => {
+                        const blob = pdf.output("blob");
                         const url = URL.createObjectURL(blob);
                         window.open(url, "_blank");
                       }).catch((e) => {
                         alert("PDF generation error: " + (e?.message || e));
                       });
                     } else {
-                      worker.save().catch((e) => {
+                      buildPdf().then((pdf) => {
+                        pdf.save(filename);
+                      }).catch((e) => {
                         alert("PDF generation error: " + (e?.message || e));
                       });
                     }
@@ -8763,6 +8829,191 @@ const CUSTOMER_STAGE_COLORS = {
   Canceled: { bg: "#fbeae5", color: "#a3442e" },
 };
 
+// Suppliers don't have a sales-lifecycle status like customers do — the
+// Kanban here just splits on the existing archived flag.
+const SUPPLIER_STAGES = [
+  { key: "Active", label: "Active" },
+  { key: "Archived", label: "Archived" },
+];
+const SUPPLIER_STAGE_COLORS = {
+  Active: { bg: "#e3ecdc", color: "#5c7a4f" },
+  Archived: { bg: "#fbeae5", color: "#a3442e" },
+};
+
+function SupplierKanbanBoard({ list, onOpen, onMove, onDelete, db }) {
+  const [dragOverStage, setDragOverStage] = useState(null);
+
+  const DEFAULT_COLUMN_WIDTH = 260;
+  const MIN_COLUMN_WIDTH = 190;
+  const MAX_COLUMN_WIDTH = 1000;
+  const [columnWidths, setColumnWidths] = useState(() => getAppSetting(db, "supplier_kanban_column_widths", {}));
+  const columnWidthsRef = useRef(columnWidths);
+  const resizingRef = useRef(null);
+
+  function getColumnWidth(key) {
+    return columnWidths[key] || DEFAULT_COLUMN_WIDTH;
+  }
+
+  useEffect(() => {
+    function handleMouseMove(e) {
+      if (!resizingRef.current) return;
+      const { key, startX, startWidth } = resizingRef.current;
+      const next = Math.max(MIN_COLUMN_WIDTH, Math.min(MAX_COLUMN_WIDTH, startWidth + (e.clientX - startX)));
+      setColumnWidths((w) => {
+        const updated = { ...w, [key]: next };
+        columnWidthsRef.current = updated;
+        return updated;
+      });
+    }
+    function handleMouseUp() {
+      if (resizingRef.current) {
+        resizingRef.current = null;
+        saveAppSetting("supplier_kanban_column_widths", columnWidthsRef.current);
+      }
+    }
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, []);
+
+  function startResize(e, key) {
+    e.preventDefault();
+    resizingRef.current = { key, startX: e.clientX, startWidth: getColumnWidth(key) };
+  }
+
+  function resetColumnWidth(key) {
+    const updated = { ...columnWidths, [key]: DEFAULT_COLUMN_WIDTH };
+    setColumnWidths(updated);
+    columnWidthsRef.current = updated;
+    saveAppSetting("supplier_kanban_column_widths", updated);
+  }
+
+  const byStage = { Active: [], Archived: [] };
+  list.forEach((s) => (s.archived ? byStage.Archived : byStage.Active).push(s));
+
+  // Hide columns with no cards — a card can still be moved into an empty
+  // stage via its own "Move to" dropdown.
+  const visibleStages = SUPPLIER_STAGES.filter((s) => (byStage[s.key] || []).length > 0);
+
+  if (visibleStages.length === 0) {
+    return (
+      <p className="muted" style={{ fontSize: 13, padding: "20px 0" }}>
+        No suppliers to show here.
+      </p>
+    );
+  }
+
+  return (
+    <div style={{ display: "flex", gap: 10, overflowX: "auto", paddingBottom: 8, width: "100%" }}>
+      {visibleStages.map((stage) => {
+        const cards = byStage[stage.key] || [];
+        const stageColor = SUPPLIER_STAGE_COLORS[stage.key] || { bg: "#f0e8d9", color: "#6b5240" };
+        const isDragOver = dragOverStage === stage.key;
+
+        return (
+          <React.Fragment key={stage.key}>
+            <div
+              onDragOver={(e) => { e.preventDefault(); setDragOverStage(stage.key); }}
+              onDragLeave={() => setDragOverStage((prev) => (prev === stage.key ? null : prev))}
+              onDrop={(e) => {
+                e.preventDefault();
+                setDragOverStage(null);
+                const id = e.dataTransfer.getData("text/supplier-id");
+                const supplier = list.find((s) => s.id === id);
+                if (supplier) onMove(supplier, stage.key);
+              }}
+              style={{
+                flex: "0 0 auto",
+                width: getColumnWidth(stage.key),
+                background: isDragOver ? "#faf3ea" : "#faf7f2",
+                border: isDragOver ? "1px dashed #b5552b" : "1px solid #f0e8d9",
+                borderRadius: 8,
+                display: "flex",
+                flexDirection: "column",
+                maxHeight: "calc(100vh - 300px)",
+              }}
+            >
+              <div style={{ padding: "8px 10px", borderBottom: "2px solid " + stageColor.color, flexShrink: 0 }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                  <span style={{ background: stageColor.bg, color: stageColor.color, padding: "3px 8px", borderRadius: 5, fontSize: 11, fontWeight: 700, letterSpacing: "0.04em" }}>
+                    {stage.label.toUpperCase()}
+                  </span>
+                  <span style={{ fontSize: 11, color: "#8a7a66", fontWeight: 600 }}>{cards.length}</span>
+                </div>
+              </div>
+
+              <div style={{ padding: 6, overflowY: "auto", flex: 1, display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(190px, 1fr))", gap: 6, alignContent: "start" }}>
+                {cards.length === 0 && (
+                  <div style={{ fontSize: 12, color: "#b3a58e", textAlign: "center", padding: "16px 4px", gridColumn: "1 / -1" }}>No suppliers</div>
+                )}
+                {cards.map((s) => (
+                  <div
+                    key={s.id}
+                    draggable
+                    onDragStart={(e) => e.dataTransfer.setData("text/supplier-id", s.id)}
+                    onClick={() => onOpen(s)}
+                    style={{
+                      background: "#fff",
+                      border: "1px solid #f0e8d9",
+                      borderRadius: 6,
+                      padding: 8,
+                      cursor: "grab",
+                      boxShadow: "0 1px 2px rgba(74,53,39,0.06)",
+                    }}
+                  >
+                    <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                      <div style={{ fontSize: 13, fontWeight: 700, color: "#4a3527", flex: 1, minWidth: 0 }}>
+                        {s.name}
+                      </div>
+                      <button
+                        onClick={(e) => { e.stopPropagation(); onDelete(s); }}
+                        title="Delete"
+                        style={{ background: "none", border: "none", color: "#a3442e", cursor: "pointer", fontSize: 13, padding: 2, opacity: 0.6, flexShrink: 0 }}
+                      >
+                        ✕
+                      </button>
+                    </div>
+                    {s.contactPerson && (
+                      <div style={{ fontSize: 11, color: "#6b5240", marginTop: 3 }}>{s.contactPerson}</div>
+                    )}
+                    {s.email && (
+                      <div style={{ fontSize: 11, color: "#8a7a66", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.email}</div>
+                    )}
+                    {s.phone && (
+                      <div style={{ fontSize: 11, color: "#8a7a66", marginTop: 2 }}>{s.phone}</div>
+                    )}
+                    <select
+                      value={stage.key}
+                      onClick={(e) => e.stopPropagation()}
+                      onChange={(e) => onMove(s, e.target.value)}
+                      style={{ width: "100%", marginTop: 8, fontSize: 11, padding: "4px 6px", borderRadius: 4, border: "1px solid #e3d8c6", background: "#faf7f2", color: "#6b5240" }}
+                    >
+                      {SUPPLIER_STAGES.map((st) => (
+                        <option key={st.key} value={st.key}>Move to: {st.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div
+              onMouseDown={(e) => startResize(e, stage.key)}
+              onDoubleClick={() => resetColumnWidth(stage.key)}
+              title="Drag to resize column (double-click to reset)"
+              style={{ flex: "0 0 auto", width: 10, cursor: "col-resize", display: "flex", alignItems: "center", justifyContent: "center" }}
+            >
+              <div style={{ width: 3, height: 36, borderRadius: 2, background: "#e3d8c6" }} />
+            </div>
+          </React.Fragment>
+        );
+      })}
+    </div>
+  );
+}
+
 function CustomerKanbanBoard({ list, onOpen, onMove, onDelete, showCanceled, db }) {
   const [dragOverStage, setDragOverStage] = useState(null);
 
@@ -8991,13 +9242,86 @@ function ContactsTab({ kind, db, update, showToast, nextNumber, pendingOpen, cle
   const [importData, setImportData] = useState(null);
   const [pendingDelete, setPendingDelete] = useState(null);
   const [loggingActivityFor, setLoggingActivityFor] = useState(null);
-  const [viewMode, setViewModeState] = useState(getAppSetting(db, "customers_view_mode", "list"));
+  const [viewMode, setViewModeState] = useState(getAppSetting(db, `${kind}_view_mode`, "list"));
   const [showCanceled, setShowCanceled] = useState(false);
   function setViewMode(mode) {
     setViewModeState(mode);
-    saveAppSetting("customers_view_mode", mode);
+    saveAppSetting(`${kind}_view_mode`, mode);
   }
   const isMobile = useIsMobile();
+
+  // ── List table column widths — drag-to-resize, persisted per kind (customer
+  // vs supplier have a different secondary column: Product vs Contact) so
+  // resizing one doesn't affect the other. Same pattern as the Kanban column
+  // widths elsewhere in this file.
+  const LIST_DEFAULT_WIDTHS = { name: 280, secondary: 160, email: 220, phone: 150 };
+  const LIST_MIN_WIDTH = 70;
+  const LIST_MAX_WIDTH = 700;
+  const listColumnWidthsKey = `${kind}_list_column_widths`;
+  const [listColumnWidths, setListColumnWidths] = useState(() => getAppSetting(db, listColumnWidthsKey, {}));
+  const listColumnWidthsRef = useRef(listColumnWidths);
+  const listResizingRef = useRef(null);
+
+  function getListColumnWidth(key) {
+    return listColumnWidths[key] || LIST_DEFAULT_WIDTHS[key];
+  }
+
+  useEffect(() => {
+    function handleMouseMove(e) {
+      if (!listResizingRef.current) return;
+      const { key, startX, startWidth } = listResizingRef.current;
+      const next = Math.max(LIST_MIN_WIDTH, Math.min(LIST_MAX_WIDTH, startWidth + (e.clientX - startX)));
+      setListColumnWidths((w) => {
+        const updated = { ...w, [key]: next };
+        listColumnWidthsRef.current = updated;
+        return updated;
+      });
+    }
+    function handleMouseUp() {
+      if (listResizingRef.current) {
+        listResizingRef.current = null;
+        saveAppSetting(listColumnWidthsKey, listColumnWidthsRef.current);
+      }
+    }
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, [listColumnWidthsKey]);
+
+  function startListColumnResize(e, key) {
+    e.preventDefault();
+    e.stopPropagation();
+    listResizingRef.current = { key, startX: e.clientX, startWidth: getListColumnWidth(key) };
+  }
+
+  function resetListColumnWidth(key) {
+    const updated = { ...listColumnWidths, [key]: LIST_DEFAULT_WIDTHS[key] };
+    setListColumnWidths(updated);
+    listColumnWidthsRef.current = updated;
+    saveAppSetting(listColumnWidthsKey, updated);
+  }
+
+  // A resizable <th> — draggable handle on its right edge, double-click resets.
+  function ResizableTh({ colKey, children, onClick, style }) {
+    return (
+      <th
+        onClick={onClick}
+        style={{ position: "relative", width: getListColumnWidth(colKey), ...style }}
+      >
+        {children}
+        <div
+          onMouseDown={(e) => startListColumnResize(e, colKey)}
+          onDoubleClick={(e) => { e.stopPropagation(); resetListColumnWidth(colKey); }}
+          onClick={(e) => e.stopPropagation()}
+          title="Drag to resize column (double-click to reset)"
+          style={{ position: "absolute", top: 0, right: -4, bottom: 0, width: 9, cursor: "col-resize", zIndex: 1 }}
+        />
+      </th>
+    );
+  }
 
   // Keep the open contact modal in sync with the latest data (e.g. a customer's
   // last_quote_number/last_quote_value can change from quote acceptance while
@@ -9146,11 +9470,11 @@ function ContactsTab({ kind, db, update, showToast, nextNumber, pendingOpen, cle
     const cmp = (a[field] || "").localeCompare(b[field] || "");
     return sortDir === "asc" ? cmp : -cmp;
   });
-  // Archived customers are hidden from the plain list by default, but still
-  // findable — as soon as a search term is typed, archived customers are
+  // Archived contacts are hidden from the plain list by default, but still
+  // findable — as soon as a search term is typed, archived contacts are
   // included in the results too. The "Show Archived" checkbox reveals them
-  // outright. Suppliers don't have this field.
-  if (!isSupplier && !showArchived && !search) {
+  // outright.
+  if (!showArchived && !search) {
     list = list.filter((c) => !c.archived);
   }
   if (search) {
@@ -9256,18 +9580,20 @@ function ContactsTab({ kind, db, update, showToast, nextNumber, pendingOpen, cle
 
   // Archive is a soft-hide, not a delete: the record stays in Supabase and
   // still shows up when actively searching, but disappears from the default
-  // customer list. Only applies to customers (suppliers don't have this).
+  // list. Works for both customers and suppliers.
   function archiveContact(contact, archived) {
     (async () => {
       try {
-        await supabaseREST("PATCH", `customers?id=eq.${contact.id}`, { is_archived: archived });
+        const table = isSupplier ? "suppliers" : "customers";
+        await supabaseREST("PATCH", `${table}?id=eq.${contact.id}`, { is_archived: archived });
         update((next) => {
-          const target = next.customers.find((c) => c.id === contact.id);
+          const coll = isSupplier ? next.suppliers : next.customers;
+          const target = coll.find((c) => c.id === contact.id);
           if (target) target.archived = archived;
         });
-        showToast(archived ? "Customer archived" : "Customer restored");
+        showToast(archived ? `${isSupplier ? "Supplier" : "Customer"} archived` : `${isSupplier ? "Supplier" : "Customer"} restored`);
       } catch (err) {
-        showToast(`Error ${archived ? "archiving" : "restoring"} customer: ${err.message}`);
+        showToast(`Error ${archived ? "archiving" : "restoring"} ${isSupplier ? "supplier" : "customer"}: ${err.message}`);
         console.error("Archive contact error:", err);
       }
     })();
@@ -9470,55 +9796,58 @@ function ContactsTab({ kind, db, update, showToast, nextNumber, pendingOpen, cle
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
-          {!isSupplier && (
-            <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "#6b5240", whiteSpace: "nowrap", cursor: "pointer" }}>
-              <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />
-              Show Archived
-            </label>
-          )}
+          <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "#6b5240", whiteSpace: "nowrap", cursor: "pointer" }}>
+            <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />
+            Show Archived
+          </label>
           {!isSupplier && (
             <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "#6b5240", whiteSpace: "nowrap", cursor: "pointer" }}>
               <input type="checkbox" checked={showCanceled} onChange={(e) => setShowCanceled(e.target.checked)} />
               Show Canceled
             </label>
           )}
-          {!isSupplier && (
-            <div style={{ display: "flex", border: "1px solid #e3d8c6", borderRadius: 6, overflow: "hidden", flexShrink: 0 }}>
-              <button
-                onClick={() => setViewMode("list")}
-                style={{
-                  padding: "6px 12px", fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer",
-                  background: viewMode === "list" ? "#b5552b" : "#fff",
-                  color: viewMode === "list" ? "#fff" : "#6b5240",
-                }}
-              >
-                ☰ List
-              </button>
-              <button
-                onClick={() => setViewMode("kanban")}
-                style={{
-                  padding: "6px 12px", fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer",
-                  background: viewMode === "kanban" ? "#b5552b" : "#fff",
-                  color: viewMode === "kanban" ? "#fff" : "#6b5240",
-                }}
-              >
-                ▤ Kanban
-              </button>
-            </div>
-          )}
+          <div style={{ display: "flex", border: "1px solid #e3d8c6", borderRadius: 6, overflow: "hidden", flexShrink: 0 }}>
+            <button
+              onClick={() => setViewMode("list")}
+              style={{
+                padding: "6px 12px", fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer",
+                background: viewMode === "list" ? "#b5552b" : "#fff",
+                color: viewMode === "list" ? "#fff" : "#6b5240",
+              }}
+            >
+              ☰ List
+            </button>
+            <button
+              onClick={() => setViewMode("kanban")}
+              style={{
+                padding: "6px 12px", fontSize: 12, fontWeight: 600, border: "none", cursor: "pointer",
+                background: viewMode === "kanban" ? "#b5552b" : "#fff",
+                color: viewMode === "kanban" ? "#fff" : "#6b5240",
+              }}
+            >
+              ▤ Kanban
+            </button>
+          </div>
         </div>
-        {!isSupplier && (
-          <p style={{ fontSize: 11, color: "#8a7a66", margin: "0 0 14px" }}>
-            Archived customers are hidden here by default, but will show up (marked "ARCHIVED") if your search matches them or "Show Archived" is checked.
-          </p>
-        )}
+        <p style={{ fontSize: 11, color: "#8a7a66", margin: "0 0 14px" }}>
+          Archived {isSupplier ? "suppliers" : "customers"} are hidden here by default, but will show up (marked "ARCHIVED") if your search matches them or "Show Archived" is checked.
+        </p>
 
         {list.length === 0 ? (
           <Empty
             icon="📇"
             text={`No ${isSupplier ? "suppliers" : "customers"} yet. Add one to get started.`}
           />
-        ) : !isSupplier && viewMode === "kanban" ? (
+        ) : viewMode === "kanban" ? (
+          isSupplier ? (
+            <SupplierKanbanBoard
+              list={list}
+              onOpen={setEditingContact}
+              onMove={(contact, stageKey) => archiveContact(contact, stageKey === "Archived")}
+              onDelete={deleteContact}
+              db={db}
+            />
+          ) : (
           <CustomerKanbanBoard
             list={list}
             onOpen={setEditingContact}
@@ -9527,6 +9856,7 @@ function ContactsTab({ kind, db, update, showToast, nextNumber, pendingOpen, cle
             showCanceled={showCanceled}
             db={db}
           />
+          )
         ) : isMobile ? (
           // ── Mobile: name-only tappable list — opens directly editable ──
           <div style={{ display: "flex", flexDirection: "column" }}>
@@ -9570,27 +9900,28 @@ function ContactsTab({ kind, db, update, showToast, nextNumber, pendingOpen, cle
         ) : (
           // ── Desktop: full table — click anywhere on the row to open the
           // record, already editable — no separate view/edit step. ──
-          <table>
+          <div style={{ overflowX: "auto" }}>
+          <table style={{ tableLayout: "fixed", width: "100%", minWidth: 700 }}>
             <thead>
               <tr>
-                <th onClick={() => toggleSort("name")} style={{ cursor: "pointer" }}>
+                <ResizableTh colKey="name" onClick={() => toggleSort("name")} style={{ cursor: "pointer" }}>
                   Name {sortField === "name" && (sortDir === "asc" ? "▲" : "▼")}
-                </th>
-                {isSupplier && <th>Contact</th>}
+                </ResizableTh>
+                {isSupplier && <ResizableTh colKey="secondary">Contact</ResizableTh>}
                 {!isSupplier && (
-                  <th onClick={() => toggleSort("product")} style={{ cursor: "pointer" }}>
+                  <ResizableTh colKey="secondary" onClick={() => toggleSort("product")} style={{ cursor: "pointer" }}>
                     Product {sortField === "product" && (sortDir === "asc" ? "▲" : "▼")}
-                  </th>
+                  </ResizableTh>
                 )}
-                <th>Email</th>
-                <th>Phone</th>
-                <th></th>
+                <ResizableTh colKey="email">Email</ResizableTh>
+                <ResizableTh colKey="phone">Phone</ResizableTh>
+                <th style={{ width: 40 }}></th>
               </tr>
             </thead>
             <tbody>
               {list.map((c) => (
                 <tr key={c.id} onClick={() => setEditingContact(c)} style={{ cursor: "pointer" }}>
-                  <td style={{ paddingRight: 20 }}>
+                  <td style={{ paddingRight: 20, width: getListColumnWidth("name"), overflow: "hidden" }}>
                     <strong>{c.name}</strong>
                     {c.archived && (
                       <span style={{ marginLeft: 8, fontSize: 10, fontWeight: 700, color: "#a3442e", background: "#fbeae5", padding: "2px 6px", borderRadius: 5 }}>
@@ -9603,10 +9934,10 @@ function ContactsTab({ kind, db, update, showToast, nextNumber, pendingOpen, cle
                       </div>
                     )}
                   </td>
-                  {isSupplier && <td className="muted" style={{ whiteSpace: "nowrap" }}>{c.contactPerson || "—"}</td>}
-                  {!isSupplier && <td className="muted" style={{ whiteSpace: "nowrap" }}>{c.product || "—"}</td>}
-                  <td className="muted" style={{ whiteSpace: "nowrap" }}>{c.email || "—"}</td>
-                  <td className="muted" style={{ whiteSpace: "nowrap" }}>{c.phone || "—"}</td>
+                  {isSupplier && <td className="muted" style={{ width: getListColumnWidth("secondary"), whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{c.contactPerson || "—"}</td>}
+                  {!isSupplier && <td className="muted" style={{ width: getListColumnWidth("secondary"), whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{c.product || "—"}</td>}
+                  <td className="muted" style={{ width: getListColumnWidth("email"), whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{c.email || "—"}</td>
+                  <td className="muted" style={{ width: getListColumnWidth("phone"), whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{c.phone || "—"}</td>
                   <td style={{ whiteSpace: "nowrap" }}>
                     <button
                       onClick={(e) => {
@@ -9623,6 +9954,7 @@ function ContactsTab({ kind, db, update, showToast, nextNumber, pendingOpen, cle
               ))}
             </tbody>
           </table>
+          </div>
         )}
       </Panel>
 
@@ -9634,7 +9966,7 @@ function ContactsTab({ kind, db, update, showToast, nextNumber, pendingOpen, cle
           onSave={saveContact}
           onCreateQuote={!isSupplier ? createQuoteFromCustomer : undefined}
           onConvertToProspect={!isSupplier ? (contact) => { convertCustomerToProspect(contact); setEditingContact(undefined); } : undefined}
-          onArchive={!isSupplier ? (contact, archived) => { archiveContact(contact, archived); setEditingContact(undefined); } : undefined}
+          onArchive={(contact, archived) => { archiveContact(contact, archived); setEditingContact(undefined); }}
           onLogActivity={() => setLoggingActivityFor({ contact: editingContact, activity: null, index: null })}
           onEditActivity={(activity, index) => setLoggingActivityFor({ contact: editingContact, activity, index })}
           db={db}
@@ -10147,7 +10479,7 @@ function ContactModal({ kind, editing, onCancel, onSave, onCreateQuote, onConver
               onClick={() => onArchive(editing, !editing.archived)}
               style={editing.archived ? { color: "#5c7a4f" } : { color: "#a3442e" }}
             >
-              {editing.archived ? "Restore customer" : "Archive customer"}
+              {editing.archived ? `Restore ${kind}` : `Archive ${kind}`}
             </Btn>
           )}
         </div>
