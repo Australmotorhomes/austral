@@ -4507,6 +4507,10 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
   const [linkingQuotes, setLinkingQuotes] = useState(false);
   const [linkPOsConfirm, setLinkPOsConfirm] = useState(false);
   const [linkingPOs, setLinkingPOs] = useState(false);
+  const [stockUnitsManagerOpen, setStockUnitsManagerOpen] = useState(false);
+  const [backfillingStockUnits, setBackfillingStockUnits] = useState(false);
+  const [managerSerialDrafts, setManagerSerialDrafts] = useState({});
+  const [managerSearch, setManagerSearch] = useState("");
   const [sortBy, setSortBy] = useState(null);   // column key, or null = default sort
   const [sortDir, setSortDir] = useState("asc");
 
@@ -4936,6 +4940,61 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
 
   function deleteDoc(doc) {
     setPendingDelete(doc);
+  }
+
+  // Backfills stock units for existing POs that reached Paid/Received before
+  // this stock-tracking feature existed — those units were never created, so
+  // there's nothing yet to attach a serial number or landed cost onto. Safe
+  // to run more than once: skips any PO that already has a stockUnit.
+  async function handleBackfillStockUnits() {
+    setBackfillingStockUnits(true);
+    try {
+      const existingPoIds = new Set((db.stockUnits || []).map((u) => u.sourcePoId));
+      const candidatePOs = (db.pos || []).filter(
+        (po) => ["Paid", "Received"].includes(poEffectiveStatus(po)) && !existingPoIds.has(po.id)
+      );
+      const created = [];
+      for (const po of candidatePOs) {
+        const toCreate = buildStockUnitsForPO(po, db.items || []);
+        for (const u of toCreate) {
+          try {
+            created.push(await createStockUnit(u));
+          } catch (err) {
+            console.error("Backfill: failed to create stock unit for PO", po.id, err);
+          }
+        }
+      }
+      if (created.length) {
+        update((next) => {
+          next.stockUnits = [...(next.stockUnits || []), ...created];
+        });
+      }
+      showToast(
+        created.length
+          ? `Backfilled ${created.length} stock unit${created.length === 1 ? "" : "s"} from ${candidatePOs.length} existing PO${candidatePOs.length === 1 ? "" : "s"}`
+          : "No existing POs needed backfilling"
+      );
+    } catch (err) {
+      console.error("Backfill stock units error:", err);
+      showToast(`Backfill error: ${err.message}`);
+    } finally {
+      setBackfillingStockUnits(false);
+    }
+  }
+
+  async function handleManagerSaveSerial(unitId) {
+    const value = (managerSerialDrafts[unitId] ?? "").trim();
+    try {
+      await updateStockUnit(unitId, { serialNumber: value || null });
+      update((next) => {
+        const u = (next.stockUnits || []).find((x) => x.id === unitId);
+        if (u) u.serialNumber = value || null;
+      });
+      showToast("Serial number saved");
+    } catch (err) {
+      console.error("Save serial number error:", err);
+      showToast(`Error saving serial number: ${err.message}`);
+    }
   }
 
   function handleGeneratePOs(quote) {
@@ -5423,11 +5482,102 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
               Link quotes to customers
             </Btn>
           )}
+          {!isQuote && (
+            <Btn variant="ghost" onClick={() => setStockUnitsManagerOpen(true)}>
+              Manage Stock Units
+            </Btn>
+          )}
           <Btn variant="primary" onClick={() => setDocModal(null)}>
             + New {isQuote ? "quote" : "purchase order"}
           </Btn>
         </div>
       </div>
+
+      {stockUnitsManagerOpen && (
+        <Modal onClose={() => setStockUnitsManagerOpen(false)} width={820}>
+          <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: "0 0 4px", fontSize: 18, display: "flex", alignItems: "center" }}>
+            Stock Units
+            <HelpHint text="One row per physical camper — created automatically the moment its Chassis & Structure PO first goes Paid/Received. Add serial numbers here as they become known; they can then be searched on a quote to pin a specific camper to a customer." />
+          </h3>
+          <p style={{ fontSize: 13, color: "#6b5240", lineHeight: 1.5, margin: "0 0 16px" }}>
+            If a PO was already Paid or Received before stock-unit tracking existed, it won't have units yet —
+            use "Backfill from existing POs" once to create them, then add serial numbers below. Safe to run more than once.
+          </p>
+
+          <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 14 }}>
+            <Btn variant="secondary" size="sm" onClick={handleBackfillStockUnits} disabled={backfillingStockUnits}>
+              {backfillingStockUnits ? "Backfilling…" : "Backfill from existing POs"}
+            </Btn>
+            <input
+              style={{ ...inputStyle, flex: 1 }}
+              type="text"
+              placeholder="Search by product code, model, or serial number…"
+              value={managerSearch}
+              onChange={(e) => setManagerSearch(e.target.value)}
+            />
+          </div>
+
+          <div style={{ maxHeight: 420, overflowY: "auto", border: "1px solid #e3d8c6", borderRadius: 8 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+              <thead>
+                <tr style={{ background: "#f6efe0", textAlign: "left" }}>
+                  <th style={{ padding: "8px 10px" }}>Unit</th>
+                  <th style={{ padding: "8px 10px" }}>Arrived</th>
+                  <th style={{ padding: "8px 10px" }}>Status</th>
+                  <th style={{ padding: "8px 10px" }}>Landed Cost</th>
+                  <th style={{ padding: "8px 10px" }}>Serial Number</th>
+                  <th style={{ padding: "8px 10px" }}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {(db.stockUnits || [])
+                  .filter((u) => {
+                    const needle = managerSearch.trim().toUpperCase();
+                    if (!needle) return true;
+                    return (
+                      (u.productCode || "").toUpperCase().includes(needle) ||
+                      (u.model || "").toUpperCase().includes(needle) ||
+                      (u.serialNumber || "").toUpperCase().includes(needle)
+                    );
+                  })
+                  .sort((a, b) => (b.arrivedDate || "").localeCompare(a.arrivedDate || ""))
+                  .map((u) => (
+                    <tr key={u.id} style={{ borderTop: "1px solid #e3d8c6" }}>
+                      <td style={{ padding: "8px 10px" }}>
+                        <strong>{u.productCode}</strong>{u.model ? ` — ${u.model}` : ""}
+                        {u.linkedQuoteId ? <div style={{ color: "#8a7a66" }}>custom build</div> : null}
+                      </td>
+                      <td style={{ padding: "8px 10px" }}>{fmtDate(u.arrivedDate)}</td>
+                      <td style={{ padding: "8px 10px" }}>{u.status === "sold" ? "Sold" : "In stock"}</td>
+                      <td style={{ padding: "8px 10px" }}>{fmtMoney(u.landedCost, "AUD")}</td>
+                      <td style={{ padding: "8px 10px" }}>
+                        <input
+                          style={{ ...inputStyle, padding: "4px 8px", fontSize: 12 }}
+                          type="text"
+                          value={managerSerialDrafts[u.id] ?? u.serialNumber ?? ""}
+                          onChange={(e) => setManagerSerialDrafts((d) => ({ ...d, [u.id]: e.target.value }))}
+                          placeholder="e.g. SAV-2026-014"
+                        />
+                      </td>
+                      <td style={{ padding: "8px 10px" }}>
+                        <Btn variant="secondary" size="sm" onClick={() => handleManagerSaveSerial(u.id)}>
+                          Save
+                        </Btn>
+                      </td>
+                    </tr>
+                  ))}
+                {(db.stockUnits || []).length === 0 && (
+                  <tr>
+                    <td colSpan={6} style={{ padding: 16, textAlign: "center", color: "#8a7a66" }}>
+                      No stock units yet — use "Backfill from existing POs" above, or they'll be created automatically as new POs are received.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </Modal>
+      )}
 
       {linkPOsConfirm && (
         <Modal onClose={() => (!linkingPOs ? setLinkPOsConfirm(false) : null)} width={440}>
