@@ -7435,7 +7435,25 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                       <strong>{u.productCode}{u.model ? ` — ${u.model}` : ""}</strong>
                       <div style={{ color: "#8a7a66" }}>
                         {u.status === "sold" ? "Sold" : "In stock"} · landed {fmtMoney(u.landedCost, "AUD")}
-                        {u.linkedQuoteId ? " · custom build" : ""}
+                        {u.linkedQuoteId ? (
+                          <>
+                            {" · "}
+                            {openRecord ? (
+                              <button
+                                type="button"
+                                onClick={() => openRecord("quote", u.linkedQuoteId)}
+                                style={{
+                                  fontSize: 12, color: "#b5552b", fontWeight: 600,
+                                  background: "none", border: "none", padding: 0, cursor: "pointer",
+                                }}
+                              >
+                                custom build — {(db.quotes || []).find((q) => q.id === u.linkedQuoteId)?.number || "view quote"} →
+                              </button>
+                            ) : (
+                              "custom build"
+                            )}
+                          </>
+                        ) : ""}
                       </div>
                     </div>
                     <div style={{ flex: "1 1 180px" }}>
