@@ -7601,7 +7601,8 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                     </>
                   );
                   return (
-                  <div key={u.id} style={{ display: "flex", alignItems: "flex-end", gap: 10, flexWrap: "wrap" }}>
+                  <React.Fragment key={u.id}>
+                  <div style={{ display: "flex", alignItems: "flex-end", gap: 10, flexWrap: "wrap" }}>
                     {isLinked && openRecord ? (
                       <button
                         type="button"
@@ -7650,6 +7651,39 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                       )}
                     </div>
                   </div>
+                  {(u.costComponents || []).length > 0 && (
+                    <div style={{ marginLeft: 4, marginBottom: 10, display: "flex", flexDirection: "column", gap: 4 }}>
+                      {(u.costComponents || []).map((c) => (
+                        <div
+                          key={c.id}
+                          style={{
+                            display: "flex", justifyContent: "space-between", alignItems: "center",
+                            fontSize: 11.5, background: "#f6efe0", borderRadius: 6, padding: "5px 10px", maxWidth: 420,
+                          }}
+                        >
+                          <span>
+                            {c.label || "Cost applied"} — {fmtMoney(c.amount, "AUD")}
+                            {c.sourcePoId && (() => {
+                              const p = (db.pos || []).find((x) => x.id === c.sourcePoId);
+                              return p ? ` (${p.party ? `${p.party} — ` : ""}PO-${String(p.number || "").replace(/^PO-?/i, "")})` : "";
+                            })()}
+                          </span>
+                          <button
+                            onClick={() => {
+                              if (window.confirm(`Remove "${c.label || "this cost"}" (${fmtMoney(c.amount, "AUD")}) from ${u.productCode}?`)) {
+                                handleRemoveStockUnitApplication(u.id, c.id);
+                              }
+                            }}
+                            style={{ background: "none", border: "none", color: "#a3442e", cursor: "pointer", fontSize: 13, padding: "0 4px" }}
+                            title="Remove this cost from this unit"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  </React.Fragment>
                   );
                 })}
               </div>
