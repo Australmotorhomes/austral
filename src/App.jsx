@@ -975,6 +975,41 @@ function findChassisLineForUnit(po, unit, items) {
   return null;
 }
 
+// Same live-recompute as getLiveBaseCost, but also returns exactly which line
+// it matched and every line on the PO — so a mismatch between the landed-cost
+// tooltip and what's visible in Line Items can be diagnosed by looking at the
+// data instead of guessing (e.g. a stale/duplicate line still sitting in
+// po.lines after an edit, which findChassisLineForUnit would otherwise match
+// silently).
+function getLiveBaseCostDebug(unit, po, items) {
+  const lines = po?.lines || [];
+  const freight = parseFloat(po?.customsClearance) || 0;
+  const totalLineValue = lines.reduce((s, l) => {
+    const qty = parseFloat(l.qty || l.quantity) || 1;
+    const price = parseFloat(l.price || l.unitPrice || l.cost || 0);
+    return s + price * qty;
+  }, 0);
+  const allLines = lines.map((l) => ({
+    desc: l.desc || l.description || "(no description)",
+    qty: parseFloat(l.qty || l.quantity) || 1,
+    price: parseFloat(l.price || l.unitPrice || l.cost || 0),
+  }));
+  if (!po) return { baseCost: parseFloat(unit?.baseCost) || 0, matchedLine: null, allLines: [], freight: 0, totalLineValue: 0 };
+  const line = findChassisLineForUnit(po, unit, items);
+  if (!line) return { baseCost: parseFloat(unit?.baseCost) || 0, matchedLine: null, allLines, freight, totalLineValue };
+  const qty = Math.max(1, Math.round(parseFloat(line.qty || line.quantity) || 1));
+  const linePrice = parseFloat(line.price || line.unitPrice || line.cost || 0);
+  const lineValue = linePrice * qty;
+  const freightShare = totalLineValue > 0 ? (lineValue / totalLineValue) * freight : 0;
+  return {
+    baseCost: (lineValue + freightShare) / qty,
+    matchedLine: { desc: line.desc || line.description || "(no description)", qty, price: linePrice },
+    allLines,
+    freight,
+    totalLineValue,
+  };
+}
+
 // A unit's baseCost is set once at creation (buildStockUnitsForPO) and never
 // retroactively updated — so if the source PO's line price gets corrected, or
 // its freight/customs figure changes, an already-created unit silently goes
@@ -988,21 +1023,7 @@ function findChassisLineForUnit(po, unit, items) {
 // handler) — recalculating it after the fact would silently rewrite realised
 // margin on a completed sale. Only in_stock units should ever call this.
 function getLiveBaseCost(unit, po, items) {
-  if (!po) return parseFloat(unit?.baseCost) || 0;
-  const lines = po.lines || [];
-  const freight = parseFloat(po.customsClearance) || 0;
-  const totalLineValue = lines.reduce((s, l) => {
-    const qty = parseFloat(l.qty || l.quantity) || 1;
-    const price = parseFloat(l.price || l.unitPrice || l.cost || 0);
-    return s + price * qty;
-  }, 0);
-  const line = findChassisLineForUnit(po, unit, items);
-  if (!line) return parseFloat(unit?.baseCost) || 0;
-  const qty = Math.max(1, Math.round(parseFloat(line.qty || line.quantity) || 1));
-  const linePrice = parseFloat(line.price || line.unitPrice || line.cost || 0);
-  const lineValue = linePrice * qty;
-  const freightShare = totalLineValue > 0 ? (lineValue / totalLineValue) * freight : 0;
-  return (lineValue + freightShare) / qty;
+  return getLiveBaseCostDebug(unit, po, items).baseCost;
 }
 
 async function createStockUnit(unitData) {
@@ -7518,7 +7539,10 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                   // (a late freight invoice or a build-cost correction can
                   // still land after the sale); only archiving locks it in.
                   const sourcePO = (db.pos || []).find((p) => p.id === u.sourcePoId);
-                  const liveBaseCost = u.archived ? (parseFloat(u.baseCost) || 0) : getLiveBaseCost(u, sourcePO, db.items || []);
+                  const costDebug = u.archived
+                    ? { baseCost: parseFloat(u.baseCost) || 0, matchedLine: null, allLines: [] }
+                    : getLiveBaseCostDebug(u, sourcePO, db.items || []);
+                  const liveBaseCost = costDebug.baseCost;
                   const liveLandedCost = computeLandedCost({ ...u, baseCost: liveBaseCost });
                   const baseCostChanged = !u.archived && Math.round(liveBaseCost * 100) !== Math.round((parseFloat(u.baseCost) || 0) * 100);
 
@@ -7530,6 +7554,13 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                   // Unit"). Each line is attributed to its source PO's
                   // supplier and number where that PO can still be found;
                   // components fall back to their typed label otherwise.
+                  //
+                  // Also shows exactly which line on the source PO was matched
+                  // (description, qty, price) plus every other line on that PO
+                  // — so if the base cost doesn't match what's visible in Line
+                  // Items, it's diagnosable directly from the tooltip instead
+                  // of needing to be reverse-engineered (e.g. a stale/duplicate
+                  // line still sitting in that PO's data after an edit).
                   const poLabel = (poId, fallback) => {
                     const p = (db.pos || []).find((x) => x.id === poId);
                     if (!p) return fallback || "Unknown source";
@@ -7538,6 +7569,15 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                   };
                   const breakdownLines = [
                     `${poLabel(u.sourcePoId)}: ${fmtMoney(liveBaseCost, "AUD")}${baseCostChanged ? ` (was ${fmtMoney(u.baseCost, "AUD")})` : ""}`,
+                    ...(costDebug.matchedLine
+                      ? [`  ↳ matched line: "${costDebug.matchedLine.desc}" — qty ${costDebug.matchedLine.qty} × ${fmtMoney(costDebug.matchedLine.price, "AUD")}`]
+                      : sourcePO ? [`  ↳ no matching Chassis & Structure line found on ${poLabel(u.sourcePoId)} — showing stored value`] : []),
+                    ...(costDebug.allLines && costDebug.allLines.length > 1
+                      ? [
+                          `  ↳ all lines on ${poLabel(u.sourcePoId)}:`,
+                          ...costDebug.allLines.map((l) => `      "${l.desc}" — qty ${l.qty} × ${fmtMoney(l.price, "AUD")}`),
+                        ]
+                      : []),
                     ...(u.costComponents || []).map(
                       (c) => `${poLabel(c.sourcePoId, c.label)}: ${fmtMoney(c.amount, "AUD")}`
                     ),
