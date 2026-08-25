@@ -4655,6 +4655,19 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
     list = list.filter((d) => !d.archived);
   }
   
+  // A consolidated PO's own `total` only reflects its own line items — the
+  // list (and sorting by Total) should show the combined figure across every
+  // PO merged into it, same as the modal's "Consolidated Total" summary tab,
+  // not just the primary's own line total.
+  const poDisplayTotal = (d) => {
+    const own = parseFloat(d.total) || 0;
+    if (isQuote || !d.consolidatedMemberIds?.length) return own;
+    const memberTotal = (db.pos || [])
+      .filter((p) => d.consolidatedMemberIds.includes(p.id))
+      .reduce((s, p) => s + (parseFloat(p.total) || 0), 0);
+    return own + memberTotal;
+  };
+
   // Sort: user-selected column (via clickable header) takes priority; otherwise
   // default to POs by ETA (newest to oldest) / Quotes by createdAt (newest to oldest).
   const sortAccessors = {
@@ -4664,7 +4677,7 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
     date: (d) => d.date || "",
     ref: (d) => (d.ref || "").toLowerCase(),
     eta: (d) => d.eta || "",
-    total: (d) => parseFloat(d.total) || 0,
+    total: (d) => poDisplayTotal(d),
     status: (d) => displayStatus(d) || "",
   };
   if (sortBy && sortAccessors[sortBy]) {
@@ -5788,7 +5801,7 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
                   </div>
                   <div style={{ fontSize: 12, color: "#8a7a66", marginTop: 2, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                     <Badge tone={displayStatus(d).toLowerCase()}>{displayStatus(d)}</Badge>
-                    <span>{fmtMoney(d.total)}</span>
+                    <span>{fmtMoney(poDisplayTotal(d))}</span>
                     {d.eta && <span>ETA {fmtDate(d.eta)}</span>}
                   </div>
                 </div>
@@ -5836,9 +5849,14 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
                     <td>{d.model ? <span className="muted">{d.model}</span> : <span className="muted">—</span>}</td>
                     <td className="muted">{fmtDate(d.date)}</td>
                     <td className="muted">{d.eta ? fmtDate(d.eta) : <span className="muted">—</span>}</td>
-                    <td className="num">{fmtMoney(d.total)}</td>
+                    <td className="num">{fmtMoney(poDisplayTotal(d))}</td>
                     <td>
                       <Badge tone={displayStatus(d).toLowerCase()}>{displayStatus(d)}</Badge>
+                      {d.consolidatedMemberIds?.length > 0 && (
+                        <span style={{ marginLeft: 6, fontSize: 10, background: "#d4a574", color: "#fff", borderRadius: 3, padding: "1px 5px", fontWeight: 600 }}>
+                          ⊕ {d.consolidatedMemberIds.length + 1} POs
+                        </span>
+                      )}
                     </td>
                     <td style={{ whiteSpace: "nowrap" }}>
                       <button
