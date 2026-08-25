@@ -2153,6 +2153,13 @@ export default function App() {
         data.quotes = (data.quotes || []).map((q) => fromSupabaseFormat(q, "quotes"));
         data.pos = (data.pos || []).map((p) => fromSupabaseFormat(p, "purchase_orders"));
 
+        // Delivered quotes stay visible until their warranty window actually
+        // lapses (365 days for campers, 730 for pontoon boats, from the last
+        // payment date) — not archived the instant they're marked Delivered.
+        // Needs customers loaded first for brand matching, so this runs here
+        // rather than inline in the quotes conversion above.
+        data.quotes = archiveExpiredWarrantyQuotes(data.quotes, data);
+
         // Convert stock units from Supabase format, and recompute landedCost
         // locally rather than trusting the stored value — cheap, and guarantees
         // it can never silently drift out of sync with baseCost/costComponents.
@@ -5343,8 +5350,7 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
         // treat it correctly; moving AWAY from Archived to an explicitly
         // chosen status clears that. The `archived` boolean (used by the
         // existing list filtering/"Archived" filter option) is kept in sync
-        // with status here. Quotes are untouched — they keep their existing
-        // auto-archive-on-Delivered/Declined behaviour below.
+        // with status here.
         if (!isQuote) {
           if (status === "Archived" && doc.status !== "Archived") {
             updatePayload.pre_archive_status = doc.status;
@@ -5354,8 +5360,15 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
             updatePayload.archived = false;
           }
         }
+        // Quotes: Declined still archives immediately (a lost/cancelled sale
+        // has no warranty to wait out). Delivered no longer auto-archives —
+        // it stays visible with a real "Delivered" status until its warranty
+        // window actually lapses (365 days for campers, 730 for pontoon
+        // boats, from the last payment date). See
+        // archiveExpiredWarrantyQuotes, which runs on every data load and
+        // archives it then instead.
         if (isQuote) {
-          updatePayload.archived = (status === "Delivered" || status === "Declined") ? true : false;
+          updatePayload.archived = status === "Declined";
         }
         
         // Update status in Supabase — schema-fallback in case pre_archive_status
@@ -5491,8 +5504,11 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
               target.archived = false;
             }
           }
+          // Quotes: same rule as the Supabase write above — Declined
+          // archives immediately, Delivered doesn't (see
+          // archiveExpiredWarrantyQuotes for when it actually gets archived).
           if (isQuote) {
-            target.archived = (status === "Delivered" || status === "Declined") ? true : false;
+            target.archived = status === "Declined";
           }
           
           // If quote accepted, auto-update customer record with quote info
@@ -6700,6 +6716,13 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
   // edit it through the normal form. This is the one place that value can be
   // corrected directly, keyed off whichever PO actually created the unit
   // (which may be a hidden consolidated member, not the PO currently open).
+  //
+  // Important: this modal keeps its own local `customsClearance` state for
+  // whichever PO is currently being edited, submitted unconditionally by
+  // handleSave (line ~6858) even while its field is hidden from view. If the
+  // PO we're clearing IS the one currently open, that local state must be
+  // zeroed too — otherwise clicking "Save" afterwards silently resubmits the
+  // old stale value and undoes this fix.
   async function handleClearSourcePOFreight(poId) {
     try {
       await saveMemberPOField(poId, { customsClearance: 0 });
@@ -6707,6 +6730,10 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
         const p = (next.pos || []).find((x) => x.id === poId);
         if (p) p.customsClearance = 0;
       });
+      if (poId === editing?.id) {
+        setCustomsClearance(0);
+      }
+      showToast("Freight fee cleared");
     } catch (err) {
       console.error("Clear freight error:", err);
       showToast(`Error clearing freight: ${err.message}`);
@@ -13628,6 +13655,85 @@ function getWarrantyStatus(c, db) {
   if (now >= expiry) return null; // lapsed
   return { brand: isAustral ? "Austral" : "Platinum Pontoons", years, expiresLabel: expiry.toLocaleDateString("en-AU", { month: "short", year: "numeric" }) };
 }
+
+// Same brand determination as computeSalesByModel's getModel() — a quote's
+// own line description first, falling back to the linked/matched customer's
+// recorded product field — but returning the Austral/Pontoon boolean
+// getWarrantyStatus-style functions need rather than a model name. Returns
+// null if it can't be told either way, so callers leave those quotes alone
+// rather than guessing a warranty window that might be wrong.
+function isAustralQuoteProduct(quote, db) {
+  const desc = (quote.lines?.[0]?.desc || quote.lines?.[0]?.description || quote.model || "").toLowerCase();
+  const partyRaw = quote.party || quote.customer || "";
+  const partyNorm = normalizeSalesName(partyRaw);
+  let cust = (db.customers || []).find((c) => c.id && quote.customerId && c.id === quote.customerId);
+  if (!cust && partyNorm) {
+    cust = (db.customers || []).find((c) => normalizeSalesName(c.name) === partyNorm);
+  }
+  if (!cust && partyNorm) {
+    cust = (db.customers || []).find((c) => {
+      const cNorm = normalizeSalesName(c.name);
+      return cNorm && (cNorm.includes(partyNorm) || partyNorm.includes(cNorm));
+    });
+  }
+  const prodField = (cust?.product || "").toLowerCase();
+  const matched = matchSalesModel(prodField) || matchSalesModel(desc);
+  if (!matched) return null;
+  return matched !== "Pontoon Boat";
+}
+
+// The most recent date a payment milestone was actually marked paid — the
+// anchor date for camper/boat warranty, per the business rule (365 days for
+// campers, 730 for pontoon boats, from the LAST payment, not from delivery).
+// Falls back to deliveredDate for quotes whose payment schedule predates this
+// field (or has none), so those don't sit un-archivable forever.
+function getQuoteLastPaymentDate(quote) {
+  const paidDates = (quote.paymentMilestones || [])
+    .filter((m) => m.paid && m.paidDate)
+    .map((m) => m.paidDate)
+    .filter(Boolean);
+  if (paidDates.length) return paidDates.slice().sort().pop();
+  return quote.deliveredDate || null;
+}
+
+// Whether a Delivered quote's warranty window has actually lapsed — 365 days
+// (Austral campers) or 730 days (Platinum Pontoons boats) after the last
+// payment date. Everything else (Draft/Sent/Accepted/Declined, or a
+// Delivered quote with nothing to date it by) returns false, i.e. "don't
+// archive" — this is a positive check for "warranty is over", not a general
+// archive-eligibility test. See archiveExpiredWarrantyQuotes for where this
+// gets applied, and the "Declined" case in setStatus for the one status that
+// still archives immediately (a lost/cancelled sale has no warranty to wait
+// out).
+function isQuoteWarrantyExpired(quote, db) {
+  if (quote.status !== "Delivered") return false;
+  const lastPaymentDate = getQuoteLastPaymentDate(quote);
+  if (!lastPaymentDate) return false;
+  const last = new Date(lastPaymentDate);
+  if (isNaN(last.getTime())) return false;
+  const isAustral = isAustralQuoteProduct(quote, db);
+  const days = isAustral === false ? 730 : 365; // unrecognised product defaults to the shorter (camper) window
+  const expiry = new Date(last.getTime() + days * 24 * 60 * 60 * 1000);
+  return new Date() >= expiry;
+}
+
+// Run once after quotes + customers have both finished loading (so brand
+// matching has customer product data to fall back on). Delivered quotes stay
+// visible with their real status — archived only once their warranty window
+// has actually lapsed, not the moment they're marked Delivered. This also
+// self-heals any quote the OLD rule already archived purely because it
+// became Delivered, before warranty tracking existed: if its warranty hasn't
+// actually lapsed yet, it's un-archived here so it surfaces again — no
+// separate migration step needed, this just runs on every load.
+function archiveExpiredWarrantyQuotes(quotes, db) {
+  return (quotes || []).map((q) => {
+    if (q.status !== "Delivered") return q;
+    const shouldBeArchived = isQuoteWarrantyExpired(q, db);
+    if (!!q.archived === shouldBeArchived) return q;
+    return { ...q, archived: shouldBeArchived };
+  });
+}
+
 
 // Safety net for duplicate ROWS in the customers table (not duplicate fields
 // within one row — that's handled above). If the exact same invoice number
