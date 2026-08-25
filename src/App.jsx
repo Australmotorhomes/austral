@@ -546,7 +546,7 @@ function toSupabaseFormat(data, table) {
     case "stock_units":
       // stock_units: id, product_code, model, source_po_id, arrived_date, base_cost,
       // cost_components (jsonb array), landed_cost, status, sold_quote_id, sold_date,
-      // created_at, updated_at
+      // archived, archived_at, created_at, updated_at
       if (copy.productCode !== undefined) { copy.product_code = copy.productCode; delete copy.productCode; }
       if (copy.sourcePoId !== undefined) { copy.source_po_id = copy.sourcePoId; delete copy.sourcePoId; }
       if (copy.arrivedDate !== undefined) { copy.arrived_date = copy.arrivedDate; delete copy.arrivedDate; }
@@ -557,6 +557,7 @@ function toSupabaseFormat(data, table) {
       if (copy.linkedQuoteId !== undefined) { copy.linked_quote_id = copy.linkedQuoteId; delete copy.linkedQuoteId; }
       if (copy.soldQuoteId !== undefined) { copy.sold_quote_id = copy.soldQuoteId; delete copy.soldQuoteId; }
       if (copy.soldDate !== undefined) { copy.sold_date = copy.soldDate; delete copy.soldDate; }
+      if (copy.archivedAt !== undefined) { copy.archived_at = copy.archivedAt; delete copy.archivedAt; }
       if (copy.createdAt !== undefined) { copy.created_at = copy.createdAt; delete copy.createdAt; }
       if (copy.updatedAt !== undefined) { copy.updated_at = copy.updatedAt; delete copy.updatedAt; }
       break;
@@ -685,6 +686,8 @@ function toSupabaseFormat(data, table) {
       if (copy.linked_quote_id !== undefined) { copy.linkedQuoteId = copy.linked_quote_id; delete copy.linked_quote_id; }
       if (copy.sold_quote_id !== undefined) { copy.soldQuoteId = copy.sold_quote_id; delete copy.sold_quote_id; }
       if (copy.sold_date !== undefined) { copy.soldDate = copy.sold_date; delete copy.sold_date; }
+      copy.archived = !!copy.archived;
+      if (copy.archived_at !== undefined) { copy.archivedAt = copy.archived_at; delete copy.archived_at; }
       if (copy.created_at !== undefined) { copy.createdAt = copy.created_at; delete copy.created_at; }
       if (copy.updated_at !== undefined) { copy.updatedAt = copy.updated_at; delete copy.updated_at; }
       copy.status = copy.status || "in_stock";
@@ -957,6 +960,51 @@ function computeLandedCost(unit) {
   return base + componentsTotal;
 }
 
+// Finds the source PO's Chassis & Structure line that corresponds to a given
+// stock unit (matched by productCode, same lookup buildStockUnitsForPO uses).
+function findChassisLineForUnit(po, unit, items) {
+  for (const l of po?.lines || []) {
+    let item = l.itemId ? (items || []).find((i) => i.id === l.itemId) : null;
+    if (!item) {
+      item = (items || []).find((i) =>
+        i.productCode && (l.desc || l.description || "").toUpperCase().includes(i.productCode.toUpperCase())
+      );
+    }
+    if (item?.productCode === unit.productCode && item?.category === "Chassis & Structure") return l;
+  }
+  return null;
+}
+
+// A unit's baseCost is set once at creation (buildStockUnitsForPO) and never
+// retroactively updated — so if the source PO's line price gets corrected, or
+// its freight/customs figure changes, an already-created unit silently goes
+// stale. This recomputes baseCost live from the source PO's CURRENT line data
+// using the exact same formula, so in-stock units always reflect the latest
+// build cost. Falls back to the stored baseCost if the source PO or its
+// matching line can no longer be found (e.g. PO deleted, model changed).
+//
+// Deliberately NOT applied to sold units: once a unit is sold, its landedCost
+// is locked in as that sale's historical COGS (see Stage 3 in the PO status
+// handler) — recalculating it after the fact would silently rewrite realised
+// margin on a completed sale. Only in_stock units should ever call this.
+function getLiveBaseCost(unit, po, items) {
+  if (!po) return parseFloat(unit?.baseCost) || 0;
+  const lines = po.lines || [];
+  const freight = parseFloat(po.customsClearance) || 0;
+  const totalLineValue = lines.reduce((s, l) => {
+    const qty = parseFloat(l.qty || l.quantity) || 1;
+    const price = parseFloat(l.price || l.unitPrice || l.cost || 0);
+    return s + price * qty;
+  }, 0);
+  const line = findChassisLineForUnit(po, unit, items);
+  if (!line) return parseFloat(unit?.baseCost) || 0;
+  const qty = Math.max(1, Math.round(parseFloat(line.qty || line.quantity) || 1));
+  const linePrice = parseFloat(line.price || line.unitPrice || line.cost || 0);
+  const lineValue = linePrice * qty;
+  const freightShare = totalLineValue > 0 ? (lineValue / totalLineValue) * freight : 0;
+  return (lineValue + freightShare) / qty;
+}
+
 async function createStockUnit(unitData) {
   try {
     const payload = toSupabaseFormat({ ...unitData, landedCost: computeLandedCost(unitData) }, "stock_units");
@@ -971,7 +1019,7 @@ async function createStockUnit(unitData) {
 async function updateStockUnit(id, unitData) {
   try {
     const payload = toSupabaseFormat(unitData, "stock_units");
-    const result = await updateRecord("stock_units", id, payload);
+    const result = await supabaseRESTWithSchemaFallback("PATCH", `stock_units?id=eq.${id}`, payload);
     return fromSupabaseFormat(result[0], "stock_units");
   } catch (err) {
     console.error("Update stock unit error:", err);
@@ -6588,6 +6636,40 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
     }
   }
 
+  // Archiving locks in whatever the unit's cost currently live-computes to —
+  // from that point on it's frozen (see getLiveBaseCost), matching how a
+  // sold unit's landedCost is already locked in as historical COGS. This is
+  // the deliberate, one-way "stop recalculating this one" action, distinct
+  // from a sale: a unit can be adjustable for a long time after it's sold
+  // (a late-arriving freight invoice, a build-cost correction) and only
+  // gets frozen once someone explicitly archives it.
+  async function handleArchiveStockUnit(unit) {
+    const sourcePO = (db.pos || []).find((p) => p.id === unit.sourcePoId);
+    const finalBaseCost = unit.status === "sold" ? (parseFloat(unit.baseCost) || 0) : getLiveBaseCost(unit, sourcePO, items || []);
+    const finalLandedCost = computeLandedCost({ ...unit, baseCost: finalBaseCost });
+    try {
+      await updateStockUnit(unit.id, {
+        baseCost: finalBaseCost,
+        landedCost: finalLandedCost,
+        archived: true,
+        archivedAt: todayISO(),
+      });
+      update((next) => {
+        const u = (next.stockUnits || []).find((x) => x.id === unit.id);
+        if (u) {
+          u.baseCost = finalBaseCost;
+          u.landedCost = finalLandedCost;
+          u.archived = true;
+          u.archivedAt = todayISO();
+        }
+      });
+      showToast(`${unit.productCode} archived — cost locked at ${fmtMoney(finalLandedCost, "AUD")}`);
+    } catch (err) {
+      console.error("Archive stock unit error:", err);
+      showToast(`Error archiving stock unit: ${err.message}`);
+    }
+  }
+
   // Stage 3 (quotes only): let staff pin this quote to a specific physical
   // unit ahead of delivery — by serial number if it's known, otherwise by
   // picking from the list. This sets linkedQuoteId the same way an
@@ -7430,12 +7512,22 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
               </p>
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                 {stockUnitsFromThisPO.map((u) => {
+                  // Cost stays LIVE — recomputed from the source PO's current
+                  // line data (see getLiveBaseCost) — right up until the unit
+                  // is archived. Selling a unit doesn't freeze it by itself
+                  // (a late freight invoice or a build-cost correction can
+                  // still land after the sale); only archiving locks it in.
+                  const sourcePO = (db.pos || []).find((p) => p.id === u.sourcePoId);
+                  const liveBaseCost = u.archived ? (parseFloat(u.baseCost) || 0) : getLiveBaseCost(u, sourcePO, db.items || []);
+                  const liveLandedCost = computeLandedCost({ ...u, baseCost: liveBaseCost });
+                  const baseCostChanged = !u.archived && Math.round(liveBaseCost * 100) !== Math.round((parseFloat(u.baseCost) || 0) * 100);
+
                   // Breakdown for the landed-cost tooltip: base cost (this
                   // unit's originating Chassis & Structure line + its share of
-                  // that PO's freight, set once at creation — see
-                  // buildStockUnitsForPO) plus every cost component applied
-                  // since (freight, electrical/gas works, etc. — see "Apply to
-                  // Stock Unit"). Each line is attributed to its source PO's
+                  // that PO's freight — recalculated live until archived, then
+                  // locked-in) plus every cost component applied since
+                  // (freight, electrical/gas works, etc. — see "Apply to Stock
+                  // Unit"). Each line is attributed to its source PO's
                   // supplier and number where that PO can still be found;
                   // components fall back to their typed label otherwise.
                   const poLabel = (poId, fallback) => {
@@ -7445,40 +7537,49 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                     return p.party ? `${p.party} — ${num}` : num;
                   };
                   const breakdownLines = [
-                    `${poLabel(u.sourcePoId)}: ${fmtMoney(u.baseCost, "AUD")}`,
+                    `${poLabel(u.sourcePoId)}: ${fmtMoney(liveBaseCost, "AUD")}${baseCostChanged ? ` (was ${fmtMoney(u.baseCost, "AUD")})` : ""}`,
                     ...(u.costComponents || []).map(
                       (c) => `${poLabel(c.sourcePoId, c.label)}: ${fmtMoney(c.amount, "AUD")}`
                     ),
-                    `Total: ${fmtMoney(computeLandedCost(u), "AUD")}`,
+                    `Total: ${fmtMoney(liveLandedCost, "AUD")}`,
+                    u.archived ? `Archived ${fmtDate(u.archivedAt)} — cost frozen` : "Not yet archived — cost still live",
                   ];
+                  const isLinked = !!u.linkedQuoteId;
+                  const linkedQuote = isLinked ? (db.quotes || []).find((q) => q.id === u.linkedQuoteId) : null;
+                  const descContent = (
+                    <>
+                      <strong>{u.productCode}{u.model ? ` — ${u.model}` : ""}</strong>
+                      <div style={{ display: "flex", alignItems: "center" }}>
+                        {u.status === "sold" ? "Sold" : "In stock"} · landed {fmtMoney(liveLandedCost, "AUD")}
+                        <HelpHint text={breakdownLines.join("\n")} />
+                        {u.archived && (
+                          <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: "#8a7a66", background: "#f0e8d9", padding: "1px 6px", borderRadius: 3 }}>
+                            ARCHIVED
+                          </span>
+                        )}
+                      </div>
+                    </>
+                  );
                   return (
                   <div key={u.id} style={{ display: "flex", alignItems: "flex-end", gap: 10, flexWrap: "wrap" }}>
-                    <div style={{ fontSize: 12, flex: "1 1 160px", paddingBottom: 8, color: "#4a3527" }}>
-                      <strong>{u.productCode}{u.model ? ` — ${u.model}` : ""}</strong>
-                      <div style={{ color: "#8a7a66", display: "flex", alignItems: "center" }}>
-                        {u.status === "sold" ? "Sold" : "In stock"} · landed {fmtMoney(u.landedCost, "AUD")}
-                        <HelpHint text={breakdownLines.join("\n")} />
-                        {u.linkedQuoteId ? (
-                          <>
-                            {" · "}
-                            {openRecord ? (
-                              <button
-                                type="button"
-                                onClick={() => openRecord("quote", u.linkedQuoteId)}
-                                style={{
-                                  fontSize: 12, color: "#b5552b", fontWeight: 600,
-                                  background: "none", border: "none", padding: 0, cursor: "pointer",
-                                }}
-                              >
-                                custom build — {(db.quotes || []).find((q) => q.id === u.linkedQuoteId)?.number || "view quote"} →
-                              </button>
-                            ) : (
-                              "custom build"
-                            )}
-                          </>
-                        ) : ""}
+                    {isLinked && openRecord ? (
+                      <button
+                        type="button"
+                        onClick={() => openRecord("quote", u.linkedQuoteId)}
+                        title={`Linked to ${linkedQuote?.number || "quote"} — click to view`}
+                        style={{
+                          fontSize: 12, flex: "1 1 160px", paddingBottom: 8, textAlign: "left",
+                          background: "none", border: "none", cursor: "pointer",
+                          color: "#b5552b", textDecoration: "underline",
+                        }}
+                      >
+                        {descContent}
+                      </button>
+                    ) : (
+                      <div style={{ fontSize: 12, flex: "1 1 160px", paddingBottom: 8, color: isLinked ? "#b5552b" : "#4a3527" }}>
+                        {descContent}
                       </div>
-                    </div>
+                    )}
                     <div style={{ flex: "1 1 180px" }}>
                       <Field label="Serial number">
                         <input
@@ -7490,10 +7591,23 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                         />
                       </Field>
                     </div>
-                    <div style={{ paddingBottom: 2 }}>
+                    <div style={{ paddingBottom: 2, display: "flex", gap: 6 }}>
                       <Btn variant="secondary" size="sm" onClick={() => handleSaveSerialNumber(u.id)}>
                         Save
                       </Btn>
+                      {!u.archived && (
+                        <Btn
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => {
+                            if (window.confirm(`Archive ${u.productCode}? Its cost (currently ${fmtMoney(liveLandedCost, "AUD")}) will be locked in and stop updating.`)) {
+                              handleArchiveStockUnit(u);
+                            }
+                          }}
+                        >
+                          Archive
+                        </Btn>
+                      )}
                     </div>
                   </div>
                   );
