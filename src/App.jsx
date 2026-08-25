@@ -7429,12 +7429,35 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                 Record each unit's serial number once known — it can then be used to link a specific customer's order to this exact camper.
               </p>
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                {stockUnitsFromThisPO.map((u) => (
+                {stockUnitsFromThisPO.map((u) => {
+                  // Breakdown for the landed-cost tooltip: base cost (this
+                  // unit's originating Chassis & Structure line + its share of
+                  // that PO's freight, set once at creation — see
+                  // buildStockUnitsForPO) plus every cost component applied
+                  // since (freight, electrical/gas works, etc. — see "Apply to
+                  // Stock Unit"). Each line is attributed to its source PO's
+                  // supplier and number where that PO can still be found;
+                  // components fall back to their typed label otherwise.
+                  const poLabel = (poId, fallback) => {
+                    const p = (db.pos || []).find((x) => x.id === poId);
+                    if (!p) return fallback || "Unknown source";
+                    const num = `PO-${String(p.number || "").replace(/^PO-?/i, "")}`;
+                    return p.party ? `${p.party} — ${num}` : num;
+                  };
+                  const breakdownLines = [
+                    `${poLabel(u.sourcePoId)}: ${fmtMoney(u.baseCost, "AUD")}`,
+                    ...(u.costComponents || []).map(
+                      (c) => `${poLabel(c.sourcePoId, c.label)}: ${fmtMoney(c.amount, "AUD")}`
+                    ),
+                    `Total: ${fmtMoney(computeLandedCost(u), "AUD")}`,
+                  ];
+                  return (
                   <div key={u.id} style={{ display: "flex", alignItems: "flex-end", gap: 10, flexWrap: "wrap" }}>
                     <div style={{ fontSize: 12, flex: "1 1 160px", paddingBottom: 8, color: "#4a3527" }}>
                       <strong>{u.productCode}{u.model ? ` — ${u.model}` : ""}</strong>
-                      <div style={{ color: "#8a7a66" }}>
+                      <div style={{ color: "#8a7a66", display: "flex", alignItems: "center" }}>
                         {u.status === "sold" ? "Sold" : "In stock"} · landed {fmtMoney(u.landedCost, "AUD")}
+                        <HelpHint text={breakdownLines.join("\n")} />
                         {u.linkedQuoteId ? (
                           <>
                             {" · "}
@@ -7473,7 +7496,8 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                       </Btn>
                     </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </Panel>
           )}
@@ -7481,7 +7505,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
           {/* Apply this PO's cost onto a stock unit — for freight, electrical/
               gas works, gas bottles & leads, or any other invoice that arrives
               after the camper itself is already sitting in stock. */}
-          {!isQuote && !isNew && (
+          {!isQuote && !isNew && !(editing?.consolidatedMemberIds?.length > 0) && (
             <Panel>
               <h4 style={{ fontSize: 13, fontWeight: 700, color: "#4a3527", margin: "0 0 4px", display: "flex", alignItems: "center" }}>
                 Apply to Stock Unit
