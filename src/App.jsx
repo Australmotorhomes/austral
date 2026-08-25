@@ -6558,9 +6558,19 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
   // Structure line(s) going Paid/Received) — shown so their serial numbers
   // can be recorded once known, since that's usually not until the container
   // is actually opened and inspected, well after the unit record exists.
+  //
+  // A consolidated PO merges other POs' lines into this one for shipping —
+  // each original PO still owns the stock unit it individually created (its
+  // sourcePoId points at whichever PO was Paid/Received at the time), so a
+  // consolidated PO needs to show units from itself AND every merged-in
+  // member, not just its own id, or a merged shipment of 2+ campers would
+  // only ever show one serial number field.
   const [serialDrafts, setSerialDrafts] = useState({});
+  const relatedPoIdsForStockUnits = !isQuote && !isNew
+    ? new Set([editing.id, ...(editing.consolidatedMemberIds || [])])
+    : new Set();
   const stockUnitsFromThisPO = !isQuote && !isNew
-    ? (db.stockUnits || []).filter((u) => u.sourcePoId === editing.id)
+    ? (db.stockUnits || []).filter((u) => relatedPoIdsForStockUnits.has(u.sourcePoId))
     : [];
 
   async function handleSaveSerialNumber(unitId) {
