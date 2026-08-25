@@ -1006,6 +1006,7 @@ function getLiveBaseCostDebug(unit, po, items) {
     matchedLine: { desc: line.desc || line.description || "(no description)", qty, price: linePrice },
     allLines,
     freight,
+    freightShare,
     totalLineValue,
   };
 }
@@ -6691,6 +6692,28 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
     }
   }
 
+  // The Freight Forward Fee field is hidden on a PO's form once it has other
+  // POs consolidated into it (see the Panel condition further down) — but
+  // hiding the field doesn't clear whatever value it already held from before
+  // consolidation happened, and that stored value still silently feeds into
+  // every in-stock unit's live base-cost calculation with no way to see or
+  // edit it through the normal form. This is the one place that value can be
+  // corrected directly, keyed off whichever PO actually created the unit
+  // (which may be a hidden consolidated member, not the PO currently open).
+  async function handleClearSourcePOFreight(poId) {
+    try {
+      await saveMemberPOField(poId, { customsClearance: 0 });
+      update((next) => {
+        const p = (next.pos || []).find((x) => x.id === poId);
+        if (p) p.customsClearance = 0;
+      });
+    } catch (err) {
+      console.error("Clear freight error:", err);
+      showToast(`Error clearing freight: ${err.message}`);
+    }
+  }
+
+
   // Stage 3 (quotes only): let staff pin this quote to a specific physical
   // unit ahead of delivery — by serial number if it's known, otherwise by
   // picking from the list. This sets linkedQuoteId the same way an
@@ -7570,8 +7593,18 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                   const breakdownLines = [
                     `${poLabel(u.sourcePoId)}: ${fmtMoney(liveBaseCost, "AUD")}${baseCostChanged ? ` (was ${fmtMoney(u.baseCost, "AUD")})` : ""}`,
                     ...(costDebug.matchedLine
-                      ? [`  ↳ matched line: "${costDebug.matchedLine.desc}" — qty ${costDebug.matchedLine.qty} × ${fmtMoney(costDebug.matchedLine.price, "AUD")}`]
+                      ? [`  ↳ line price: "${costDebug.matchedLine.desc}" — qty ${costDebug.matchedLine.qty} × ${fmtMoney(costDebug.matchedLine.price, "AUD")}`]
                       : sourcePO ? [`  ↳ no matching Chassis & Structure line found on ${poLabel(u.sourcePoId)} — showing stored value`] : []),
+                    // Freight is otherwise invisible: it gets folded straight into
+                    // base cost above with no separate line, and the field it
+                    // comes from (Freight Forward Fee) is hidden on the PO form
+                    // once that PO has other POs consolidated into it — so a
+                    // leftover value from before consolidation can sit there,
+                    // silently inflating base cost, with no way to see it short
+                    // of this line.
+                    ...(costDebug.freight
+                      ? [`  ↳ this PO's Freight Forward Fee: ${fmtMoney(costDebug.freight, "AUD")} → ${fmtMoney(costDebug.freightShare, "AUD")} apportioned to this line`]
+                      : []),
                     ...(costDebug.allLines && costDebug.allLines.length > 1
                       ? [
                           `  ↳ all lines on ${poLabel(u.sourcePoId)}:`,
@@ -7651,6 +7684,32 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                       )}
                     </div>
                   </div>
+                  {!u.archived && costDebug.freight > 0 && (
+                    <div
+                      style={{
+                        marginLeft: 4, marginBottom: 10, display: "flex", justifyContent: "space-between", alignItems: "center",
+                        fontSize: 11.5, background: "#fbe9e3", border: "1px solid #e3b8a4", borderRadius: 6, padding: "6px 10px", maxWidth: 460,
+                      }}
+                    >
+                      <span>
+                        ⚠ {poLabel(u.sourcePoId)} has a Freight Forward Fee of {fmtMoney(costDebug.freight, "AUD")} —
+                        {" "}{fmtMoney(costDebug.freightShare, "AUD")} of it is folded into this unit's base cost above, hidden since this PO was consolidated.
+                      </span>
+                      <button
+                        onClick={() => {
+                          if (window.confirm(`Clear the ${fmtMoney(costDebug.freight, "AUD")} Freight Forward Fee on ${poLabel(u.sourcePoId)}? This affects every stock unit sourced from that PO.`)) {
+                            handleClearSourcePOFreight(u.sourcePoId);
+                          }
+                        }}
+                        style={{
+                          background: "none", border: "1px solid #a3442e", color: "#a3442e", cursor: "pointer",
+                          fontSize: 11, padding: "3px 8px", borderRadius: 4, whiteSpace: "nowrap", marginLeft: 8,
+                        }}
+                      >
+                        Clear fee
+                      </button>
+                    </div>
+                  )}
                   {(u.costComponents || []).length > 0 && (
                     <div style={{ marginLeft: 4, marginBottom: 10, display: "flex", flexDirection: "column", gap: 4 }}>
                       {(u.costComponents || []).map((c) => (
