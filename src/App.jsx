@@ -478,6 +478,10 @@ function toSupabaseFormat(data, table) {
         copy.customs_clearance = copy.customsClearance;
         delete copy.customsClearance;
       }
+      if (copy.shippingType !== undefined) {
+        copy.shipping_type = copy.shippingType;
+        delete copy.shippingType;
+      }
       if (copy.paymentMilestones !== undefined) {
         copy.payment_milestones = copy.paymentMilestones;
         delete copy.paymentMilestones;
@@ -632,6 +636,13 @@ function toSupabaseFormat(data, table) {
       if (copy.created_at !== undefined) { copy.createdAt = copy.created_at; delete copy.created_at; }
       if (copy.updated_at !== undefined) { copy.updatedAt = copy.updated_at; delete copy.updated_at; }
       if (copy.customs_clearance !== undefined) { copy.customsClearance = copy.customs_clearance; delete copy.customs_clearance; }
+      // Explicit Domestic/International selection — replaces the old implicit
+      // rule of "has a Freight Forward Fee > 0 = International". Defaults to
+      // Domestic for any PO saved before this field existed (shipping_type
+      // column missing/null) so nothing already in Supabase silently jumps
+      // into the wrong shipping section.
+      copy.shippingType = copy.shipping_type || copy.shippingType || "Domestic";
+      delete copy.shipping_type;
       if (copy.payment_milestones !== undefined) { copy.paymentMilestones = copy.payment_milestones; delete copy.payment_milestones; }
       if (copy.delivered_date !== undefined) { copy.deliveredDate = copy.delivered_date; delete copy.delivered_date; }
       if (copy.gross_profit_pct !== undefined) { copy.grossProfitPct = copy.gross_profit_pct; delete copy.gross_profit_pct; }
@@ -5217,48 +5228,6 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
   }
 
 
-  function createCustomsPO(parentPO) {
-    // Create a dedicated Customs Clearance PO from the parent PO's customs amount
-    (async () => {
-      try {
-        const poNumber = nextNumber("po", db);
-        const amount = parentPO.customsClearance || 0;
-        const newPO = {
-          number: poNumber,
-          status: "Draft",
-          party: "Australian Border Force",
-          customer: parentPO.customer || parentPO.party || "",
-          model: parentPO.model || "",
-          date: todayISO(),
-          contact: "",
-          notes: `Customs clearance for PO ${parentPO.number}`,
-          discount: 0,
-          lines: [{ desc: `Customs clearance — PO ${parentPO.number}`, qty: 1, price: amount, currency: "AUD", cost: amount }],
-          subtotal: amount,
-          gst: 0,
-          total: amount,
-          grossProfitPct: null,
-          fxRateUsed: db.fx ? db.fx.usdAudRate : 1.55,
-          quoteId: parentPO.quoteId || null,
-          quoteNumber: parentPO.quoteNumber || "",
-          customsClearance: 0,
-          createdAt: todayISO(),
-        };
-        const createPayload = toSupabaseFormat(newPO, "purchase_orders");
-        const result = await supabaseRESTWithSchemaFallback("POST", "purchase_orders", createPayload);
-        const savedRow = Array.isArray(result) ? result[0] : result;
-        const saved = { ...newPO, ...fromSupabaseFormat(savedRow, "purchase_orders"), id: savedRow.id };
-        update((next) => { next.pos.push(saved); });
-        showToast(`Customs PO ${poNumber} created`);
-        // Open the new PO immediately
-        if (openRecord) openRecord("po", saved.id);
-      } catch (err) {
-        showToast(`Error creating customs PO: ${err.message}`);
-        console.error("Create customs PO error:", err);
-      }
-    })();
-  }
-
   function createPOsForSuppliers(supplierMap) {
     // Create POs in Supabase first, then update local state
     console.log("🔍 createPOsForSuppliers called with suppliers:", Object.keys(supplierMap));
@@ -6018,7 +5987,6 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
             setPendingDelete(doc);
           }}
           onGeneratePOs={isQuote ? handleGeneratePOs : null}
-          onCreateCustomsPO={!isQuote ? createCustomsPO : null}
           onConsolidatePOs={!isQuote ? consolidatePOs : null}
           onReverseConsolidation={!isQuote ? reverseConsolidation : null}
           openRecord={openRecord}
@@ -6237,7 +6205,7 @@ function PriceBookSearchModal({ items, isQuote, calcSellPrice, onSelect, onClose
   );
 }
 
-function DocModal({ kind, editing, db, items, models, categories, fx, statusOptions, onCancel, onSave, onSaveMilestones, onAddItem, onAddModel, onAddCategory, onStatusChange, onDelete, onGeneratePOs, onCreateCustomsPO, onConsolidatePOs, onReverseConsolidation, openRecord, showToast, update }) {
+function DocModal({ kind, editing, db, items, models, categories, fx, statusOptions, onCancel, onSave, onSaveMilestones, onAddItem, onAddModel, onAddCategory, onStatusChange, onDelete, onGeneratePOs, onConsolidatePOs, onReverseConsolidation, openRecord, showToast, update }) {
   const isQuote = kind === "quote";
   const isMobile = useIsMobile();
   const isTablet = useIsMobile(880); // covers iPad-width viewports where the desktop payment-schedule grid gets too tight
@@ -6279,8 +6247,10 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
   const [paymentMilestones, setPaymentMilestones] = useState(
     editing?.paymentMilestones ? editing.paymentMilestones : []
   );
-  const [customsClearance, setCustomsClearance] = useState(
-    !isQuote && (editing?.customsClearance !== undefined && editing.customsClearance !== null) ? editing.customsClearance : 0
+  // Domestic vs International — explicit choice, defaults to Domestic.
+  // Determines which section of the Shipping tab / Dashboard this PO appears in.
+  const [shippingType, setShippingType] = useState(
+    !isQuote && editing?.shippingType ? editing.shippingType : "Domestic"
   );
   // Stage 2: apply this PO's cost to an existing stock unit (freight,
   // electrical/gas works, gas bottles & leads, etc. arriving on their own PO
@@ -6400,7 +6370,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
         const native = (Number(l.qty) || 0) * (Number(l.price) || 0);
         return s + (l.currency === "USD" ? native * (Number(rate) || 1) : native);
       }, 0);
-      const newTotal = newSubtotal + (Number(member.customsClearance) || 0);
+      const newTotal = newSubtotal;
       const payload = toSupabaseFormat(
         { lines: mLines, subtotal: newSubtotal, total: newTotal, updatedAt: nowISO() },
         "purchase_orders"
@@ -6655,18 +6625,6 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
     }
   }
 
-  async function saveMemberPOField(poId, fields) {
-    // Save any fields for a member PO directly to Supabase and update local db state
-    try {
-      const payload = toSupabaseFormat({ ...fields, updatedAt: nowISO() }, "purchase_orders");
-      await supabaseRESTWithSchemaFallback("PATCH", `purchase_orders?id=eq.${poId}`, payload);
-      showToast("Saved");
-    } catch (err) {
-      showToast("Save failed");
-      console.error("Error saving member PO:", err);
-    }
-  }
-
   // Stage 2: existing applications of this PO's cost onto stock units, so the
   // form can show "already applied here" and let it be removed/re-entered
   // rather than silently allowing the same invoice to be double-counted.
@@ -6743,39 +6701,6 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
       showToast(`Error archiving stock unit: ${err.message}`);
     }
   }
-
-  // The Freight Forward Fee field is hidden on a PO's form once it has other
-  // POs consolidated into it (see the Panel condition further down) — but
-  // hiding the field doesn't clear whatever value it already held from before
-  // consolidation happened, and that stored value still silently feeds into
-  // every in-stock unit's live base-cost calculation with no way to see or
-  // edit it through the normal form. This is the one place that value can be
-  // corrected directly, keyed off whichever PO actually created the unit
-  // (which may be a hidden consolidated member, not the PO currently open).
-  //
-  // Important: this modal keeps its own local `customsClearance` state for
-  // whichever PO is currently being edited, submitted unconditionally by
-  // handleSave (line ~6858) even while its field is hidden from view. If the
-  // PO we're clearing IS the one currently open, that local state must be
-  // zeroed too — otherwise clicking "Save" afterwards silently resubmits the
-  // old stale value and undoes this fix.
-  async function handleClearSourcePOFreight(poId) {
-    try {
-      await saveMemberPOField(poId, { customsClearance: 0 });
-      update((next) => {
-        const p = (next.pos || []).find((x) => x.id === poId);
-        if (p) p.customsClearance = 0;
-      });
-      if (poId === editing?.id) {
-        setCustomsClearance(0);
-      }
-      showToast("Freight fee cleared");
-    } catch (err) {
-      console.error("Clear freight error:", err);
-      showToast(`Error clearing freight: ${err.message}`);
-    }
-  }
-
 
   // Stage 3 (quotes only): let staff pin this quote to a specific physical
   // unit ahead of delivery — by serial number if it's known, otherwise by
@@ -6902,7 +6827,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
         status,
         attachments,
         ...(paymentMilestones.length > 0 && { paymentMilestones }),
-        ...(!isQuote && { customsClearance }),  // Always include for POs (allows setting to 0)
+        ...(!isQuote && { shippingType }),  // Always include for POs (Domestic/International)
         ...(!isQuote && customer && { customer }),
         eta,  // Always include ETA for both quotes and POs (persist to Supabase)
         ...(isQuote && { ref: ref.trim(), hiddenCosts }),
@@ -7008,6 +6933,15 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                 +
               </button>
             </div>
+          )}
+          {onConsolidatePOs && !isNew && !editing?.consolidatedGroupId && !editing?.consolidatedMemberIds?.length && (
+            <Btn
+              variant="secondary"
+              size="sm"
+              onClick={() => { setConsolidateSelected([]); setShowConsolidateModal(true); }}
+            >
+              ⊕ Consolidate Shipment
+            </Btn>
           )}
           {!isNew && (
             <Field label="" >
@@ -7561,45 +7495,17 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
 
           {!isQuote && !(!isNew && editing?.consolidatedMemberIds?.length > 0) && (
             <Panel>
-              <div style={{ display: "flex", alignItems: "flex-end", gap: 10 }}>
-                <div style={{ flex: 1 }}>
-                  <Field label="Freight Forward Fee (AUD, optional)">
-                    <input
-                      style={inputStyle}
-                      type="number"
-                      step="0.01"
-                      min="0"
-                      value={customsClearance}
-                      onChange={(e) => setCustomsClearance(parseFloat(e.target.value) || 0)}
-                      placeholder="e.g. 500"
-                    />
-                  </Field>
-                </div>
-                {onCreateCustomsPO && !isNew && customsClearance > 0 && (
-                  <div style={{ paddingBottom: 2 }}>
-                    <Btn
-                      variant="secondary"
-                      size="sm"
-                      onClick={() => {
-                        handleSave();
-                        onCreateCustomsPO({ ...editing, customsClearance });
-                      }}
-                    >
-                      + Create Customs PO
-                    </Btn>
-                  </div>
-                )}
-                {onConsolidatePOs && !isNew && !editing?.consolidatedGroupId && !editing?.consolidatedMemberIds?.length && (
-                  <div style={{ paddingBottom: 2 }}>
-                    <Btn
-                      variant="secondary"
-                      size="sm"
-                      onClick={() => { setConsolidateSelected([]); setShowConsolidateModal(true); }}
-                    >
-                      ⊕ Consolidate Shipment
-                    </Btn>
-                  </div>
-                )}
+              <div style={{ width: 200 }}>
+                <Field label="Shipping">
+                  <select
+                    style={inputStyle}
+                    value={shippingType}
+                    onChange={(e) => setShippingType(e.target.value)}
+                  >
+                    <option value="Domestic">Domestic</option>
+                    <option value="International">International</option>
+                  </select>
+                </Field>
               </div>
             </Panel>
           )}
@@ -7747,32 +7653,6 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                       )}
                     </div>
                   </div>
-                  {!u.archived && costDebug.freight > 0 && (
-                    <div
-                      style={{
-                        marginLeft: 4, marginBottom: 10, display: "flex", justifyContent: "space-between", alignItems: "center",
-                        fontSize: 11.5, background: "#fbe9e3", border: "1px solid #e3b8a4", borderRadius: 6, padding: "6px 10px", maxWidth: 460,
-                      }}
-                    >
-                      <span>
-                        ⚠ {poLabel(u.sourcePoId)} has a Freight Forward Fee of {fmtMoney(costDebug.freight, "AUD")} —
-                        {" "}{fmtMoney(costDebug.freightShare, "AUD")} of it is folded into this unit's base cost above, hidden since this PO was consolidated.
-                      </span>
-                      <button
-                        onClick={() => {
-                          if (window.confirm(`Clear the ${fmtMoney(costDebug.freight, "AUD")} Freight Forward Fee on ${poLabel(u.sourcePoId)}? This affects every stock unit sourced from that PO.`)) {
-                            handleClearSourcePOFreight(u.sourcePoId);
-                          }
-                        }}
-                        style={{
-                          background: "none", border: "1px solid #a3442e", color: "#a3442e", cursor: "pointer",
-                          fontSize: 11, padding: "3px 8px", borderRadius: 4, whiteSpace: "nowrap", marginLeft: 8,
-                        }}
-                      >
-                        Clear fee
-                      </button>
-                    </div>
-                  )}
                   {(u.costComponents || []).length > 0 && (
                     <div style={{ marginLeft: 4, marginBottom: 10, display: "flex", flexDirection: "column", gap: 4 }}>
                       {(u.costComponents || []).map((c) => (
@@ -8186,6 +8066,11 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                   <h4 style={{ fontSize: 13, fontWeight: 700, color: "#4a3527", margin: 0 }}>
                     {consolidatedPONumber} — {allPOs.length} POs
                   </h4>
+                  {onReverseConsolidation && (
+                    <Btn variant="secondary" size="sm" onClick={() => onReverseConsolidation(editing)}>
+                      ⊖ Reverse Consolidation
+                    </Btn>
+                  )}
                 </div>
 
                 {/* Tab bar — works on mobile and desktop */}
@@ -8277,22 +8162,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                       const effectiveLines = po.id === editing.id
                         ? lines
                         : (lineItemsPoId === po.id ? mLines : (po.lines || []));
-                      // A line item literally describing itself as freight
-                      // forwarding is only a duplicate to hide when this PO ALSO
-                      // has a separate "Freight Forward Fee" (customsClearance)
-                      // value set — that's the case this filter exists for, so a
-                      // freight-forward line doesn't get shown twice. If there's
-                      // no such fee set, the freight-forward line is the real
-                      // (and possibly only) content of the PO, so it must be shown
-                      // rather than hidden — otherwise a PO whose entire content is
-                      // one freight-forwarding line ends up wrongly displaying
-                      // "No line items on this PO".
-                      const effectiveCustomsClearance = po.id === editing.id
-                        ? (parseFloat(customsClearance) || 0)
-                        : (parseFloat(po.customsClearance) || 0);
-                      const visibleLines = (effectiveLines || []).filter(
-                        (line) => effectiveCustomsClearance <= 0 || !/freight\s*forward/i.test(line.desc || line.description || "")
-                      );
+                      const visibleLines = effectiveLines || [];
                       const visibleSubtotal = visibleLines.reduce((s, line) => {
                         const qty = parseFloat(line.qty || line.quantity) || 1;
                         const price = parseFloat(line.price || line.unitPrice) || 0;
@@ -9694,11 +9564,6 @@ ${clone?.innerHTML || ""}
                 </Btn>
               )}
             </>
-          )}
-          {onReverseConsolidation && !isNew && editing?.consolidatedMemberIds?.length > 0 && (
-            <Btn variant="secondary" onClick={() => onReverseConsolidation(editing)}>
-              ⊖ Reverse Consolidation
-            </Btn>
           )}
           <Btn variant="ghost" onClick={onCancel}>
             {isNew ? "Cancel" : "Close"}
@@ -15055,12 +14920,12 @@ function DashboardTab({ db, setTab, openRecord }) {
   const owingNextMonth = owingNextMonthRows.reduce((s, r) => s + r.amount, 0);
   const owingIn3Months = owingIn3MonthsRows.reduce((s, r) => s + r.amount, 0);
 
-  // International shipping — top-level POs / consolidated groups that have a
-  // freight forwarding fee anywhere in the group, for the Dashboard summary
-  // panel. Unlike the full Shipping tab, a consolidated group collapses to a
-  // single row here (no separate constituent-PO detail). Received/Cancelled
-  // POs are excluded — once a shipment has arrived (or was cancelled) it's no
-  // longer "in shipping".
+  // International shipping — top-level POs / consolidated groups where at
+  // least one PO in the group is explicitly marked shippingType
+  // "International", for the Dashboard summary panel. Unlike the full
+  // Shipping tab, a consolidated group collapses to a single row here (no
+  // separate constituent-PO detail). Received/Cancelled POs are excluded —
+  // once a shipment has arrived (or was cancelled) it's no longer "in shipping".
   const intlShippingRows = db.pos
     .filter((po) => !po.consolidatedGroupId && !["Received", "Cancelled", "Archived"].includes(po.status))
     .map((po) => {
@@ -15070,7 +14935,7 @@ function DashboardTab({ db, setTab, openRecord }) {
       const allPOs = members.length ? [po, ...members] : [po];
       return { po, allPOs };
     })
-    .filter(({ allPOs }) => allPOs.some((p) => (parseFloat(p.customsClearance) || 0) > 0))
+    .filter(({ allPOs }) => allPOs.some((p) => p.shippingType === "International"))
     .map(({ po, allPOs }) => {
       const stripPONum = (n) => String(n).replace(/^PO-?/i, "");
       const poLabel = `PO-${stripPONum(po.number)}${allPOs.length > 1 ? `/${allPOs.slice(1).map((m) => stripPONum(m.number)).join("/")}` : ""}`;
@@ -15082,8 +14947,8 @@ function DashboardTab({ db, setTab, openRecord }) {
   const intlShippingTotal = intlShippingRows.reduce((s, r) => s + r.value, 0);
 
   // Domestic shipping — same shape as International shipping above, but for
-  // top-level POs / consolidated groups where NO PO in the group has a
-  // freight forwarding fee. Same Received/Cancelled exclusion as above.
+  // top-level POs / consolidated groups where NO PO in the group is marked
+  // International. Same Received/Cancelled exclusion as above.
   const domesticShippingRows = db.pos
     .filter((po) => !po.consolidatedGroupId && !["Received", "Cancelled", "Archived"].includes(po.status))
     .map((po) => {
@@ -15093,7 +14958,7 @@ function DashboardTab({ db, setTab, openRecord }) {
       const allPOs = members.length ? [po, ...members] : [po];
       return { po, allPOs };
     })
-    .filter(({ allPOs }) => !allPOs.some((p) => (parseFloat(p.customsClearance) || 0) > 0))
+    .filter(({ allPOs }) => !allPOs.some((p) => p.shippingType === "International"))
     .map(({ po, allPOs }) => {
       const stripPONum = (n) => String(n).replace(/^PO-?/i, "");
       const poLabel = `PO-${stripPONum(po.number)}${allPOs.length > 1 ? `/${allPOs.slice(1).map((m) => stripPONum(m.number)).join("/")}` : ""}`;
@@ -16377,9 +16242,9 @@ function DashboardTab({ db, setTab, openRecord }) {
           <ToggleSwitch checked={!shipmentsDueCollapsed} onChange={() => setShipmentsDueCollapsed(v => !v)} label="Show Shipments due" />
         </div>
         {!shipmentsDueCollapsed && (() => {
-          // Show only POs with a Freight Forward fee, not yet received — indicates containers still arriving at port
+          // Show only International POs, not yet received — indicates containers still arriving at port
           const shipments = (db.pos || []).filter((po) =>
-            (po.customsClearance || 0) > 0 &&
+            po.shippingType === "International" &&
             !["Cancelled", "Received", "Archived"].includes(po.status)
           );
 
@@ -16416,18 +16281,15 @@ function DashboardTab({ db, setTab, openRecord }) {
                 .reduce((sum, pm) => sum + (parseFloat(pm.amount) || 0), 0);
               return monthPayment > 0 ? monthPayment : null;
             });
-            return { po, monthPayments, customs: po.customsClearance || 0 };
+            return { po, monthPayments };
           });
-
-          // Mobile: only show shipments WITH a FF fee (customs > 0)
-          const mobileShipmentsData = shipmentsData.filter(item => item.customs > 0);
 
           const isMobile = window.innerWidth < 768;
 
           if (isMobile) {
             return (
               <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-                {mobileShipmentsData.slice(0, 5).map((item, idx) => (
+                {shipmentsData.slice(0, 5).map((item, idx) => (
                   <div
                     key={idx}
                     onClick={() => openRecord && openRecord("po", item.po.id)}
@@ -16436,7 +16298,7 @@ function DashboardTab({ db, setTab, openRecord }) {
                     <div style={{ fontWeight: 700, color: "#4a3527", marginBottom: 8 }}>
                       {item.po.party} · {item.po.model || "—"}
                     </div>
-                    <div style={{ fontSize: 12, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: item.customs > 0 ? 8 : 0 }}>
+                    <div style={{ fontSize: 12, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                       {months.map((m, mi) => (
                         <div key={mi}>
                           <div style={{ fontSize: 11, color: "#8a7a66", fontWeight: 600 }}>{m.label}</div>
@@ -16446,19 +16308,11 @@ function DashboardTab({ db, setTab, openRecord }) {
                         </div>
                       ))}
                     </div>
-                    {item.customs > 0 && (
-                      <div style={{ borderTop: "1px solid #d4a574", paddingTop: 8 }}>
-                        <div style={{ fontSize: 11, color: "#8a7a66", fontWeight: 600 }}>Freight Forwarding Fee</div>
-                        <div style={{ fontWeight: 700, color: "#b5552b" }}>
-                          ${item.customs.toLocaleString("en-AU")}
-                        </div>
-                      </div>
-                    )}
                   </div>
                 ))}
-                {mobileShipmentsData.length > 5 && (
+                {shipmentsData.length > 5 && (
                   <div style={{ fontSize: 12, color: "#8a7a66", textAlign: "center" }}>
-                    + {mobileShipmentsData.length - 5} more.
+                    + {shipmentsData.length - 5} more.
                   </div>
                 )}
               </div>
@@ -16477,62 +16331,34 @@ function DashboardTab({ db, setTab, openRecord }) {
                           {m.label}
                         </th>
                       ))}
-                      <th style={{ textAlign: "right", padding: "8px 6px", fontWeight: 700, minWidth: 80 }}>FF Fee</th>
                     </tr>
                   </thead>
                   <tbody>
                     {shipmentsData.map((item, idx) => (
-                      <React.Fragment key={idx}>
-                        {/* Primary row */}
-                        <tr
-                          onClick={() => openRecord && openRecord("po", item.po.id)}
-                          style={{
-                            borderBottom: item.customs > 0 ? "none" : "1px solid #e3d8c6",
-                            cursor: openRecord ? "pointer" : "default",
-                            backgroundColor: idx % 2 === 0 ? "#faf7f2" : "white",
-                          }}
-                        >
-                          <td style={{ padding: "8px 6px", color: "#b5552b", fontWeight: 700, fontSize: 11 }}>
-                            {String(item.po.number || "").replace(/^PO-?/i, "PO-")}
+                      <tr
+                        key={idx}
+                        onClick={() => openRecord && openRecord("po", item.po.id)}
+                        style={{
+                          borderBottom: "1px solid #e3d8c6",
+                          cursor: openRecord ? "pointer" : "default",
+                          backgroundColor: idx % 2 === 0 ? "#faf7f2" : "white",
+                        }}
+                      >
+                        <td style={{ padding: "8px 6px", color: "#b5552b", fontWeight: 700, fontSize: 11 }}>
+                          {String(item.po.number || "").replace(/^PO-?/i, "PO-")}
+                        </td>
+                        <td style={{ padding: "8px 6px", color: "#4a3527", fontWeight: 600 }}>
+                          {item.po.party}
+                        </td>
+                        <td style={{ padding: "8px 6px", color: "#6b5240" }}>
+                          {item.po.model || "—"}
+                        </td>
+                        {item.monthPayments.map((amount, mi) => (
+                          <td key={mi} style={{ padding: "8px 6px", textAlign: "right", color: amount ? "#4a3527" : "#ccc", fontWeight: amount ? 600 : 400 }}>
+                            {amount ? `$${amount.toLocaleString()}` : "—"}
                           </td>
-                          <td style={{ padding: "8px 6px", color: "#4a3527", fontWeight: 600 }}>
-                            {item.po.party}
-                          </td>
-                          <td style={{ padding: "8px 6px", color: "#6b5240" }}>
-                            {item.po.model || "—"}
-                          </td>
-                          {item.monthPayments.map((amount, mi) => (
-                            <td key={mi} style={{ padding: "8px 6px", textAlign: "right", color: amount ? "#4a3527" : "#ccc", fontWeight: amount ? 600 : 400 }}>
-                              {amount ? `$${amount.toLocaleString()}` : "—"}
-                            </td>
-                          ))}
-                          <td style={{ padding: "8px 6px", textAlign: "right", color: "#8a7a66" }}>
-                            {item.customs > 0 ? `$${item.customs.toLocaleString("en-AU")}` : "—"}
-                          </td>
-                        </tr>
-
-                        {/* Second row: Freight Forwarding fee — only when applicable */}
-                        {item.customs > 0 && (
-                          <tr
-                            onClick={() => openRecord && openRecord("po", item.po.id)}
-                            style={{
-                              borderBottom: "1px solid #e3d8c6",
-                              cursor: openRecord ? "pointer" : "default",
-                              backgroundColor: idx % 2 === 0 ? "#faf7f2" : "white",
-                            }}
-                          >
-                            <td colSpan={3} style={{ padding: "2px 6px 8px 20px", color: "#b5552b", fontSize: 11, fontStyle: "italic" }}>
-                              Freight Forwarding Fee
-                            </td>
-                            {months.map((_, mi) => (
-                              <td key={mi} style={{ padding: "2px 6px 8px", textAlign: "right", color: "#ccc" }}>—</td>
-                            ))}
-                            <td style={{ padding: "2px 6px 8px", textAlign: "right", fontWeight: 700, color: "#b5552b" }}>
-                              ${item.customs.toLocaleString("en-AU")}
-                            </td>
-                          </tr>
-                        )}
-                      </React.Fragment>
+                        ))}
+                      </tr>
                     ))}
                   </tbody>
                 </table>
@@ -16658,8 +16484,8 @@ function DashboardTab({ db, setTab, openRecord }) {
 }
 
 // ── SHIPPING TAB ──────────────────────────────────────────────────────────
-// Two sections — International (Freight Forwarding Fee > $0) and Domestic
-// (Freight Forwarding Fee = $0) — each listing every top-level PO and
+// Two sections — International and Domestic, based on each PO's explicit
+// shippingType selection (defaults to Domestic) — each listing every top-level PO and
 // consolidated PO group. A consolidated group shows a heading line
 // (consolidated PO number / ETA / value) followed by one line per
 // constituent PO, each with its own Supplier / PO number / product / ETA /
@@ -16700,7 +16526,7 @@ function ShippingTab({ db, openRecord }) {
         ? db.pos.filter((p) => (po.consolidatedMemberIds || []).includes(p.id))
         : [];
       const allPOs = members.length ? [po, ...members] : [po];
-      const isInternational = allPOs.some((p) => (parseFloat(p.customsClearance) || 0) > 0);
+      const isInternational = allPOs.some((p) => p.shippingType === "International");
       const earliestEta = allPOs.map((p) => p.eta).filter(Boolean).sort()[0] || null;
       const groupValue = allPOs.reduce((s, p) => s + (parseFloat(p.total) || 0), 0);
       return { primary: po, members, allPOs, isInternational, earliestEta, groupValue };
@@ -16710,7 +16536,7 @@ function ShippingTab({ db, openRecord }) {
   const international = groups.filter((g) => g.isInternational).sort(sortByEta);
   const domestic = groups.filter((g) => !g.isInternational).sort(sortByEta);
 
-  const renderPoLine = (po, showFreight) => (
+  const renderPoLine = (po) => (
     <div
       key={po.id}
       onClick={() => openRecord && openRecord("po", po.id)}
@@ -16721,11 +16547,6 @@ function ShippingTab({ db, openRecord }) {
           {po.party || "Unknown supplier"} <span style={{ color: "#8a7a66", fontWeight: 400 }}>· PO-{stripPO(po.number)}</span>
         </div>
         <div style={{ fontSize: 12, color: "#6b5240", marginTop: 2 }}>{productName(po)}</div>
-        {showFreight && (
-          <div style={{ fontSize: 11, fontWeight: 700, color: "#a3442e", marginTop: 4 }}>
-            Freight forwarding: {fmtMoney(po.customsClearance || 0, "AUD")}
-          </div>
-        )}
       </div>
       <div style={{ textAlign: "right", flexShrink: 0 }}>
         <div style={{ fontSize: 11, color: "#8a7a66" }}>ETA</div>
@@ -16736,7 +16557,7 @@ function ShippingTab({ db, openRecord }) {
     </div>
   );
 
-  const renderGroup = (g, showFreight) => {
+  const renderGroup = (g) => {
     const { primary, members, allPOs, earliestEta, groupValue } = g;
     const consolidatedNumber = members.length
       ? `PO${stripPO(primary.number)}/${members.map((m) => stripPO(m.number)).join("/")}`
@@ -16754,7 +16575,7 @@ function ShippingTab({ db, openRecord }) {
             </div>
           </div>
         )}
-        {allPOs.map((p) => renderPoLine(p, showFreight))}
+        {allPOs.map((p) => renderPoLine(p))}
       </div>
     );
   };
@@ -16762,7 +16583,7 @@ function ShippingTab({ db, openRecord }) {
   return (
     <section>
       <h2 className="section-title">Shipping</h2>
-      <p className="section-desc">Purchase orders grouped by freight forwarding — international shipments carry a freight forwarding fee, domestic shipments don't. Click any line to open the PO.</p>
+      <p className="section-desc">Purchase orders grouped by shipping type — set Domestic or International on each PO. Click any line to open the PO.</p>
 
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 18 }}>
         <span style={{ fontSize: 12, fontWeight: 600, color: "#6b5240" }}>Status:</span>
@@ -16794,7 +16615,7 @@ function ShippingTab({ db, openRecord }) {
           {international.length === 0 ? (
             <p className="muted" style={{ fontSize: 13 }}>No international shipments{statusFilter !== "All" ? ` with status "${statusFilter}"` : ""}.</p>
           ) : (
-            international.map((g) => renderGroup(g, true))
+            international.map((g) => renderGroup(g))
           )}
         </div>
 
@@ -16803,7 +16624,7 @@ function ShippingTab({ db, openRecord }) {
           {domestic.length === 0 ? (
             <p className="muted" style={{ fontSize: 13 }}>No domestic shipments{statusFilter !== "All" ? ` with status "${statusFilter}"` : ""}.</p>
           ) : (
-            domestic.map((g) => renderGroup(g, false))
+            domestic.map((g) => renderGroup(g))
           )}
         </div>
       </div>
