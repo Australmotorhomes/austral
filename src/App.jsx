@@ -5421,13 +5421,29 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
         // this sale's COGS. If nothing matches, the status change still goes
         // through — it's flagged in the toast so staff can link a unit
         // manually (e.g. via serial number) rather than being blocked.
+        //
+        // Cost is frozen right here, at the moment of sale — not left "live"
+        // the way an in-stock unit's cost is. Otherwise an old PO getting
+        // corrected later (a price fix, a freight adjustment) would silently
+        // rewrite the realised margin on a sale that's already settled. This
+        // is also what Stage 4 (Stock Movement) relies on for OUT values that
+        // don't drift after the fact.
         let soldStockUnit = null;
         if (isQuote && status === "Delivered") {
           const match = matchStockUnitForQuote(doc, db.items || [], db.stockUnits || []);
           if (match) {
+            const sourcePO = (db.pos || []).find((p) => p.id === match.sourcePoId);
+            const frozenBaseCost = getLiveBaseCost(match, sourcePO, db.items || []);
+            const frozenLandedCost = computeLandedCost({ ...match, baseCost: frozenBaseCost });
             try {
-              await updateStockUnit(match.id, { status: "sold", soldQuoteId: doc.id, soldDate: todayISO() });
-              soldStockUnit = match;
+              await updateStockUnit(match.id, {
+                status: "sold",
+                soldQuoteId: doc.id,
+                soldDate: todayISO(),
+                baseCost: frozenBaseCost,
+                landedCost: frozenLandedCost,
+              });
+              soldStockUnit = { ...match, baseCost: frozenBaseCost, landedCost: frozenLandedCost };
             } catch (err) {
               console.error("Failed to mark stock unit sold:", err);
             }
@@ -5496,6 +5512,8 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
               su.status = "sold";
               su.soldQuoteId = doc.id;
               su.soldDate = todayISO();
+              su.baseCost = soldStockUnit.baseCost;
+              su.landedCost = soldStockUnit.landedCost;
             }
           }
 
@@ -14286,126 +14304,139 @@ function SalesByModelModals({ drillDown, setDrillDown, unmatchedInfo, setUnmatch
   );
 }
 
+// Small reference-label helpers shared by Stock Movement's IN/OUT/on-hand
+// entries — a unit's IN side points back at the PO that brought it in, its
+// OUT side points at the quote that sold it.
+function stockMovementPoLabel(poId, db) {
+  const p = (db.pos || []).find((x) => x.id === poId);
+  if (!p) return "Unknown PO";
+  return `PO-${String(p.number || "").replace(/^PO-?/i, "")}`;
+}
+function stockMovementPoParty(poId, db) {
+  const p = (db.pos || []).find((x) => x.id === poId);
+  return p?.party || "Unknown supplier";
+}
+function stockMovementQuoteLabel(quoteId, db) {
+  const q = (db.quotes || []).find((x) => x.id === quoteId);
+  return q?.number || "Quote";
+}
+function stockMovementQuoteParty(quoteId, db) {
+  const q = (db.quotes || []).find((x) => x.id === quoteId);
+  return q?.party || "Unknown customer";
+}
+
 function StockMovementTable({ db, collapsed, setCollapsed, fyEnd, setFyEnd, currentFYEnd, getFYRange, EARLIEST_FY_END }) {
   const fyRange = getFYRange(fyEnd);
-  const [drillDown, setDrillDown] = React.useState(null); // { title, entries: [{label, party, date, qty, value}] }
+  const [drillDown, setDrillDown] = React.useState(null); // { title, entries: [{label, party, date, qty, value, direction}] }
 
-  // ── IN: POs with status "Paid" or "Received" within FY ──
-  // "Received" comes after "Paid" in the workflow, so stock remains counted IN
-  // Uses the PO's effective status (its real workflow state even if it's now
-  // Archived) so archiving a Received PO doesn't make its stock disappear
-  // from this count.
-  // For POs: l.price = the actual amount paid to supplier (not l.cost which is a quote concept)
-  const stockIN = {};
-  (db.pos || []).filter(po => {
-    if (!["Paid", "Received"].includes(poEffectiveStatus(po))) return false;
-    const d = (po.date || po.createdAt || "").slice(0, 10); // normalise to YYYY-MM-DD
-    return d >= fyRange.start && d <= fyRange.end;
-  }).forEach(po => {
-    const lines = po.lines || [];
-    const freight = parseFloat(po.customsClearance) || 0;
-    const poLabel = `PO-${String(po.number || "").replace(/^PO-?/i, "")}`;
-    const poDate = (po.date || po.createdAt || "").slice(0, 10);
+  // A unit's value for reporting purposes:
+  //  - sold: frozen at the moment of sale (see setStatus's Stage 3) — the
+  //    real historical COGS, which won't drift if a source PO gets edited
+  //    afterward.
+  //  - archived (but never sold — e.g. written off): frozen at archive time.
+  //  - still in stock, not archived: recomputed live from its source PO's
+  //    CURRENT line + freight data, same as everywhere else in the app, so
+  //    correcting an old PO immediately corrects an unsold unit's value too.
+  function unitValue(u) {
+    if (u.status === "sold" || u.archived) return parseFloat(u.landedCost) || 0;
+    const sourcePO = (db.pos || []).find((p) => p.id === u.sourcePoId);
+    const liveBase = getLiveBaseCost(u, sourcePO, db.items || []);
+    return computeLandedCost({ ...u, baseCost: liveBase });
+  }
 
-    // Total value of ALL lines (including non-coded lines like shipping)
-    const totalLineValue = lines.reduce((s, l) => {
-      const qty = parseFloat(l.qty || l.quantity) || 1;
-      const price = parseFloat(l.price || l.unitPrice || l.cost || 0);
-      return s + price * qty;
-    }, 0);
+  // Group every stock unit by product code, and — for the FY currently
+  // selected — work out three independent things per unit:
+  //  IN        — did it arrive during this FY?
+  //  OUT       — did it sell (deliver) during this FY?
+  //  ON HAND   — was it sitting in stock as at the END of this FY? i.e. it
+  //              had arrived by then, and either hasn't sold at all yet, or
+  //              didn't sell until after that date.
+  // Testing each unit against its own real dates (rather than running a
+  // cumulative IN-minus-OUT total that resets whenever the FY dropdown
+  // changes) is what fixes the original bug: a unit that arrived last year
+  // and is still unsold correctly counts as on-hand at the end of THIS year
+  // too, because nothing about it changes when you switch years.
+  const byCode = {};
+  const codesSeen = new Set();
+  function ensureCode(code, u) {
+    if (!byCode[code]) {
+      const item = (db.items || []).find((i) => i.productCode === code);
+      byCode[code] = {
+        code,
+        model: u.model || item?.model || "",
+        desc: item?.name || item?.description || u.model || code,
+        inQty: 0, inValue: 0,
+        outQty: 0, outValue: 0,
+        onHandQty: 0, onHandValue: 0,
+        entries: [],
+      };
+    }
+    codesSeen.add(code);
+    return byCode[code];
+  }
 
-    lines.forEach(l => {
-      // Primary: match by itemId linked to price book
-      // Fallback: match by product code appearing in line description
-      let item = l.itemId ? (db.items || []).find(i => i.id === l.itemId) : null;
-      if (!item) {
-        // Try matching product code from line description (e.g. "SAV42U — Savanna 4.2m")
-        item = (db.items || []).find(i =>
-          i.productCode && (l.desc || l.description || "").toUpperCase().includes(i.productCode.toUpperCase())
-        );
-      }
-      const code = item?.productCode;
-      if (!code) return;
-      // Stock movement should only track the vehicle itself — freight,
-      // accessories, and anything else outside Chassis & Structure isn't a
-      // physical unit of stock and shouldn't appear as an IN line.
-      if (item?.category !== "Chassis & Structure") return;
-      const qty = parseFloat(l.qty || l.quantity) || 1;
-      const linePrice = parseFloat(l.price || l.unitPrice || l.cost || 0);
-      const lineValue = linePrice * qty;
-      const freightShare = totalLineValue > 0 ? (lineValue / totalLineValue) * freight : 0;
-      const entryValue = lineValue + freightShare;
-      if (!stockIN[code]) stockIN[code] = { code, desc: item?.name || item?.description || l.desc || l.description || code, model: item?.model || "", qty: 0, value: 0, entries: [] };
-      stockIN[code].qty += qty;
-      stockIN[code].value += entryValue;
-      stockIN[code].entries.push({
-        id: po.id,
-        label: poLabel,
-        party: po.party || "Unknown supplier",
-        date: poDate,
-        qty,
-        value: entryValue,
+  (db.stockUnits || []).forEach((u) => {
+    if (!u.productCode) return;
+    const rec = ensureCode(u.productCode, u);
+    const val = unitValue(u);
+    const arrived = (u.arrivedDate || "").slice(0, 10);
+    const sold = u.status === "sold" ? (u.soldDate || "").slice(0, 10) : "";
+    const serialSuffix = u.serialNumber ? ` — ${u.serialNumber}` : "";
+
+    if (arrived && arrived >= fyRange.start && arrived <= fyRange.end) {
+      rec.inQty += 1;
+      rec.inValue += val;
+      rec.entries.push({
+        id: u.id, code: u.productCode, direction: "IN", date: arrived,
+        label: stockMovementPoLabel(u.sourcePoId, db) + serialSuffix,
+        party: stockMovementPoParty(u.sourcePoId, db),
+        qty: 1, value: val,
       });
-    });
+    }
+
+    if (sold && sold >= fyRange.start && sold <= fyRange.end) {
+      rec.outQty += 1;
+      rec.outValue += val;
+      rec.entries.push({
+        id: u.id, code: u.productCode, direction: "OUT", date: sold,
+        label: stockMovementQuoteLabel(u.soldQuoteId, db) + serialSuffix,
+        party: stockMovementQuoteParty(u.soldQuoteId, db),
+        qty: 1, value: val,
+      });
+    }
+
+    const arrivedByEnd = arrived && arrived <= fyRange.end;
+    const notYetSoldByEnd = !sold || sold > fyRange.end;
+    if (arrivedByEnd && notYetSoldByEnd) {
+      rec.onHandQty += 1;
+      rec.onHandValue += val;
+      rec.entries.push({
+        id: u.id, code: u.productCode, direction: "ON HAND", date: arrived,
+        label: stockMovementPoLabel(u.sourcePoId, db) + serialSuffix,
+        party: stockMovementPoParty(u.sourcePoId, db),
+        qty: 1, value: val,
+      });
+    }
   });
 
-  // ── OUT: Quotes that have actually been Delivered ──
-  // Stock physically leaves once the order is delivered — a paid deposit on
-  // an order still in production doesn't reduce on-hand stock, since the
-  // goods haven't gone anywhere yet. Uses deliveredDate (stamped
-  // automatically the moment a quote's status is set to "Delivered" — see
-  // setStatus()) for FY filtering, falling back to the last paid milestone's
-  // date for quotes that were already Delivered before this field existed.
-  const stockOUT = {};
-  (db.quotes || []).forEach(quote => {
-    if (quote.status !== "Delivered") return;
-    const milestones = quote.paymentMilestones || [];
-    const lastPaidMilestone = [...milestones].reverse().find((m) => m?.paid);
-    const outDate = (quote.deliveredDate || lastPaidMilestone?.paidDate || lastPaidMilestone?.due || "").slice(0, 10);
-    if (!outDate || outDate < fyRange.start || outDate > fyRange.end) return;
-    const quoteLabel = `${quote.number || "Quote"}`;
-    (quote.lines || []).forEach(l => {
-      if (!l.itemId) return;
-      const item = (db.items || []).find(i => i.id === l.itemId);
-      const code = item?.productCode;
-      if (!code) return;
-      // Same rule as IN: only Chassis & Structure items count as stock.
-      if (item?.category !== "Chassis & Structure") return;
-      const qty = parseFloat(l.qty || l.quantity) || 1;
-      if (!stockOUT[code]) stockOUT[code] = { qty: 0, entries: [] };
-      stockOUT[code].qty += qty;
-      stockOUT[code].entries.push({
-        id: quote.id,
-        label: quoteLabel,
-        party: quote.party || "Unknown customer",
-        date: outDate,
-        qty,
-        value: null, // OUT value is apportioned from IN cost, not a standalone figure per quote
-      });
-    });
-  });
-
-  const allCodes = [...new Set([...Object.keys(stockIN), ...Object.keys(stockOUT)])].sort();
-  const totIN = allCodes.reduce((s, c) => s + (stockIN[c]?.qty || 0), 0);
-  const totOUT = allCodes.reduce((s, c) => s + (stockOUT[c]?.qty || 0), 0);
-  const totOH = totIN - totOUT;
-  const totalINValue = allCodes.reduce((s, c) => s + (stockIN[c]?.value || 0), 0);
-  const totalOUTValue = allCodes.reduce((s, c) => {
-    const inQty = stockIN[c]?.qty || 0;
-    const outQty = stockOUT[c]?.qty || 0;
-    const inVal = stockIN[c]?.value || 0;
-    return inQty > 0 ? s + (outQty / inQty) * inVal : s;
-  }, 0);
-  const totValue = totalINValue - totalOUTValue;
+  const allCodes = [...codesSeen].sort();
+  const totIN = allCodes.reduce((s, c) => s + byCode[c].inQty, 0);
+  const totOUT = allCodes.reduce((s, c) => s + byCode[c].outQty, 0);
+  const totOH = allCodes.reduce((s, c) => s + byCode[c].onHandQty, 0);
+  const totalINValue = allCodes.reduce((s, c) => s + byCode[c].inValue, 0);
+  const totalOUTValue = allCodes.reduce((s, c) => s + byCode[c].outValue, 0);
+  const totValue = allCodes.reduce((s, c) => s + byCode[c].onHandValue, 0);
 
   // Builds the drill-down entry list for one code (or every code, for the
-  // Total row) — IN entries (with $ value) followed by OUT entries (qty
-  // only, since OUT "value" is an apportioned share of IN cost, not its own
-  // real transaction amount).
+  // Total row) — every IN, OUT, and ON HAND entry for that code within this
+  // FY, sorted by date. A unit can legitimately appear more than once here
+  // (e.g. arrived this year AND still on hand at year-end) — that's not a
+  // duplicate, it's the same physical camper shown in both of its true
+  // states.
   function buildDrillDownEntries(codes) {
-    const inEntries = codes.flatMap((c) => (stockIN[c]?.entries || []).map((e) => ({ ...e, code: c, direction: "IN" })));
-    const outEntries = codes.flatMap((c) => (stockOUT[c]?.entries || []).map((e) => ({ ...e, code: c, direction: "OUT" })));
-    return [...inEntries, ...outEntries].sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+    return codes
+      .flatMap((c) => byCode[c]?.entries || [])
+      .sort((a, b) => (a.date || "").localeCompare(b.date || ""));
   }
 
   const fyOptions = [];
@@ -14416,13 +14447,22 @@ function StockMovementTable({ db, collapsed, setCollapsed, fyEnd, setFyEnd, curr
   const thS = { padding: "8px 10px", fontSize: 11, fontWeight: 700, textAlign: "right", whiteSpace: "nowrap" };
   const tdS = { padding: "7px 10px", fontSize: 12, textAlign: "right", borderBottom: "1px solid #ddeee4" };
   const tdL = { padding: "7px 10px", fontSize: 12, textAlign: "left", borderBottom: "1px solid #ddeee4" };
+  const thHint = (label, text, color) => (
+    <span style={{ display: "inline-flex", alignItems: "center", gap: 3, color, justifyContent: "flex-end" }}>
+      {label}
+      <HelpHint text={text} />
+    </span>
+  );
 
   return (
     <>
       <div
         style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: collapsed ? 0 : 12 }}
       >
-        <h3 style={{ fontFamily: "Georgia,serif", fontSize: 16, fontWeight: 700, color: "#4a3527", margin: 0 }}>Stock Movement</h3>
+        <h3 style={{ fontFamily: "Georgia,serif", fontSize: 16, fontWeight: 700, color: "#4a3527", margin: 0, display: "flex", alignItems: "center" }}>
+          Stock Movement
+          <HelpHint text="Built from your Stock Units — each row is a real physical camper, not an averaged estimate. IN/OUT reflect what happened during the selected financial year; On Hand reflects what was actually sitting in stock at the end of that year, so it carries correctly from one year into the next." />
+        </h3>
         <ToggleSwitch checked={!collapsed} onChange={() => setCollapsed(v => !v)} label="Show Stock Movement" />
       </div>
 
@@ -14446,35 +14486,29 @@ function StockMovementTable({ db, collapsed, setCollapsed, fyEnd, setFyEnd, curr
             <div>
               {allCodes.length === 0 ? (
                 <p style={{ fontSize: 12, color: "#aaa", textAlign: "center", padding: 16 }}>
-                  No stock data for {getFYRange(fyEnd).label}. Set a PO status to "Paid" to count stock IN.
+                  No stock units yet for {getFYRange(fyEnd).label}. Stock units are created automatically once a Chassis & Structure PO reaches Paid/Received — use "Manage Stock Units → Backfill from existing POs" on the Purchase Orders tab if you have existing inventory from before this feature existed.
                 </p>
               ) : allCodes.map((code) => {
-                const inQty = stockIN[code]?.qty || 0;
-                const outQty = stockOUT[code]?.qty || 0;
-                const onHand = inQty - outQty;
-                const inVal = stockIN[code]?.value || 0;
-                const outVal = inQty > 0 ? (outQty / inQty) * inVal : 0;
-                const onHandVal = inVal - outVal;
-                const itemModel = stockIN[code]?.model || (db.items || []).find((i) => i.productCode === code)?.model || "";
+                const rec = byCode[code];
                 return (
                   <div
                     key={code}
-                    onClick={() => setDrillDown({ title: `${code} — ${stockIN[code]?.desc || ""}`, entries: buildDrillDownEntries([code]) })}
+                    onClick={() => setDrillDown({ title: `${code} — ${rec.desc || ""}`, entries: buildDrillDownEntries([code]) })}
                     style={{ background: "#fff", border: "1px solid #c0d8c8", borderRadius: 6, padding: 12, marginBottom: 8, cursor: "pointer" }}
                   >
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
                       <span style={{ fontFamily: "monospace", fontWeight: 700, color: "#b5552b", fontSize: 13 }}>{code}</span>
                       <span style={{ fontSize: 12, color: "#4a3527", textAlign: "right" }}>
-                        {itemModel && <span style={{ color: "#6b5240" }}>{itemModel} · </span>}
-                        {(stockIN[code]?.desc || "").slice(0, 12)}
+                        {rec.model && <span style={{ color: "#6b5240" }}>{rec.model} · </span>}
+                        {(rec.desc || "").slice(0, 12)}
                       </span>
                     </div>
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 4 }}>
                       {[
-                        { label: "IN", value: inQty, color: "#3a7a4a" },
-                        { label: "OUT", value: outQty || "—", color: "#b5552b" },
-                        { label: "ON HAND", value: onHand, color: "#4a5f7f" },
-                        { label: "VALUE", value: onHandVal > 0 ? `$${Math.round(onHandVal).toLocaleString()}` : "—", color: "#2d5a38" },
+                        { label: "IN", value: rec.inQty || "—", color: "#3a7a4a" },
+                        { label: "OUT", value: rec.outQty || "—", color: "#b5552b" },
+                        { label: "ON HAND", value: rec.onHandQty, color: "#4a5f7f" },
+                        { label: "VALUE", value: rec.onHandValue > 0 ? `$${Math.round(rec.onHandValue).toLocaleString()}` : "—", color: "#2d5a38" },
                       ].map(({ label, value, color }) => (
                         <div key={label} style={{ textAlign: "center", background: "#f4faf6", borderRadius: 4, padding: "6px 4px" }}>
                           <div style={{ fontSize: 10, color: "#8a9a8c", marginBottom: 2 }}>{label}</div>
@@ -14494,7 +14528,7 @@ function StockMovementTable({ db, collapsed, setCollapsed, fyEnd, setFyEnd, curr
                   <div style={{ fontSize: 12, fontWeight: 700, color: "#2d5a38", marginBottom: 8 }}>Total</div>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 1fr", gap: 4 }}>
                     {[
-                      { label: "IN", value: totIN, color: "#3a7a4a" },
+                      { label: "IN", value: totIN || "—", color: "#3a7a4a" },
                       { label: "OUT", value: totOUT || "—", color: "#b5552b" },
                       { label: "ON HAND", value: totOH, color: "#4a5f7f" },
                       { label: "VALUE", value: `$${Math.round(totValue).toLocaleString()}`, color: "#2d5a38" },
@@ -14517,42 +14551,44 @@ function StockMovementTable({ db, collapsed, setCollapsed, fyEnd, setFyEnd, curr
                     <th style={{ ...thS, textAlign: "left", width: 90 }}>Code</th>
                     <th style={{ ...thS, textAlign: "left" }}>Model</th>
                     <th style={{ ...thS, textAlign: "left" }}>Description</th>
-                    <th style={{ ...thS, color: "#3a7a4a" }}>IN</th>
-                    <th style={{ ...thS, color: "#b5552b" }}>OUT</th>
-                    <th style={{ ...thS, color: "#4a5f7f" }}>ON HAND</th>
-                    <th style={{ ...thS, color: "#2d5a38" }}>VALUE (ON HAND)</th>
+                    <th style={{ ...thS, color: "#3a7a4a" }}>
+                      {thHint("IN", "Units that arrived during the selected financial year — valued at each unit's real landed cost (base cost + freight + anything applied via Apply to Stock Unit), not an average.", "#3a7a4a")}
+                    </th>
+                    <th style={{ ...thS, color: "#b5552b" }}>
+                      {thHint("OUT", "Units actually sold (delivered) during the selected financial year — valued at each unit's landed cost as it stood at the moment of sale, locked in permanently at that point so it can't drift if an old PO is edited later.", "#b5552b")}
+                    </th>
+                    <th style={{ ...thS, color: "#4a5f7f" }}>
+                      {thHint("ON HAND", "Units that were sitting in stock as at the END of the selected financial year — arrived by then, and not yet sold. Based on each unit's own real dates, so a unit that arrived last year and is still unsold correctly stays on hand this year too, instead of resetting at the year boundary.", "#4a5f7f")}
+                    </th>
+                    <th style={{ ...thS, color: "#2d5a38" }}>
+                      {thHint("VALUE (ON HAND)", "Total landed cost of everything counted in On Hand — this is the stock-on-hand figure for accounting/EOFY purposes.", "#2d5a38")}
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
                   {allCodes.length === 0 ? (
                     <tr>
                       <td colSpan={7} style={{ padding: 16, textAlign: "center", color: "#aaa", fontSize: 12 }}>
-                        No stock data for {getFYRange(fyEnd).label}. Set a PO status to "Paid" to count stock IN.
+                        No stock units yet for {getFYRange(fyEnd).label}. Stock units are created automatically once a Chassis & Structure PO reaches Paid/Received — use "Manage Stock Units → Backfill from existing POs" on the Purchase Orders tab if you have existing inventory from before this feature existed.
                       </td>
                     </tr>
                   ) : allCodes.map((code, ri) => {
-                    const inQty = stockIN[code]?.qty || 0;
-                    const outQty = stockOUT[code]?.qty || 0;
-                    const onHand = inQty - outQty;
-                    const inVal = stockIN[code]?.value || 0;
-                    const outVal = inQty > 0 ? (outQty / inQty) * inVal : 0;
-                    const onHandVal = inVal - outVal;
-                    const itemModel = stockIN[code]?.model || (db.items || []).find((i) => i.productCode === code)?.model || "";
+                    const rec = byCode[code];
                     return (
                       <tr
                         key={code}
-                        onClick={() => setDrillDown({ title: `${code} — ${stockIN[code]?.desc || ""}`, entries: buildDrillDownEntries([code]) })}
+                        onClick={() => setDrillDown({ title: `${code} — ${rec.desc || ""}`, entries: buildDrillDownEntries([code]) })}
                         style={{ background: ri % 2 === 0 ? "#fff" : "#f4faf6", cursor: "pointer" }}
                         onMouseEnter={(e) => (e.currentTarget.style.background = "#e8f5ec")}
                         onMouseLeave={(e) => (e.currentTarget.style.background = ri % 2 === 0 ? "#fff" : "#f4faf6")}
                       >
                         <td style={{ ...tdL, fontFamily: "monospace", fontWeight: 700, color: "#b5552b", fontSize: 11 }}>{code}</td>
-                        <td style={{ ...tdL, color: "#6b5240" }}>{itemModel || "—"}</td>
-                        <td style={{ ...tdL, color: "#4a3527" }}>{(stockIN[code]?.desc || "").slice(0, 12)}</td>
-                        <td style={{ ...tdS, color: "#3a7a4a", fontWeight: 600 }}>{inQty}</td>
-                        <td style={{ ...tdS, color: "#b5552b", fontWeight: 600 }}>{outQty || "—"}</td>
-                        <td style={{ ...tdS, color: "#4a5f7f", fontWeight: 700 }}>{onHand}</td>
-                        <td style={{ ...tdS, color: "#2d5a38", fontWeight: 700 }}>{onHandVal > 0 ? `$${Math.round(onHandVal).toLocaleString()}` : "—"}</td>
+                        <td style={{ ...tdL, color: "#6b5240" }}>{rec.model || "—"}</td>
+                        <td style={{ ...tdL, color: "#4a3527" }}>{(rec.desc || "").slice(0, 12)}</td>
+                        <td style={{ ...tdS, color: "#3a7a4a", fontWeight: 600 }}>{rec.inQty || "—"}</td>
+                        <td style={{ ...tdS, color: "#b5552b", fontWeight: 600 }}>{rec.outQty || "—"}</td>
+                        <td style={{ ...tdS, color: "#4a5f7f", fontWeight: 700 }}>{rec.onHandQty}</td>
+                        <td style={{ ...tdS, color: "#2d5a38", fontWeight: 700 }}>{rec.onHandValue > 0 ? `$${Math.round(rec.onHandValue).toLocaleString()}` : "—"}</td>
                       </tr>
                     );
                   })}
@@ -14564,7 +14600,7 @@ function StockMovementTable({ db, collapsed, setCollapsed, fyEnd, setFyEnd, curr
                       onMouseLeave={(e) => (e.currentTarget.style.background = "#e8f5ec")}
                     >
                       <td style={{ ...tdL, fontWeight: 700, color: "#2d5a38" }} colSpan={3}>Total</td>
-                      <td style={{ ...tdS, color: "#3a7a4a", fontWeight: 700 }}>{totIN}</td>
+                      <td style={{ ...tdS, color: "#3a7a4a", fontWeight: 700 }}>{totIN || "—"}</td>
                       <td style={{ ...tdS, color: "#b5552b", fontWeight: 700 }}>{totOUT || "—"}</td>
                       <td style={{ ...tdS, color: "#4a5f7f", fontWeight: 700 }}>{totOH}</td>
                       <td style={{ ...tdS, color: "#2d5a38", fontWeight: 700 }}>${Math.round(totValue).toLocaleString()}</td>
@@ -14583,7 +14619,7 @@ function StockMovementTable({ db, collapsed, setCollapsed, fyEnd, setFyEnd, curr
             {drillDown.title}
           </h3>
           <p style={{ fontSize: 12, color: "#8a7a66", margin: "0 0 16px" }}>
-            Individual transactions behind this row, for {getFYRange(fyEnd).label}.
+            Every physical unit behind this row for {getFYRange(fyEnd).label} — a unit can appear more than once (e.g. arrived this year AND still on hand at year-end); that's not a duplicate, it's the same camper in more than one of its true states.
           </p>
           {drillDown.entries.length === 0 ? (
             <p style={{ fontSize: 13, color: "#aaa", textAlign: "center", padding: 20 }}>No transactions found.</p>
@@ -14593,7 +14629,7 @@ function StockMovementTable({ db, collapsed, setCollapsed, fyEnd, setFyEnd, curr
                 <thead>
                   <tr style={{ borderBottom: "2px solid #b5552b" }}>
                     <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11 }}>Date</th>
-                    <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11 }}>Direction</th>
+                    <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11 }}>Status</th>
                     <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11 }}>Reference</th>
                     <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11 }}>Party</th>
                     <th style={{ textAlign: "right", padding: "6px 8px", fontSize: 11 }}>Qty</th>
@@ -14607,8 +14643,8 @@ function StockMovementTable({ db, collapsed, setCollapsed, fyEnd, setFyEnd, curr
                       <td style={{ padding: "6px 8px" }}>
                         <span style={{
                           fontSize: 10, fontWeight: 700, padding: "2px 6px", borderRadius: 4,
-                          background: e.direction === "IN" ? "#e3ecdc" : "#fbeae5",
-                          color: e.direction === "IN" ? "#3a7a4a" : "#b5552b",
+                          background: e.direction === "IN" ? "#e3ecdc" : e.direction === "OUT" ? "#fbeae5" : "#e3e9f2",
+                          color: e.direction === "IN" ? "#3a7a4a" : e.direction === "OUT" ? "#b5552b" : "#4a5f7f",
                         }}>
                           {e.direction}
                         </span>
