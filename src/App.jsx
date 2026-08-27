@@ -6798,6 +6798,29 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                 {u.archived ? "Archived" : "Archive on save"}
               </label>
             </div>
+            {u.linkedQuoteId && (() => {
+              const linkedQuote = (db.quotes || []).find((q) => q.id === u.linkedQuoteId);
+              return (
+                <div style={{ marginTop: 8 }}>
+                  {openRecord ? (
+                    <button
+                      type="button"
+                      onClick={() => openRecord("quote", u.linkedQuoteId)}
+                      style={{
+                        background: "none", border: "none", padding: 0, cursor: "pointer",
+                        color: "#b5552b", textDecoration: "underline", fontSize: 11.5, fontWeight: 600,
+                      }}
+                    >
+                      Assigned to quote {linkedQuote?.number || "—"}
+                    </button>
+                  ) : (
+                    <span style={{ color: "#b5552b", fontWeight: 600 }}>
+                      Assigned to quote {linkedQuote?.number || "—"}
+                    </span>
+                  )}
+                </div>
+              );
+            })()}
             {(u.costComponents || []).length > 0 && (
               <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 4 }}>
                 {(u.costComponents || []).map((c) => (
