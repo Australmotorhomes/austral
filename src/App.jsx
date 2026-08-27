@@ -6607,19 +6607,58 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
   }
 
   async function savePONotes(poId, newNotes) {
-    // Save notes for a specific PO (used for member POs in consolidated view)
+    // Save notes for a specific PO (used for member POs in consolidated view).
+    // Update local db state immediately (optimistic) — the textarea's `value`
+    // is bound to `po.notes` straight from `db.pos`, so without this the
+    // displayed value never changes and every keystroke gets visually
+    // reverted (cursor jumps to the end, nothing appears to type).
+    update((next) => {
+      const p = (next.pos || []).find((x) => x.id === poId);
+      if (p) p.notes = newNotes;
+    });
     try {
-      const update = toSupabaseFormat({ notes: newNotes, updatedAt: nowISO() }, "purchase_orders");
-      await supabaseRESTWithSchemaFallback("PATCH", `purchase_orders?id=eq.${poId}`, update);
+      const payload = toSupabaseFormat({ notes: newNotes, updatedAt: nowISO() }, "purchase_orders");
+      await supabaseRESTWithSchemaFallback("PATCH", `purchase_orders?id=eq.${poId}`, payload);
     } catch (err) {
       console.error("Error saving PO notes:", err);
     }
   }
 
-  async function savePOSupplierNote(poId, newSupplierNote) {
+  async function saveGroupShippingType(newType) {
+    // Consolidated POs ship together, so Domestic/International is a
+    // property of the whole group — set it on the primary PO and every
+    // member PO so the Shipping tab / Dashboard classification (which
+    // checks "any PO in the group") stays consistent no matter which PO
+    // in the group gets inspected later.
+    const memberIds = editing?.consolidatedMemberIds || [];
+    const allIds = [editing.id, ...memberIds];
+    setShippingType(newType);
+    update((next) => {
+      (next.pos || []).forEach((p) => {
+        if (allIds.includes(p.id)) p.shippingType = newType;
+      });
+    });
     try {
-      const update = toSupabaseFormat({ supplierNote: newSupplierNote, updatedAt: nowISO() }, "purchase_orders");
-      await supabaseRESTWithSchemaFallback("PATCH", `purchase_orders?id=eq.${poId}`, update);
+      for (const id of allIds) {
+        const payload = toSupabaseFormat({ shippingType: newType, updatedAt: nowISO() }, "purchase_orders");
+        await supabaseRESTWithSchemaFallback("PATCH", `purchase_orders?id=eq.${id}`, payload);
+      }
+    } catch (err) {
+      console.error("Error saving group shipping type:", err);
+      showToast("Error saving shipping type");
+    }
+  }
+
+  async function savePOSupplierNote(poId, newSupplierNote) {
+    // Same optimistic-update fix as savePONotes above — the supplier-note
+    // textarea for a member PO is bound directly to `po.supplierNote`.
+    update((next) => {
+      const p = (next.pos || []).find((x) => x.id === poId);
+      if (p) p.supplierNote = newSupplierNote;
+    });
+    try {
+      const payload = toSupabaseFormat({ supplierNote: newSupplierNote, updatedAt: nowISO() }, "purchase_orders");
+      await supabaseRESTWithSchemaFallback("PATCH", `purchase_orders?id=eq.${poId}`, payload);
     } catch (err) {
       console.error("Error saving PO supplier note:", err);
     }
@@ -8066,11 +8105,21 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                   <h4 style={{ fontSize: 13, fontWeight: 700, color: "#4a3527", margin: 0 }}>
                     {consolidatedPONumber} — {allPOs.length} POs
                   </h4>
-                  {onReverseConsolidation && (
-                    <Btn variant="secondary" size="sm" onClick={() => onReverseConsolidation(editing)}>
-                      ⊖ Reverse Consolidation
-                    </Btn>
-                  )}
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <select
+                      style={{ ...inputStyle, width: 140 }}
+                      value={shippingType}
+                      onChange={(e) => saveGroupShippingType(e.target.value)}
+                    >
+                      <option value="Domestic">Domestic</option>
+                      <option value="International">International</option>
+                    </select>
+                    {onReverseConsolidation && (
+                      <Btn variant="secondary" size="sm" onClick={() => onReverseConsolidation(editing)}>
+                        ⊖ Reverse Consolidation
+                      </Btn>
+                    )}
+                  </div>
                 </div>
 
                 {/* Tab bar — works on mobile and desktop */}
