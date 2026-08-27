@@ -2241,8 +2241,16 @@ export default function App() {
         setSyncStatus("ok");
         setLastSyncedAt(new Date().toISOString());
         if (isManualRefresh) showToast("Loaded latest data from Supabase");
-      } else {
-        // No data from Supabase = empty database, NOT demo data
+      } else if (db === null) {
+        // loadAllData() returns null on a genuine fetch failure (see its own
+        // try/catch) as well as on a truly empty database — those two cases
+        // can't be told apart from here. But this is only safe to treat as
+        // "empty database" on the very first load, when there's nothing on
+        // screen yet to lose. If this fires later (e.g. the background
+        // reload after an hourly auth-token refresh — see the effect below)
+        // while real data is already loaded, treating a transient failure as
+        // "empty" would silently wipe every list the user is looking at, with
+        // no error shown. See the `else` branch below for that case instead.
         const emptyData = {
           items: [],
           quotes: [],
@@ -2259,6 +2267,16 @@ export default function App() {
         setDb(emptyData);
         setSyncStatus("ok");
         if (isManualRefresh) showToast("Supabase is empty");
+      } else {
+        // Data was already loaded and this was a background reload (not the
+        // initial mount) that came back empty — almost certainly a transient
+        // fetch failure (network hiccup, a momentary auth hiccup around a
+        // token refresh, etc.), not the database actually having been
+        // emptied out from under the user. Leave the existing `db` in place
+        // rather than replacing it, so nothing visibly disappears.
+        console.error("Supabase reload returned no data — keeping previously loaded data in place");
+        setSyncStatus("unavailable");
+        if (isManualRefresh) showToast("Couldn't load data from Supabase");
       }
     } catch (e) {
       console.error("Load from Supabase error:", e);
@@ -2286,11 +2304,28 @@ export default function App() {
     }
   }
 
-  // ---- Load from Supabase once logged in, and again whenever the session changes (e.g. right after login) ----
+  // ---- Load from Supabase once logged in, and again after a genuine new
+  // login — but NOT on every background token renewal for the same user.
+  // authSession's object identity changes every ~55 minutes when
+  // maybeRefresh() silently rotates the access token (see that effect
+  // above); depending on authSession directly here would re-trigger a full
+  // reload of every table on each of those renewals. That's wasteful on its
+  // own, and it's also what made the "data disappears after a while" bug
+  // (see loadFromSupabase's else branch above) actually visible in practice
+  // — the more often a background reload fires, the more chances one of
+  // them hits a transient network/auth hiccup. Keyed on the username rather
+  // than the token, so a real change of logged-in user still reloads.
+  const loadedForUserRef = useRef(null);
   useEffect(() => {
-    if (!authSession) return; // wait until we have a real session so the request is authenticated
+    if (!authSession) {
+      loadedForUserRef.current = null;
+      return;
+    }
+    const userKey = authUsername || authSession.access_token;
+    if (loadedForUserRef.current === userKey) return; // same user already loaded — this is just a token renewal
+    loadedForUserRef.current = userKey;
     loadFromSupabase(false);
-  }, [authSession]);
+  }, [authSession, authUsername]);
 
   // ---- Initialize Supabase REST API polling on mount ----
   useEffect(() => {
@@ -5030,8 +5065,10 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
           showToast(`${isQuote ? "Quote" : "Purchase order"} created — ${newDoc.number}`);
           return;
         }
-        setDocModal(undefined);
-        showToast(editing ? "Changes saved" : `${isQuote ? "Quote" : "Purchase order"} created`);
+        // Keep the modal open after saving changes to an existing doc —
+        // Save is a "save" action, not "save and close"; the user closes
+        // explicitly via the Cancel/Close button when they're done.
+        showToast("Changes saved");
       } catch (err) {
         showToast(`Error saving ${isQuote ? "quote" : "PO"}: ${err.message}`);
         console.error("Save doc error:", err);
@@ -6685,6 +6722,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
   // member, not just its own id, or a merged shipment of 2+ campers would
   // only ever show one serial number field.
   const [serialDrafts, setSerialDrafts] = useState({});
+  const [archiveDrafts, setArchiveDrafts] = useState({});
   const relatedPoIdsForStockUnits = !isQuote && !isNew
     ? new Set([editing.id, ...(editing.consolidatedMemberIds || [])])
     : new Set();
@@ -6692,19 +6730,114 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
     ? (db.stockUnits || []).filter((u) => relatedPoIdsForStockUnits.has(u.sourcePoId))
     : [];
 
-  async function handleSaveSerialNumber(unitId) {
-    const value = (serialDrafts[unitId] ?? "").trim();
-    try {
-      await updateStockUnit(unitId, { serialNumber: value || null });
-      update((next) => {
-        const u = (next.stockUnits || []).find((x) => x.id === unitId);
-        if (u) u.serialNumber = value || null;
-      });
-      showToast("Serial number saved");
-    } catch (err) {
-      console.error("Save serial number error:", err);
-      showToast(`Error saving serial number: ${err.message}`);
+  // Attach each stock unit to the specific PO line that created it, so the
+  // serial number / archive / applied-cost controls can render right under
+  // that line instead of in one big separate list. Units don't store which
+  // line they came from, only sourcePoId + productCode, and two lines can
+  // share the same productCode (e.g. two identical camper lines on one PO)
+  // — so units are claimed in a first-come-first-served queue, keyed by
+  // PO + productCode, consumed in the same left-to-right line order they
+  // were originally created in (see buildStockUnitsForPO). This is rebuilt
+  // fresh every render and only ever consumed once per render pass (lines
+  // and mLines never both render at once), so it's safe to mutate via shift().
+  const lineUnitQueues = {};
+  stockUnitsFromThisPO.forEach((u) => {
+    const key = `${u.sourcePoId}::${u.productCode}`;
+    (lineUnitQueues[key] = lineUnitQueues[key] || []).push(u);
+  });
+  function getUnitsForLine(poId, line) {
+    if (isQuote || isNew) return [];
+    let item = line.itemId ? (items || []).find((i) => i.id === line.itemId) : null;
+    if (!item) {
+      item = (items || []).find(
+        (i) => i.productCode && (line.desc || line.description || "").toUpperCase().includes(i.productCode.toUpperCase())
+      );
     }
+    if (!item || item.category !== "Chassis & Structure" || !item.productCode) return [];
+    const qty = Math.max(1, Math.round(parseFloat(line.qty || line.quantity) || 1));
+    const queue = lineUnitQueues[`${poId}::${item.productCode}`] || [];
+    const claimed = [];
+    for (let i = 0; i < qty; i++) {
+      const u = queue.shift();
+      if (u) claimed.push(u);
+    }
+    return claimed;
+  }
+
+  // Renders the serial-number / archive-on-save / applied-cost controls for
+  // one PO line's claimed stock units, shown directly under that line
+  // (see getUnitsForLine above) instead of in one separate list.
+  function renderLineStockUnits(claimedUnits) {
+    if (!claimedUnits.length) return null;
+    return (
+      <div style={{ marginTop: 2, marginBottom: 10, display: "flex", flexDirection: "column", gap: 6 }}>
+        {claimedUnits.map((u) => (
+          <div key={u.id} style={{ fontSize: 11.5, background: "#f6efe0", borderRadius: 6, padding: "6px 10px" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <span style={{ fontWeight: 700, color: "#4a3527" }}>{u.productCode}</span>
+              <input
+                style={{ ...inputStyle, width: 80, padding: "3px 6px", fontSize: 11.5 }}
+                type="text"
+                maxLength={8}
+                value={serialDrafts[u.id] ?? u.serialNumber ?? ""}
+                onChange={(e) => setSerialDrafts((d) => ({ ...d, [u.id]: e.target.value }))}
+                placeholder="Serial #"
+              />
+              <span style={{ color: "#8a7a66" }}>{u.status === "sold" ? "Sold" : "In stock"}</span>
+              <label style={{ display: "flex", alignItems: "center", gap: 3, color: "#8a7a66", cursor: u.archived ? "default" : "pointer" }}>
+                <input
+                  type="checkbox"
+                  checked={u.archived ? true : !!archiveDrafts[u.id]}
+                  disabled={u.archived}
+                  onChange={(e) => {
+                    if (e.target.checked && !window.confirm(`Archive ${u.productCode}? Its cost will be locked in and stop updating once you click Save.`)) return;
+                    setArchiveDrafts((d) => ({ ...d, [u.id]: e.target.checked }));
+                  }}
+                />
+                {u.archived ? "Archived" : "Archive on save"}
+              </label>
+            </div>
+            {(u.costComponents || []).length > 0 && (
+              <div style={{ marginTop: 6, display: "flex", flexDirection: "column", gap: 4 }}>
+                {(u.costComponents || []).map((c) => (
+                  <div key={c.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span>
+                      {c.label || "Cost applied"} — {fmtMoney(c.amount, "AUD")}
+                      {c.sourcePoId && (() => {
+                        const p = (db.pos || []).find((x) => x.id === c.sourcePoId);
+                        return p ? ` (${p.party ? `${p.party} — ` : ""}PO-${String(p.number || "").replace(/^PO-?/i, "")})` : "";
+                      })()}
+                    </span>
+                    <button
+                      onClick={() => {
+                        if (window.confirm(`Remove "${c.label || "this cost"}" (${fmtMoney(c.amount, "AUD")}) from ${u.productCode}?`)) {
+                          handleRemoveStockUnitApplication(u.id, c.id);
+                        }
+                      }}
+                      style={{ background: "none", border: "none", color: "#a3442e", cursor: "pointer", fontSize: 13, padding: "0 4px" }}
+                      title="Remove this cost from this unit"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  // Persists one unit's serial number without its own toast — called in bulk
+  // by handleSave below (see persistStockUnitDrafts) since there's no longer
+  // a separate per-unit Save button; the modal's main Save button covers it.
+  async function saveSerialNumberSilent(unitId, value) {
+    await updateStockUnit(unitId, { serialNumber: value || null });
+    update((next) => {
+      const u = (next.stockUnits || []).find((x) => x.id === unitId);
+      if (u) u.serialNumber = value || null;
+    });
   }
 
   // Archiving locks in whatever the unit's cost currently live-computes to —
@@ -6714,30 +6847,53 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
   // from a sale: a unit can be adjustable for a long time after it's sold
   // (a late-arriving freight invoice, a build-cost correction) and only
   // gets frozen once someone explicitly archives it.
-  async function handleArchiveStockUnit(unit) {
+  async function archiveStockUnitSilent(unit) {
     const sourcePO = (db.pos || []).find((p) => p.id === unit.sourcePoId);
     const finalBaseCost = unit.status === "sold" ? (parseFloat(unit.baseCost) || 0) : getLiveBaseCost(unit, sourcePO, items || []);
     const finalLandedCost = computeLandedCost({ ...unit, baseCost: finalBaseCost });
+    await updateStockUnit(unit.id, {
+      baseCost: finalBaseCost,
+      landedCost: finalLandedCost,
+      archived: true,
+      archivedAt: todayISO(),
+    });
+    update((next) => {
+      const u = (next.stockUnits || []).find((x) => x.id === unit.id);
+      if (u) {
+        u.baseCost = finalBaseCost;
+        u.landedCost = finalLandedCost;
+        u.archived = true;
+        u.archivedAt = todayISO();
+      }
+    });
+    return finalLandedCost;
+  }
+
+  // Called from the main modal Save button — persists every serial-number
+  // and archive-on-save change made across all lines (this PO and any
+  // consolidated members) in one go, since there's no longer a separate
+  // per-unit Save/Archive button.
+  async function persistStockUnitDrafts() {
+    const serialIds = Object.keys(serialDrafts);
+    const archiveIds = Object.keys(archiveDrafts).filter((id) => archiveDrafts[id]);
+    if (serialIds.length === 0 && archiveIds.length === 0) return;
     try {
-      await updateStockUnit(unit.id, {
-        baseCost: finalBaseCost,
-        landedCost: finalLandedCost,
-        archived: true,
-        archivedAt: todayISO(),
-      });
-      update((next) => {
-        const u = (next.stockUnits || []).find((x) => x.id === unit.id);
-        if (u) {
-          u.baseCost = finalBaseCost;
-          u.landedCost = finalLandedCost;
-          u.archived = true;
-          u.archivedAt = todayISO();
-        }
-      });
-      showToast(`${unit.productCode} archived — cost locked at ${fmtMoney(finalLandedCost, "AUD")}`);
+      for (const id of serialIds) {
+        if (archiveIds.includes(id)) continue; // archiving below already persists the current draft's serial number too
+        await saveSerialNumberSilent(id, (serialDrafts[id] ?? "").trim());
+      }
+      for (const id of archiveIds) {
+        const unit = (db.stockUnits || []).find((u) => u.id === id);
+        if (!unit || unit.archived) continue;
+        const value = (serialDrafts[id] ?? unit.serialNumber ?? "").trim();
+        if (value !== (unit.serialNumber || "")) await saveSerialNumberSilent(id, value);
+        await archiveStockUnitSilent(unit);
+      }
+      setSerialDrafts({});
+      setArchiveDrafts({});
     } catch (err) {
-      console.error("Archive stock unit error:", err);
-      showToast(`Error archiving stock unit: ${err.message}`);
+      console.error("Error saving stock unit changes:", err);
+      showToast(`Error saving stock unit changes: ${err.message}`);
     }
   }
 
@@ -6848,6 +7004,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
       setError("Please add at least one line item.");
       return;
     }
+    if (!isQuote && !isNew) persistStockUnitDrafts();
     onSave(
       {
         party: trimmedParty,
@@ -7545,188 +7702,6 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                     <option value="International">International</option>
                   </select>
                 </Field>
-              </div>
-            </Panel>
-          )}
-
-          {/* Serial numbers of the physical units this PO itself created
-              (its Chassis & Structure line going Paid/Received). Usually
-              filled in once the container's actually opened and inspected,
-              so it's shown separately from unit creation, editable any time. */}
-          {!isQuote && !isNew && stockUnitsFromThisPO.length > 0 && (
-            <Panel>
-              <h4 style={{ fontSize: 13, fontWeight: 700, color: "#4a3527", margin: "0 0 4px", display: "flex", alignItems: "center" }}>
-                Stock Units from this PO
-                <HelpHint text="Every time this PO's Chassis & Structure line first goes Paid or Received, one stock unit is created automatically per camper — that's what's listed here. Record each one's serial number once you've opened the container and can read it off the chassis; it can then be searched on a quote to pin that exact camper to a customer." />
-              </h4>
-              <p style={{ fontSize: 12, color: "#8a7a66", margin: "0 0 12px" }}>
-                Record each unit's serial number once known — it can then be used to link a specific customer's order to this exact camper.
-              </p>
-              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                {stockUnitsFromThisPO.map((u) => {
-                  // Cost stays LIVE — recomputed from the source PO's current
-                  // line data (see getLiveBaseCost) — right up until the unit
-                  // is archived. Selling a unit doesn't freeze it by itself
-                  // (a late freight invoice or a build-cost correction can
-                  // still land after the sale); only archiving locks it in.
-                  const sourcePO = (db.pos || []).find((p) => p.id === u.sourcePoId);
-                  const costDebug = u.archived
-                    ? { baseCost: parseFloat(u.baseCost) || 0, matchedLine: null, allLines: [] }
-                    : getLiveBaseCostDebug(u, sourcePO, db.items || []);
-                  const liveBaseCost = costDebug.baseCost;
-                  const liveLandedCost = computeLandedCost({ ...u, baseCost: liveBaseCost });
-                  const baseCostChanged = !u.archived && Math.round(liveBaseCost * 100) !== Math.round((parseFloat(u.baseCost) || 0) * 100);
-
-                  // Breakdown for the landed-cost tooltip: base cost (this
-                  // unit's originating Chassis & Structure line + its share of
-                  // that PO's freight — recalculated live until archived, then
-                  // locked-in) plus every cost component applied since
-                  // (freight, electrical/gas works, etc. — see "Apply to Stock
-                  // Unit"). Each line is attributed to its source PO's
-                  // supplier and number where that PO can still be found;
-                  // components fall back to their typed label otherwise.
-                  //
-                  // Also shows exactly which line on the source PO was matched
-                  // (description, qty, price) plus every other line on that PO
-                  // — so if the base cost doesn't match what's visible in Line
-                  // Items, it's diagnosable directly from the tooltip instead
-                  // of needing to be reverse-engineered (e.g. a stale/duplicate
-                  // line still sitting in that PO's data after an edit).
-                  const poLabel = (poId, fallback) => {
-                    const p = (db.pos || []).find((x) => x.id === poId);
-                    if (!p) return fallback || "Unknown source";
-                    const num = `PO-${String(p.number || "").replace(/^PO-?/i, "")}`;
-                    return p.party ? `${p.party} — ${num}` : num;
-                  };
-                  const breakdownLines = [
-                    `${poLabel(u.sourcePoId)}: ${fmtMoney(liveBaseCost, "AUD")}${baseCostChanged ? ` (was ${fmtMoney(u.baseCost, "AUD")})` : ""}`,
-                    ...(costDebug.matchedLine
-                      ? [`  ↳ line price: "${costDebug.matchedLine.desc}" — qty ${costDebug.matchedLine.qty} × ${fmtMoney(costDebug.matchedLine.price, "AUD")}`]
-                      : sourcePO ? [`  ↳ no matching Chassis & Structure line found on ${poLabel(u.sourcePoId)} — showing stored value`] : []),
-                    // Freight is otherwise invisible: it gets folded straight into
-                    // base cost above with no separate line, and the field it
-                    // comes from (Freight Forward Fee) is hidden on the PO form
-                    // once that PO has other POs consolidated into it — so a
-                    // leftover value from before consolidation can sit there,
-                    // silently inflating base cost, with no way to see it short
-                    // of this line.
-                    ...(costDebug.freight
-                      ? [`  ↳ this PO's Freight Forward Fee: ${fmtMoney(costDebug.freight, "AUD")} → ${fmtMoney(costDebug.freightShare, "AUD")} apportioned to this line`]
-                      : []),
-                    ...(costDebug.allLines && costDebug.allLines.length > 1
-                      ? [
-                          `  ↳ all lines on ${poLabel(u.sourcePoId)}:`,
-                          ...costDebug.allLines.map((l) => `      "${l.desc}" — qty ${l.qty} × ${fmtMoney(l.price, "AUD")}`),
-                        ]
-                      : []),
-                    ...(u.costComponents || []).map(
-                      (c) => `${poLabel(c.sourcePoId, c.label)}: ${fmtMoney(c.amount, "AUD")}`
-                    ),
-                    `Total: ${fmtMoney(liveLandedCost, "AUD")}`,
-                    u.archived ? `Archived ${fmtDate(u.archivedAt)} — cost frozen` : "Not yet archived — cost still live",
-                  ];
-                  const isLinked = !!u.linkedQuoteId;
-                  const linkedQuote = isLinked ? (db.quotes || []).find((q) => q.id === u.linkedQuoteId) : null;
-                  const descContent = (
-                    <>
-                      <strong>{u.productCode}{u.model ? ` — ${u.model}` : ""}</strong>
-                      <div style={{ display: "flex", alignItems: "center" }}>
-                        {u.status === "sold" ? "Sold" : "In stock"} · landed {fmtMoney(liveLandedCost, "AUD")}
-                        <HelpHint text={breakdownLines.join("\n")} />
-                        {u.archived && (
-                          <span style={{ marginLeft: 6, fontSize: 10, fontWeight: 700, color: "#8a7a66", background: "#f0e8d9", padding: "1px 6px", borderRadius: 3 }}>
-                            ARCHIVED
-                          </span>
-                        )}
-                      </div>
-                    </>
-                  );
-                  return (
-                  <React.Fragment key={u.id}>
-                  <div style={{ display: "flex", alignItems: "flex-end", gap: 10, flexWrap: "wrap" }}>
-                    {isLinked && openRecord ? (
-                      <button
-                        type="button"
-                        onClick={() => openRecord("quote", u.linkedQuoteId)}
-                        title={`Linked to ${linkedQuote?.number || "quote"} — click to view`}
-                        style={{
-                          fontSize: 12, flex: "1 1 160px", paddingBottom: 8, textAlign: "left",
-                          background: "none", border: "none", cursor: "pointer",
-                          color: "#b5552b", textDecoration: "underline",
-                        }}
-                      >
-                        {descContent}
-                      </button>
-                    ) : (
-                      <div style={{ fontSize: 12, flex: "1 1 160px", paddingBottom: 8, color: isLinked ? "#b5552b" : "#4a3527" }}>
-                        {descContent}
-                      </div>
-                    )}
-                    <div style={{ flex: "1 1 180px" }}>
-                      <Field label="Serial number">
-                        <input
-                          style={inputStyle}
-                          type="text"
-                          value={serialDrafts[u.id] ?? u.serialNumber ?? ""}
-                          onChange={(e) => setSerialDrafts((d) => ({ ...d, [u.id]: e.target.value }))}
-                          placeholder="e.g. SAV-2026-014"
-                        />
-                      </Field>
-                    </div>
-                    <div style={{ paddingBottom: 2, display: "flex", gap: 6 }}>
-                      <Btn variant="secondary" size="sm" onClick={() => handleSaveSerialNumber(u.id)}>
-                        Save
-                      </Btn>
-                      {!u.archived && (
-                        <Btn
-                          variant="secondary"
-                          size="sm"
-                          onClick={() => {
-                            if (window.confirm(`Archive ${u.productCode}? Its cost (currently ${fmtMoney(liveLandedCost, "AUD")}) will be locked in and stop updating.`)) {
-                              handleArchiveStockUnit(u);
-                            }
-                          }}
-                        >
-                          Archive
-                        </Btn>
-                      )}
-                    </div>
-                  </div>
-                  {(u.costComponents || []).length > 0 && (
-                    <div style={{ marginLeft: 4, marginBottom: 10, display: "flex", flexDirection: "column", gap: 4 }}>
-                      {(u.costComponents || []).map((c) => (
-                        <div
-                          key={c.id}
-                          style={{
-                            display: "flex", justifyContent: "space-between", alignItems: "center",
-                            fontSize: 11.5, background: "#f6efe0", borderRadius: 6, padding: "5px 10px", maxWidth: 420,
-                          }}
-                        >
-                          <span>
-                            {c.label || "Cost applied"} — {fmtMoney(c.amount, "AUD")}
-                            {c.sourcePoId && (() => {
-                              const p = (db.pos || []).find((x) => x.id === c.sourcePoId);
-                              return p ? ` (${p.party ? `${p.party} — ` : ""}PO-${String(p.number || "").replace(/^PO-?/i, "")})` : "";
-                            })()}
-                          </span>
-                          <button
-                            onClick={() => {
-                              if (window.confirm(`Remove "${c.label || "this cost"}" (${fmtMoney(c.amount, "AUD")}) from ${u.productCode}?`)) {
-                                handleRemoveStockUnitApplication(u.id, c.id);
-                              }
-                            }}
-                            style={{ background: "none", border: "none", color: "#a3442e", cursor: "pointer", fontSize: 13, padding: "0 4px" }}
-                            title="Remove this cost from this unit"
-                          >
-                            ✕
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  </React.Fragment>
-                  );
-                })}
               </div>
             </Panel>
           )}
@@ -8467,6 +8442,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                       const lineCurrency = li.currency || "AUD";
                       const nativeTotal = (Number(li.qty) || 0) * (Number(li.price) || 0);
                       const audTotal = lineCurrency === "USD" ? nativeTotal * (Number(rate) || 1) : nativeTotal;
+                      const claimedUnits = getUnitsForLine(lineItemsPoId, li);
                       return (
                         <React.Fragment key={idx}>
                           <div className="line-item-row">
@@ -8499,6 +8475,19 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                               value={li.price}
                               onChange={(e) => updateMLine(idx, "price", e.target.value)}
                             />
+                            {claimedUnits[0] ? (
+                              <input
+                                style={inputStyle}
+                                type="text"
+                                maxLength={8}
+                                title="Serial number"
+                                placeholder="Serial #"
+                                value={serialDrafts[claimedUnits[0].id] ?? claimedUnits[0].serialNumber ?? ""}
+                                onChange={(e) => setSerialDrafts((d) => ({ ...d, [claimedUnits[0].id]: e.target.value }))}
+                              />
+                            ) : (
+                              <div />
+                            )}
                             <div className="num" style={{ fontSize: 13.5, paddingTop: 9 }}>
                               {fmtMoney(audTotal, "AUD")}
                               {lineCurrency === "USD" && (
@@ -8515,6 +8504,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                               ✕
                             </button>
                           </div>
+                          <div style={{ borderTop: "1px solid #e3d8c6", margin: "2px 0 8px" }} />
                           <AutoGrowTextarea
                             placeholder="One feature per line — internal notes for this line item"
                             value={li.lineNote || ""}
@@ -8526,6 +8516,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                               fontFamily: "inherit", resize: "vertical", background: "#faf7f3",
                             }}
                           />
+                          {renderLineStockUnits(claimedUnits)}
                         </React.Fragment>
                       );
                     })
@@ -8582,6 +8573,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                 lines.map((li, idx) => {
                   const lineCurrency = li.currency || "AUD";
                   const nativeTotal = (Number(li.qty) || 0) * (Number(li.price) || 0);
+                  const claimedUnits = !isQuote ? getUnitsForLine(editing?.id, li) : [];
                   return (
                     <React.Fragment key={idx}>
                     <div className="line-item-row">
@@ -8626,6 +8618,21 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                           title="Optional: set cost to override price book cost for profit calculation"
                         />
                       )}
+                      {!isQuote && (
+                        claimedUnits[0] ? (
+                          <input
+                            style={inputStyle}
+                            type="text"
+                            maxLength={8}
+                            title="Serial number"
+                            placeholder="Serial #"
+                            value={serialDrafts[claimedUnits[0].id] ?? claimedUnits[0].serialNumber ?? ""}
+                            onChange={(e) => setSerialDrafts((d) => ({ ...d, [claimedUnits[0].id]: e.target.value }))}
+                          />
+                        ) : (
+                          <div />
+                        )
+                      )}
                       <div className="num" style={{ fontSize: 13.5, paddingTop: 9 }}>
                         {fmtMoney(lineAudTotal(li), "AUD")}
                         {lineCurrency === "USD" && (
@@ -8642,6 +8649,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                         ✕
                       </button>
                     </div>
+                    <div style={{ borderTop: "1px solid #e3d8c6", margin: "2px 0 8px" }} />
                     <AutoGrowTextarea
                       placeholder="One feature per line — each becomes a bullet point on the quote"
                       value={li.lineNote || ""}
@@ -8653,6 +8661,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                         fontFamily: "inherit", resize: "vertical", background: "#faf7f3",
                       }}
                     />
+                    {!isQuote && renderLineStockUnits(claimedUnits)}
                     </React.Fragment>
                   );
                 })
