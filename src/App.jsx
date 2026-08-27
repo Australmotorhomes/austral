@@ -6004,6 +6004,7 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
 
       {docModal !== undefined && (
         <DocModal
+          key={docModal === null ? `new-${kind}` : docModal.id}
           kind={kind}
           editing={docModal}
           db={db}
@@ -6873,27 +6874,54 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
   // and archive-on-save change made across all lines (this PO and any
   // consolidated members) in one go, since there's no longer a separate
   // per-unit Save/Archive button.
+  //
+  // Each unit is saved independently (its own try/catch) rather than
+  // stopping at the first failure — e.g. a typo'd serial number that
+  // collides with one already recorded on a different unit (the database
+  // enforces every serial number must be unique) shouldn't also block
+  // every OTHER unit's changes from saving. A failed draft is left in
+  // place (not cleared) so the value isn't lost and can be corrected.
   async function persistStockUnitDrafts() {
     const serialIds = Object.keys(serialDrafts);
     const archiveIds = Object.keys(archiveDrafts).filter((id) => archiveDrafts[id]);
     if (serialIds.length === 0 && archiveIds.length === 0) return;
-    try {
-      for (const id of serialIds) {
-        if (archiveIds.includes(id)) continue; // archiving below already persists the current draft's serial number too
-        await saveSerialNumberSilent(id, (serialDrafts[id] ?? "").trim());
+    const failures = [];
+    for (const id of serialIds) {
+      if (archiveIds.includes(id)) continue; // archiving below already persists the current draft's serial number too
+      const value = (serialDrafts[id] ?? "").trim();
+      try {
+        await saveSerialNumberSilent(id, value);
+        setSerialDrafts((d) => { const next = { ...d }; delete next[id]; return next; });
+      } catch (err) {
+        console.error(`Error saving serial number for unit ${id}:`, err);
+        failures.push({ id, value, err });
       }
-      for (const id of archiveIds) {
-        const unit = (db.stockUnits || []).find((u) => u.id === id);
-        if (!unit || unit.archived) continue;
-        const value = (serialDrafts[id] ?? unit.serialNumber ?? "").trim();
+    }
+    for (const id of archiveIds) {
+      const unit = (db.stockUnits || []).find((u) => u.id === id);
+      if (!unit || unit.archived) continue;
+      const value = (serialDrafts[id] ?? unit.serialNumber ?? "").trim();
+      try {
         if (value !== (unit.serialNumber || "")) await saveSerialNumberSilent(id, value);
         await archiveStockUnitSilent(unit);
+        setSerialDrafts((d) => { const next = { ...d }; delete next[id]; return next; });
+        setArchiveDrafts((d) => { const next = { ...d }; delete next[id]; return next; });
+      } catch (err) {
+        console.error(`Error archiving unit ${id}:`, err);
+        failures.push({ id, value, err });
       }
-      setSerialDrafts({});
-      setArchiveDrafts({});
-    } catch (err) {
-      console.error("Error saving stock unit changes:", err);
-      showToast(`Error saving stock unit changes: ${err.message}`);
+    }
+    if (failures.length > 0) {
+      const isDuplicateSerial = (err) => /duplicate key|unique constraint/i.test(err?.message || "");
+      const messages = failures.map(({ id, value, err }) => {
+        const unit = (db.stockUnits || []).find((u) => u.id === id);
+        const label = unit?.productCode || "a unit";
+        if (isDuplicateSerial(err)) {
+          return `${label}: serial number "${value}" is already recorded on another unit — check for a typo or duplicate entry`;
+        }
+        return `${label}: ${err.message}`;
+      });
+      showToast(messages.join("; "));
     }
   }
 
