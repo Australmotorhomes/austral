@@ -4632,6 +4632,7 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
   const [linkingPOs, setLinkingPOs] = useState(false);
   const [stockUnitsManagerOpen, setStockUnitsManagerOpen] = useState(false);
   const [backfillingStockUnits, setBackfillingStockUnits] = useState(false);
+  const [reconcilingDeliveredQuotes, setReconcilingDeliveredQuotes] = useState(false);
   const [managerSerialDrafts, setManagerSerialDrafts] = useState({});
   const [managerSearch, setManagerSearch] = useState("");
   const [sortBy, setSortBy] = useState(null);   // column key, or null = default sort
@@ -5120,6 +5121,72 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
     }
   }
 
+  // Reconciles Delivered quotes whose stock unit was never marked "sold" —
+  // the usual cause is ordering: the quote got marked Delivered before its
+  // PO reached Paid/Received, so at that moment matchStockUnitForQuote had
+  // no unit yet to match against, and nothing re-runs that match once the
+  // unit does show up (the going-forward version of that gap is now handled
+  // automatically at PO-status-change time; this button is for quotes that
+  // were already stuck before that fix existed). Safe to run more than
+  // once: skips any Delivered quote that already has a sold unit.
+  async function handleReconcileDeliveredQuotes() {
+    setReconcilingDeliveredQuotes(true);
+    try {
+      const deliveredQuotes = (db.quotes || []).filter((q) => q.status === "Delivered");
+      const alreadyFulfilledQuoteIds = new Set(
+        (db.stockUnits || []).filter((u) => u.status === "sold" && u.soldQuoteId).map((u) => u.soldQuoteId)
+      );
+      const candidates = deliveredQuotes.filter((q) => !alreadyFulfilledQuoteIds.has(q.id));
+
+      const fixedUnits = [];
+      let stillUnmatched = 0;
+      for (const q of candidates) {
+        const match = matchStockUnitForQuote(q, db.items || [], db.stockUnits || []);
+        if (!match) {
+          stillUnmatched += 1;
+          continue;
+        }
+        const sourcePO = (db.pos || []).find((p) => p.id === match.sourcePoId);
+        const frozenBaseCost = getLiveBaseCost(match, sourcePO, db.items || []);
+        const frozenLandedCost = computeLandedCost({ ...match, baseCost: frozenBaseCost });
+        try {
+          const updated = await updateStockUnit(match.id, {
+            status: "sold",
+            soldQuoteId: q.id,
+            soldDate: q.deliveredDate || todayISO(),
+            baseCost: frozenBaseCost,
+            landedCost: frozenLandedCost,
+          });
+          if (updated) fixedUnits.push(updated);
+        } catch (err) {
+          console.error("Reconcile: failed to sell stock unit for quote", q.id, err);
+        }
+      }
+
+      if (fixedUnits.length) {
+        update((next) => {
+          fixedUnits.forEach((fu) => {
+            const su = (next.stockUnits || []).find((u) => u.id === fu.id);
+            if (su) Object.assign(su, fu);
+          });
+        });
+      }
+      showToast(
+        fixedUnits.length
+          ? `Matched ${fixedUnits.length} Delivered quote${fixedUnits.length === 1 ? "" : "s"} to stock`
+            + (stillUnmatched ? ` — ${stillUnmatched} still unmatched (no available unit)` : "")
+          : stillUnmatched
+            ? `${stillUnmatched} Delivered quote${stillUnmatched === 1 ? "" : "s"} still unmatched — no available unit for that model`
+            : "All Delivered quotes are already matched to stock"
+      );
+    } catch (err) {
+      console.error("Reconcile delivered quotes error:", err);
+      showToast(`Reconcile error: ${err.message}`);
+    } finally {
+      setReconcilingDeliveredQuotes(false);
+    }
+  }
+
   async function handleManagerSaveSerial(unitId) {
     const value = (managerSerialDrafts[unitId] ?? "").trim();
     try {
@@ -5419,6 +5486,40 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
           }
         }
 
+        // Retroactive Stage 3: a custom-build PO can reach Paid/Received
+        // AFTER its linked quote was already marked Delivered — the physical
+        // handover often happens before the paperwork catches up, and Stage
+        // 3 (below) only fires at the moment a quote's status *changes to*
+        // Delivered, so at that earlier moment there was no unit yet to
+        // match against. Left alone, a unit like this sits "in_stock"
+        // forever even though the camper it represents is already with the
+        // customer. Catch that ordering here: any unit just created whose
+        // linkedQuoteId points at an already-Delivered quote that isn't yet
+        // fulfilled by another unit gets sold immediately, same frozen-cost
+        // treatment as Stage 3.
+        for (let i = 0; i < newStockUnits.length; i++) {
+          const u = newStockUnits[i];
+          if (!u || !u.linkedQuoteId) continue;
+          const linkedQuote = (db.quotes || []).find((q) => q.id === u.linkedQuoteId);
+          if (!linkedQuote || linkedQuote.status !== "Delivered") continue;
+          const alreadyFulfilled = (db.stockUnits || []).some((su) => su.soldQuoteId === linkedQuote.id && su.status === "sold");
+          if (alreadyFulfilled) continue;
+          try {
+            const frozenBaseCost = getLiveBaseCost(u, doc, db.items || []);
+            const frozenLandedCost = computeLandedCost({ ...u, baseCost: frozenBaseCost });
+            const updated = await updateStockUnit(u.id, {
+              status: "sold",
+              soldQuoteId: linkedQuote.id,
+              soldDate: linkedQuote.deliveredDate || todayISO(),
+              baseCost: frozenBaseCost,
+              landedCost: frozenLandedCost,
+            });
+            if (updated) newStockUnits[i] = { ...u, ...updated };
+          } catch (err) {
+            console.error("Failed to retroactively sell stock unit for PO", doc.id, err);
+          }
+        }
+
         // Stage 3 — FIFO consumption: the moment a quote is marked Delivered,
         // match it to the physical unit that fulfils it (see
         // matchStockUnitForQuote — a linked/custom-build or serial-pinned
@@ -5468,6 +5569,27 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
               releasedStockUnitId = linkedUnit.id;
             } catch (err) {
               console.error("Failed to release stock unit:", err);
+            }
+          }
+        }
+
+        // Mirror image of Stage 3: if a quote that WAS Delivered is moved to
+        // any other status (e.g. reverted back to Accepted by mistake, or
+        // corrected), un-sell the unit Stage 3 marked "sold" for it. Without
+        // this, the unit stays status:"sold"/soldQuoteId pointing at a quote
+        // that's no longer Delivered — Stock Movement's OUT column keys
+        // purely off unit.status==="sold", so that unit keeps counting as
+        // OUT (and vanishes from ON HAND) forever, regardless of what the
+        // quote's current status actually is.
+        let unsoldStockUnitId = null;
+        if (isQuote && doc.status === "Delivered" && status !== "Delivered") {
+          const soldUnit = (db.stockUnits || []).find((u) => u.soldQuoteId === doc.id && u.status === "sold");
+          if (soldUnit) {
+            try {
+              await updateStockUnit(soldUnit.id, { status: "in_stock", soldQuoteId: null, soldDate: null });
+              unsoldStockUnitId = soldUnit.id;
+            } catch (err) {
+              console.error("Failed to un-sell stock unit:", err);
             }
           }
         }
@@ -5526,6 +5648,15 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
           if (releasedStockUnitId) {
             const ru = (next.stockUnits || []).find((u) => u.id === releasedStockUnitId);
             if (ru) ru.linkedQuoteId = null;
+          }
+
+          if (unsoldStockUnitId) {
+            const uu = (next.stockUnits || []).find((u) => u.id === unsoldStockUnitId);
+            if (uu) {
+              uu.status = "in_stock";
+              uu.soldQuoteId = null;
+              uu.soldDate = null;
+            }
           }
 
           // POs: "Archived" is a real status — capture/restore preArchiveStatus
@@ -5630,6 +5761,9 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
           <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 14 }}>
             <Btn variant="secondary" size="sm" onClick={handleBackfillStockUnits} disabled={backfillingStockUnits}>
               {backfillingStockUnits ? "Backfilling…" : "Backfill from existing POs"}
+            </Btn>
+            <Btn variant="secondary" size="sm" onClick={handleReconcileDeliveredQuotes} disabled={reconcilingDeliveredQuotes}>
+              {reconcilingDeliveredQuotes ? "Reconciling…" : "Reconcile Delivered quotes"}
             </Btn>
             <input
               style={{ ...inputStyle, flex: 1 }}
