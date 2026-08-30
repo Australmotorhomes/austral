@@ -1038,6 +1038,23 @@ function getLiveBaseCost(unit, po, items) {
   return getLiveBaseCostDebug(unit, po, items).baseCost;
 }
 
+// Live "landed cost" for display purposes, shared by every view that lists
+// stock units. Sold/archived units are frozen (their landedCost is
+// historical fact — see the note above getLiveBaseCost), but an in_stock
+// unit's landed cost is recomputed from its source PO's CURRENT line +
+// freight data every time this is called — so correcting an old PO's price
+// immediately corrects what every view shows for that unit, instead of the
+// unit's stored landedCost column silently going stale the moment the PO
+// changes (it's only ever re-saved at creation, sale, or a cost-component
+// add/remove — never just because the source PO was edited afterward).
+function liveUnitLandedCost(u, db) {
+  if (!u) return 0;
+  if (u.status === "sold" || u.archived) return parseFloat(u.landedCost) || 0;
+  const sourcePO = (db.pos || []).find((p) => p.id === u.sourcePoId);
+  const liveBase = getLiveBaseCost(u, sourcePO, db.items || []);
+  return computeLandedCost({ ...u, baseCost: liveBase });
+}
+
 async function createStockUnit(unitData) {
   try {
     const payload = toSupabaseFormat({ ...unitData, landedCost: computeLandedCost(unitData) }, "stock_units");
@@ -1084,7 +1101,7 @@ async function deleteStockUnit(id) {
 // a linked unit is reserved for that exact quote regardless of arrival order;
 // a plain stock build (quoteId null) goes into the shared FIFO pool and may
 // sit in stock for a long time depending on how quickly that model sells.
-function buildStockUnitsForPO(po, items) {
+function buildStockUnitsForPO(po, items, existingUnits = []) {
   const lines = po.lines || [];
   const freight = parseFloat(po.customsClearance) || 0;
   const totalLineValue = lines.reduce((s, l) => {
@@ -1092,6 +1109,17 @@ function buildStockUnitsForPO(po, items) {
     const price = parseFloat(l.price || l.unitPrice || l.cost || 0);
     return s + price * qty;
   }, 0);
+
+  // Consolidation (see consolidatePOs) merges a member PO's lines into the
+  // primary PO's lines array, tagging each with the PO it truly came from
+  // via originPoId. If that origin PO already built a stock unit for a line
+  // (e.g. it individually reached Paid/Received before being consolidated),
+  // that physical camper is already represented — skip the line here rather
+  // than building a second, duplicate unit for the same camper the moment
+  // the primary itself reaches Paid/Received. Lines native to this PO carry
+  // no originPoId and default to this PO's own id, same as before
+  // consolidation existed.
+  const existingOriginIds = new Set((existingUnits || []).map((u) => u.sourcePoId));
 
   const units = [];
   lines.forEach((l) => {
@@ -1103,6 +1131,9 @@ function buildStockUnitsForPO(po, items) {
     }
     const code = item?.productCode;
     if (!code || item?.category !== "Chassis & Structure") return;
+
+    const originId = l.originPoId || po.id;
+    if (existingOriginIds.has(originId)) return;
 
     const qty = Math.max(1, Math.round(parseFloat(l.qty || l.quantity) || 1));
     const linePrice = parseFloat(l.price || l.unitPrice || l.cost || 0);
@@ -1117,7 +1148,7 @@ function buildStockUnitsForPO(po, items) {
       units.push({
         productCode: code,
         model: item?.model || "",
-        sourcePoId: po.id,
+        sourcePoId: originId,
         arrivedDate: (po.date || po.createdAt || "").slice(0, 10) || todayISO(),
         baseCost: perUnitCost,
         costComponents: [],
@@ -5084,17 +5115,19 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
   // Backfills stock units for existing POs that reached Paid/Received before
   // this stock-tracking feature existed — those units were never created, so
   // there's nothing yet to attach a serial number or landed cost onto. Safe
-  // to run more than once: skips any PO that already has a stockUnit.
+  // to run more than once: buildStockUnitsForPO skips any line whose true
+  // origin PO (see consolidatePOs' originPoId tagging) already has a unit,
+  // so a consolidated primary's already-fulfilled merged-in lines are never
+  // rebuilt — every Paid/Received PO is a candidate, not just ones with no
+  // stockUnit under their own id, since a primary can legitimately have
+  // units from its own build while still owing units for newly-merged lines.
   async function handleBackfillStockUnits() {
     setBackfillingStockUnits(true);
     try {
-      const existingPoIds = new Set((db.stockUnits || []).map((u) => u.sourcePoId));
-      const candidatePOs = (db.pos || []).filter(
-        (po) => ["Paid", "Received"].includes(poEffectiveStatus(po)) && !existingPoIds.has(po.id)
-      );
+      const candidatePOs = (db.pos || []).filter((po) => ["Paid", "Received"].includes(poEffectiveStatus(po)));
       const created = [];
       for (const po of candidatePOs) {
-        const toCreate = buildStockUnitsForPO(po, db.items || []);
+        const toCreate = buildStockUnitsForPO(po, db.items || [], [...(db.stockUnits || []), ...created]);
         for (const u of toCreate) {
           try {
             created.push(await createStockUnit(u));
@@ -5202,6 +5235,27 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
     }
   }
 
+  // Deletes a stock unit outright — for cleaning up bad data (e.g. a
+  // duplicate created by the consolidation bug, where the same physical
+  // camper ended up with two unit records). Restricted to in_stock units:
+  // a sold unit is real, historical COGS on a completed sale, and deleting
+  // it would silently corrupt that sale's numbers — those must never be
+  // removed this way, only unsold via a status change if genuinely wrong.
+  async function handleManagerDeleteUnit(unit) {
+    if (unit.status === "sold") return;
+    if (!window.confirm(`Delete this ${unit.productCode}${unit.model ? ` — ${unit.model}` : ""} stock unit${unit.serialNumber ? ` (serial ${unit.serialNumber})` : ""}? This cannot be undone.`)) return;
+    try {
+      await deleteStockUnit(unit.id);
+      update((next) => {
+        next.stockUnits = (next.stockUnits || []).filter((u) => u.id !== unit.id);
+      });
+      showToast("Stock unit deleted");
+    } catch (err) {
+      console.error("Delete stock unit error:", err);
+      showToast(`Error deleting stock unit: ${err.message}`);
+    }
+  }
+
   function handleGeneratePOs(quote) {
     setPoGenerationQuote(quote);
   }
@@ -5215,10 +5269,15 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
         const allPOs = [primaryPO, ...memberPOs];
         const totalValue = allPOs.reduce((s, po) => s + (po.total || 0), 0);
         
-        // Merged lines from all POs
+        // Merged lines from all POs — tagged with the PO each line truly
+        // came from (originPoId), preserved through re-consolidation via the
+        // `|| po.id` fallback, so buildStockUnitsForPO can tell a merged-in
+        // line apart from one native to the primary and avoid building a
+        // second stock unit for a camper a member PO already fulfilled.
         const mergedLines = allPOs.flatMap(po =>
           (po.lines || []).map(line => ({
             ...line,
+            originPoId: line.originPoId || po.id,
             desc: `[${po.number}${po.customer ? " — " + po.customer : ""}] ${line.desc || ""}`.trim(),
           }))
         );
@@ -5467,15 +5526,20 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
         // line (base cost + its share of the PO's freight forwarding fee).
         // This is the FIFO lot each unit's later freight/electrical/gas costs
         // get applied to, and what stock-on-hand value is now computed from.
-        // Guarded on both sides — an existing stockUnit for this PO, or the
-        // PO already having been in Paid/Received before this change — so
-        // toggling status back and forth never creates duplicate units.
+        // Guarded by the PO not already having been in Paid/Received before
+        // this change, so toggling status back and forth never re-triggers
+        // this block. The per-line duplicate check now lives inside
+        // buildStockUnitsForPO itself (keyed on each line's true origin PO,
+        // not this PO's own id) — a whole-PO gate here would wrongly skip a
+        // consolidated primary's genuinely-new merged-in lines just because
+        // it already has units from its own earlier build, and wrongly allow
+        // duplicates for lines merged in from a member PO that already built
+        // its own unit before consolidation.
         let newStockUnits = [];
         if (!isQuote && ["Paid", "Received"].includes(status)) {
-          const alreadyExists = (db.stockUnits || []).some((u) => u.sourcePoId === doc.id);
           const wasAlreadyInStock = ["Paid", "Received"].includes(poEffectiveStatus(doc));
-          if (!alreadyExists && !wasAlreadyInStock) {
-            const toCreate = buildStockUnitsForPO(doc, db.items || []);
+          if (!wasAlreadyInStock) {
+            const toCreate = buildStockUnitsForPO(doc, db.items || [], db.stockUnits || []);
             for (const u of toCreate) {
               try {
                 newStockUnits.push(await createStockUnit(u));
@@ -5806,7 +5870,7 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
                       </td>
                       <td style={{ padding: "8px 10px" }}>{fmtDate(u.arrivedDate)}</td>
                       <td style={{ padding: "8px 10px" }}>{u.status === "sold" ? "Sold" : "In stock"}</td>
-                      <td style={{ padding: "8px 10px" }}>{fmtMoney(u.landedCost, "AUD")}</td>
+                      <td style={{ padding: "8px 10px" }}>{fmtMoney(liveUnitLandedCost(u, db), "AUD")}</td>
                       <td style={{ padding: "8px 10px" }}>
                         <input
                           style={{ ...inputStyle, padding: "4px 8px", fontSize: 12 }}
@@ -5816,10 +5880,15 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
                           placeholder="e.g. SAV-2026-014"
                         />
                       </td>
-                      <td style={{ padding: "8px 10px" }}>
+                      <td style={{ padding: "8px 10px", display: "flex", gap: 6 }}>
                         <Btn variant="secondary" size="sm" onClick={() => handleManagerSaveSerial(u.id)}>
                           Save
                         </Btn>
+                        {u.status !== "sold" && (
+                          <Btn variant="ghost" size="sm" onClick={() => handleManagerDeleteUnit(u)} title="Delete this stock unit — e.g. to remove a duplicate">
+                            Delete
+                          </Btn>
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -7946,7 +8015,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                         .sort((a, b) => (a.arrivedDate || "").localeCompare(b.arrivedDate || ""))
                         .map((u) => (
                           <option key={u.id} value={u.id}>
-                            {u.productCode}{u.model ? ` — ${u.model}` : ""} — arrived {fmtDate(u.arrivedDate)} — landed {fmtMoney(u.landedCost, "AUD")}
+                            {u.productCode}{u.model ? ` — ${u.model}` : ""} — arrived {fmtDate(u.arrivedDate)} — landed {fmtMoney(liveUnitLandedCost(u, db), "AUD")}
                             {u.linkedQuoteId ? " (custom build)" : ""}
                           </option>
                         ))}
@@ -8006,7 +8075,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                   <span>
                     <strong>{linkedUnitForQuote.serialNumber || linkedUnitForQuote.productCode}</strong>
                     {linkedUnitForQuote.model ? ` — ${linkedUnitForQuote.model}` : ""}
-                    {" "}({linkedUnitForQuote.status === "sold" ? "sold" : "in stock"}, landed {fmtMoney(linkedUnitForQuote.landedCost, "AUD")})
+                    {" "}({linkedUnitForQuote.status === "sold" ? "sold" : "in stock"}, landed {fmtMoney(liveUnitLandedCost(linkedUnitForQuote, db), "AUD")})
                   </span>
                   {linkedUnitForQuote.status !== "sold" && (
                     <button
@@ -14445,11 +14514,10 @@ function StockMovementTable({ db, collapsed, setCollapsed, fyEnd, setFyEnd, curr
   //  - still in stock, not archived: recomputed live from its source PO's
   //    CURRENT line + freight data, same as everywhere else in the app, so
   //    correcting an old PO immediately corrects an unsold unit's value too.
+  // Delegates to the shared liveUnitLandedCost() helper so this table and
+  // the Stock Units manager can never disagree on a unit's value again.
   function unitValue(u) {
-    if (u.status === "sold" || u.archived) return parseFloat(u.landedCost) || 0;
-    const sourcePO = (db.pos || []).find((p) => p.id === u.sourcePoId);
-    const liveBase = getLiveBaseCost(u, sourcePO, db.items || []);
-    return computeLandedCost({ ...u, baseCost: liveBase });
+    return liveUnitLandedCost(u, db);
   }
 
   // Group every stock unit by product code, and — for the FY currently
