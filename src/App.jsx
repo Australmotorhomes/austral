@@ -1486,6 +1486,18 @@ function Btn({ children, onClick, variant = "ghost", size = "md", style, ...rest
     setTimeout(() => setIsPressed(false), 200);
   };
   
+  // NOTE: only bind onClick, not onTouchEnd. Wiring both meant a single tap
+  // could fire handleInteraction twice on iOS Safari — once on touchend, and
+  // again a moment later when the browser's synthesized "click" for that same
+  // tap arrived (which is delayed on iOS while a native sheet like a file/photo
+  // picker is on screen). For a button that opens a file input via
+  // fileInputRef.current.click() (e.g. "Select files" in the attachments
+  // uploader), that second call re-triggered the picker right as it was about
+  // to deliver the user's selection, cancelling the pending change event — the
+  // file input never got a chance to fire and the upload silently never
+  // started. onClick alone already handles touch taps correctly, so
+  // onTouchEnd was both redundant and the source of this bug.
+  
   const base = {
     border: "none",
     borderRadius: 8,
@@ -1504,7 +1516,6 @@ function Btn({ children, onClick, variant = "ghost", size = "md", style, ...rest
   return (
     <button
       onClick={handleInteraction}
-      onTouchEnd={handleInteraction}
       style={{ 
         ...base, 
         ...sizes[size], 
