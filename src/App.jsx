@@ -4664,6 +4664,7 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
   const [stockUnitsManagerOpen, setStockUnitsManagerOpen] = useState(false);
   const [backfillingStockUnits, setBackfillingStockUnits] = useState(false);
   const [reconcilingDeliveredQuotes, setReconcilingDeliveredQuotes] = useState(false);
+  const [fixingOrphanedSoldUnits, setFixingOrphanedSoldUnits] = useState(false);
   const [managerSerialDrafts, setManagerSerialDrafts] = useState({});
   const [managerSearch, setManagerSearch] = useState("");
   const [sortBy, setSortBy] = useState(null);   // column key, or null = default sort
@@ -5217,6 +5218,59 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
       showToast(`Reconcile error: ${err.message}`);
     } finally {
       setReconcilingDeliveredQuotes(false);
+    }
+  }
+
+  // Mirror image of handleReconcileDeliveredQuotes: finds units marked "sold"
+  // whose soldQuoteId points at a quote that is NOT (or no longer) Delivered
+  // — including a quote that's been deleted outright — and reverts them to
+  // in_stock. This should never happen through normal use (every in-app path
+  // that un-sells a unit when a quote moves off Delivered is already wired
+  // up — see setStatus's Stage 3 mirror), but a status changed outside the
+  // app's own flow (e.g. a direct database edit) can leave a unit stuck
+  // "sold" against a quote nobody currently considers delivered, with
+  // nothing else in the app able to notice or self-heal it. Safe to run more
+  // than once: skips anything already consistent.
+  async function handleFixOrphanedSoldUnits() {
+    setFixingOrphanedSoldUnits(true);
+    try {
+      const orphans = (db.stockUnits || []).filter((u) => {
+        if (u.status !== "sold") return false;
+        const q = u.soldQuoteId ? (db.quotes || []).find((qq) => qq.id === u.soldQuoteId) : null;
+        return !q || q.status !== "Delivered";
+      });
+
+      const fixedIds = [];
+      for (const u of orphans) {
+        try {
+          await updateStockUnit(u.id, { status: "in_stock", soldQuoteId: null, soldDate: null });
+          fixedIds.push(u.id);
+        } catch (err) {
+          console.error("Failed to fix orphaned sold unit", u.id, err);
+        }
+      }
+
+      if (fixedIds.length) {
+        update((next) => {
+          (next.stockUnits || []).forEach((u) => {
+            if (fixedIds.includes(u.id)) {
+              u.status = "in_stock";
+              u.soldQuoteId = null;
+              u.soldDate = null;
+            }
+          });
+        });
+      }
+      showToast(
+        fixedIds.length
+          ? `Reverted ${fixedIds.length} unit${fixedIds.length === 1 ? "" : "s"} to in-stock — sold against a quote that isn't Delivered`
+          : "No orphaned sold units found"
+      );
+    } catch (err) {
+      console.error("Fix orphaned sold units error:", err);
+      showToast(`Error: ${err.message}`);
+    } finally {
+      setFixingOrphanedSoldUnits(false);
     }
   }
 
@@ -5828,6 +5882,19 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
             </Btn>
             <Btn variant="secondary" size="sm" onClick={handleReconcileDeliveredQuotes} disabled={reconcilingDeliveredQuotes}>
               {reconcilingDeliveredQuotes ? "Reconciling…" : "Reconcile Delivered quotes"}
+            </Btn>
+            <Btn
+              variant="secondary"
+              size="sm"
+              onClick={() => {
+                if (window.confirm("Revert every stock unit marked \"Sold\" against a quote that isn't currently Delivered back to in-stock? This should be rare — only affects units whose sold status got out of sync with their quote.")) {
+                  handleFixOrphanedSoldUnits();
+                }
+              }}
+              disabled={fixingOrphanedSoldUnits}
+              title="Finds units stuck 'sold' against a quote that isn't (or is no longer) Delivered, and reverts them to in-stock"
+            >
+              {fixingOrphanedSoldUnits ? "Checking…" : "Fix orphaned sold units"}
             </Btn>
             <input
               style={{ ...inputStyle, flex: 1 }}
