@@ -5866,7 +5866,14 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
                     <tr key={u.id} style={{ borderTop: "1px solid #e3d8c6" }}>
                       <td style={{ padding: "8px 10px" }}>
                         <strong>{u.productCode}</strong>{u.model ? ` — ${u.model}` : ""}
-                        {u.linkedQuoteId ? <div style={{ color: "#8a7a66" }}>custom build</div> : null}
+                        {u.linkedQuoteId ? (() => {
+                          const linkedQuote = (db.quotes || []).find((q) => q.id === u.linkedQuoteId);
+                          return (
+                            <div style={{ color: "#8a7a66" }} title="Earmarked for this customer's order — excluded from FIFO matching against other sales">
+                              reserved — quote {linkedQuote?.number || "—"}
+                            </div>
+                          );
+                        })() : null}
                       </td>
                       <td style={{ padding: "8px 10px" }}>{fmtDate(u.arrivedDate)}</td>
                       <td style={{ padding: "8px 10px" }}>{u.status === "sold" ? "Sold" : "In stock"}</td>
@@ -8024,12 +8031,15 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                       {(db.stockUnits || [])
                         .filter((u) => u.status === "in_stock")
                         .sort((a, b) => (a.arrivedDate || "").localeCompare(b.arrivedDate || ""))
-                        .map((u) => (
-                          <option key={u.id} value={u.id}>
-                            {u.productCode}{u.model ? ` — ${u.model}` : ""} — arrived {fmtDate(u.arrivedDate)} — landed {fmtMoney(liveUnitLandedCost(u, db), "AUD")}
-                            {u.linkedQuoteId ? " (custom build)" : ""}
-                          </option>
-                        ))}
+                        .map((u) => {
+                          const linkedQuote = u.linkedQuoteId ? (db.quotes || []).find((q) => q.id === u.linkedQuoteId) : null;
+                          return (
+                            <option key={u.id} value={u.id}>
+                              {u.productCode}{u.model ? ` — ${u.model}` : ""} — arrived {fmtDate(u.arrivedDate)} — landed {fmtMoney(liveUnitLandedCost(u, db), "AUD")}
+                              {linkedQuote ? ` (reserved — quote ${linkedQuote.number || "—"})` : ""}
+                            </option>
+                          );
+                        })}
                     </select>
                   </Field>
                 </div>
