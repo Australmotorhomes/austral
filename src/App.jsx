@@ -6651,6 +6651,17 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
   }, [previewPoId]);
 
   const sortedItems = items.slice().sort((a, b) => (a.model || "").localeCompare(b.model || "") || (a.name || "").localeCompare(b.name || ""));
+  // Chassis & Structure items only, for the "Link to model" control on custom/
+  // blank PO lines below — this is what lets a one-off custom build (its own
+  // free-typed description and price) still be recognised as a physical unit
+  // of a real model by buildStockUnitsForPO / findChassisItem, which key off
+  // itemId (or a productCode match in the description) rather than the
+  // description text itself. Requires a productCode to be worth listing, since
+  // that's what stock tracking actually keys on.
+  const chassisLinkItems = items
+    .filter((i) => i.category === "Chassis & Structure" && i.productCode)
+    .slice()
+    .sort((a, b) => (a.model || "").localeCompare(b.model || "") || (a.name || "").localeCompare(b.name || ""));
 
   // Every line total and the cost-side total are converted to AUD, regardless of source currency.
   // Prices are entered GST-inclusive, so these AUD figures are GST-inclusive too — no GST is added on top.
@@ -6723,8 +6734,8 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
           newCost = Math.round(newCost * 100) / 100;
         }
         next[idx] = { ...li, currency: newCurrency, price: newPrice, cost: newCost };
-      } else if (field === "desc" || field === "lineNote") {
-        next[idx] = { ...next[idx], [field]: value };
+      } else if (field === "desc" || field === "lineNote" || field === "itemId") {
+        next[idx] = { ...next[idx], [field]: value || null };
       } else {
         next[idx] = { ...next[idx], [field]: parseFloat(value) || 0 };
       }
@@ -8770,6 +8781,26 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                               fontFamily: "inherit", resize: "vertical", background: "#faf7f3",
                             }}
                           />
+                          {!li.itemId && chassisLinkItems.length > 0 && (
+                            <div style={{ margin: "0 0 8px", display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                              <span style={{ fontSize: 11, color: "#8a7a66" }}>
+                                Custom line — link to a model for stock tracking:
+                              </span>
+                              <select
+                                style={{ ...inputStyle, width: "auto", fontSize: 12, padding: "4px 8px", marginBottom: 0 }}
+                                value=""
+                                onChange={(e) => { if (e.target.value) updateMLine(idx, "itemId", e.target.value); }}
+                              >
+                                <option value="">— not linked —</option>
+                                {chassisLinkItems.map((i) => (
+                                  <option key={i.id} value={i.id}>
+                                    [{i.productCode}] {i.model} · {i.name}
+                                  </option>
+                                ))}
+                              </select>
+                              <HelpHint text="This line's description, qty and price stay exactly as typed — linking only tells the app which real model this custom build is, so it's picked up as one physical unit (IN/OUT/on-hand) in Stock Movement." />
+                            </div>
+                          )}
                           {renderLineStockUnits(claimedUnits)}
                         </React.Fragment>
                       );
@@ -8915,6 +8946,45 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                         fontFamily: "inherit", resize: "vertical", background: "#faf7f3",
                       }}
                     />
+                    {/* Custom/blank PO lines (no itemId) never get counted as a
+                        physical unit in Stock Movement, because stock-unit
+                        creation matches lines to a price-book item by itemId
+                        (or a productCode string inside the description) — a
+                        free-typed custom build like "22ft custom boat" matches
+                        neither. Linking here to the real underlying model sets
+                        itemId without touching this line's own description,
+                        qty, or price, so custom pricing is preserved and the
+                        line is still recognised as one physical unit of that
+                        model for stock-in/out tracking. Only shown for POs —
+                        the same field on a quote line also feeds "Generate
+                        POs", which replaces the PO price with the linked
+                        item's price-book cost, and we don't want to silently
+                        override a custom quote's price when it's converted. */}
+                    {!isQuote && !li.itemId && chassisLinkItems.length > 0 && (
+                      <div style={{ margin: "0 0 8px", display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
+                        <span style={{ fontSize: 11, color: "#8a7a66" }}>
+                          Custom line — link to a model for stock tracking:
+                        </span>
+                        <select
+                          style={{ ...inputStyle, width: "auto", fontSize: 12, padding: "4px 8px", marginBottom: 0 }}
+                          value=""
+                          onChange={(e) => { if (e.target.value) updateLine(idx, "itemId", e.target.value); }}
+                        >
+                          <option value="">— not linked —</option>
+                          {chassisLinkItems.map((i) => (
+                            <option key={i.id} value={i.id}>
+                              [{i.productCode}] {i.model} · {i.name}
+                            </option>
+                          ))}
+                        </select>
+                        <HelpHint text="This line's description, qty and price stay exactly as typed — linking only tells the app which real model this custom build is, so it's picked up as one physical unit (IN/OUT/on-hand) in Stock Movement." />
+                      </div>
+                    )}
+                    {!isQuote && li.itemId && !items.find((i) => i.id === li.itemId) && (
+                      <p style={{ fontSize: 11, color: "#a3442e", margin: "0 0 8px" }}>
+                        Linked item no longer exists in the price book — stock tracking for this line will be skipped until it's re-linked.
+                      </p>
+                    )}
                     {!isQuote && renderLineStockUnits(claimedUnits)}
                     </React.Fragment>
                   );
