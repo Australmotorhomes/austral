@@ -5876,7 +5876,22 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
                         })() : null}
                       </td>
                       <td style={{ padding: "8px 10px" }}>{fmtDate(u.arrivedDate)}</td>
-                      <td style={{ padding: "8px 10px" }}>{u.status === "sold" ? "Sold" : "In stock"}</td>
+                      <td style={{ padding: "8px 10px" }}>
+                        {u.status === "sold" ? (() => {
+                          const soldQuote = u.soldQuoteId ? (db.quotes || []).find((q) => q.id === u.soldQuoteId) : null;
+                          return (
+                            <>
+                              Sold
+                              <div style={{ color: "#8a7a66", fontWeight: 400 }}>
+                                {u.soldQuoteId
+                                  ? `quote ${soldQuote?.number || "—"}${soldQuote ? ` — ${soldQuote.status}` : " (quote not found)"}${soldQuote?.party ? ` · ${soldQuote.party}` : ""}`
+                                  : "no linked quote"}
+                                {u.soldDate ? ` · ${fmtDate(u.soldDate)}` : ""}
+                              </div>
+                            </>
+                          );
+                        })() : "In stock"}
+                      </td>
                       <td style={{ padding: "8px 10px" }}>{fmtMoney(liveUnitLandedCost(u, db), "AUD")}</td>
                       <td style={{ padding: "8px 10px" }}>
                         <input
