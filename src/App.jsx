@@ -2366,7 +2366,36 @@ export default function App() {
     const userKey = authUsername || authSession.access_token;
     if (loadedForUserRef.current === userKey) return; // same user already loaded — this is just a token renewal
     loadedForUserRef.current = userKey;
-    loadFromSupabase(false);
+    (async () => {
+      // Guard against a race with the token-refresh effect above: that effect
+      // renews the access token asynchronously (fire-and-forget), and since
+      // this effect only ever runs ONCE per user (see loadedForUserRef), if
+      // the very first load fires with a token that's already expired/near
+      // expiry, loadAllData() 401s, gets treated as "empty database" (see
+      // loadFromSupabase), and — because loadedForUserRef is already set —
+      // never gets retried even after the token refresh succeeds a moment
+      // later. That's the "dashboard shows all zeros until I refresh the
+      // page" bug: refreshing the page works only because the *renewed*
+      // token was, by then, already the one sitting in localStorage.
+      // Fix: make sure the token is fresh BEFORE firing the first load,
+      // instead of letting the two effects race.
+      const expiresAt = authSession.expires_at; // unix seconds
+      const secondsLeft = expiresAt ? expiresAt - Date.now() / 1000 : null;
+      if (expiresAt && secondsLeft < 300) {
+        const renewed = await refreshAuthSession(authSession);
+        if (renewed) {
+          localStorage.setItem("am_session", JSON.stringify(renewed));
+          setSupabaseAuthToken(renewed.access_token); // sync immediately, don't wait for the [authSession] effect
+          setAuthSession(renewed);
+        } else if (renewed === null) {
+          // refresh_token itself was rejected — sign out instead of loading with a dead session
+          handleSignOut();
+          return;
+        }
+        // undefined (network hiccup): fall through and try the load anyway with the old token
+      }
+      loadFromSupabase(false);
+    })();
   }, [authSession, authUsername]);
 
   // ---- Initialize Supabase REST API polling on mount ----
