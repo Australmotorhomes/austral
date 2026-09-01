@@ -7524,15 +7524,6 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
               </button>
             </div>
           )}
-          {onConsolidatePOs && !isNew && !editing?.consolidatedGroupId && !editing?.consolidatedMemberIds?.length && (
-            <Btn
-              variant="secondary"
-              size="sm"
-              onClick={() => { setConsolidateSelected([]); setShowConsolidateModal(true); }}
-            >
-              ⊕ Consolidate Shipment
-            </Btn>
-          )}
           {!isNew && (
             <Field label="" >
               <select
@@ -8085,17 +8076,29 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
 
           {!isQuote && !(!isNew && editing?.consolidatedMemberIds?.length > 0) && (
             <Panel>
-              <div style={{ width: 200 }}>
-                <Field label="Shipping">
-                  <select
-                    style={inputStyle}
-                    value={shippingType}
-                    onChange={(e) => setShippingType(e.target.value)}
+              <div style={{ display: "flex", alignItems: "flex-end", gap: 12, flexWrap: "wrap" }}>
+                <div style={{ width: 200 }}>
+                  <Field label="Shipping">
+                    <select
+                      style={inputStyle}
+                      value={shippingType}
+                      onChange={(e) => setShippingType(e.target.value)}
+                    >
+                      <option value="Domestic">Domestic</option>
+                      <option value="International">International</option>
+                    </select>
+                  </Field>
+                </div>
+                {onConsolidatePOs && !isNew && !editing?.consolidatedGroupId && !editing?.consolidatedMemberIds?.length && (
+                  <Btn
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => { setConsolidateSelected([]); setShowConsolidateModal(true); }}
+                    style={{ marginBottom: 13 }}
                   >
-                    <option value="Domestic">Domestic</option>
-                    <option value="International">International</option>
-                  </select>
-                </Field>
+                    ⊕ Consolidate Shipment
+                  </Btn>
+                )}
               </div>
             </Panel>
           )}
