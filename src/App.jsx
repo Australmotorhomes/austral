@@ -7005,6 +7005,35 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
     }
   }
 
+  // Save supplier details / milestones / notes for whichever member PO is
+  // currently active (memberEditId) — lifted out of the inline render block
+  // so it can also be called from handleSave (see there for why: the main
+  // "Save changes" button only ever wrote the primary PO, silently dropping
+  // any pending edits made on a member PO's tab).
+  async function saveMemberDetails() {
+    const activeMember = (db.pos || []).find(p => p.id === memberEditId);
+    if (!activeMember) return;
+    try {
+      const payload = toSupabaseFormat({
+        party: mParty, contact: mContact, eta: mEta, status: mStatus,
+        paymentMilestones: mMilestones, notes: mNotes, updatedAt: nowISO(),
+      }, "purchase_orders");
+      await supabaseRESTWithSchemaFallback("PATCH", `purchase_orders?id=eq.${activeMember.id}`, payload);
+      update(next => {
+        const po = (next.pos || []).find(p => p.id === activeMember.id);
+        if (po) {
+          po.party = mParty; po.contact = mContact; po.eta = mEta;
+          po.status = mStatus; po.paymentMilestones = mMilestones; po.notes = mNotes;
+        }
+      });
+      setMDirty(false);
+      showToast(`PO-${activeMember.number} saved`);
+    } catch (err) {
+      showToast("Save failed");
+      console.error(err);
+    }
+  }
+
   async function saveGroupShippingType(newType) {
     // Consolidated POs ship together, so Domestic/International is a
     // property of the whole group — set it on the primary PO and every
@@ -7388,7 +7417,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
     }
   }
 
-  function handleSave() {
+  async function handleSave() {
     const trimmedParty = party.trim();
     if (!trimmedParty) {
       setError(`Please enter a ${isQuote ? "customer" : "supplier"} name.`);
@@ -7399,6 +7428,19 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
       return;
     }
     if (!isQuote && !isNew) persistStockUnitDrafts();
+    // The main "Save changes" button only ever wrote the primary PO/quote
+    // (`editing.id`) — line items or supplier details edited on a member
+    // PO's tab (inside a consolidated PO) live in separate state (mLines /
+    // mParty etc.) and were silently dropped if the user clicked this
+    // button instead of the member tab's own "Save line items" / "Save
+    // PO-xxxx" button. Flush any pending member-tab edits first so this
+    // button always saves everything currently on screen.
+    if (mLinesDirty && lineItemsPoId) {
+      await saveMemberLines();
+    }
+    if (mDirty && memberEditId) {
+      await saveMemberDetails();
+    }
     onSave(
       {
         party: trimmedParty,
@@ -7578,27 +7620,10 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
           const activeMember = (db.pos || []).find(p => p.id === memberEditId);
           if (!activeMember) return null;
 
-          async function saveMember() {
-            try {
-              const payload = toSupabaseFormat({
-                party: mParty, contact: mContact, eta: mEta, status: mStatus,
-                paymentMilestones: mMilestones, notes: mNotes, updatedAt: nowISO(),
-              }, "purchase_orders");
-              await supabaseRESTWithSchemaFallback("PATCH", `purchase_orders?id=eq.${activeMember.id}`, payload);
-              update(next => {
-                const po = (next.pos || []).find(p => p.id === activeMember.id);
-                if (po) {
-                  po.party = mParty; po.contact = mContact; po.eta = mEta;
-                  po.status = mStatus; po.paymentMilestones = mMilestones; po.notes = mNotes;
-                }
-              });
-              setMDirty(false);
-              showToast(`PO-${activeMember.number} saved`);
-            } catch (err) {
-              showToast("Save failed");
-              console.error(err);
-            }
-          }
+          // Saving now goes through the component-level saveMemberDetails()
+          // (defined above, near saveMemberLines) so the main "Save changes"
+          // button can also flush this — see handleSave.
+          const saveMember = saveMemberDetails;
 
           const mark = (setter) => (val) => { setter(val); setMDirty(true); };
 
