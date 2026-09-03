@@ -11951,6 +11951,9 @@ function ContactModal({ kind, editing, onCancel, onSave, onCreateQuote, onConver
   const [contactPerson, setContactPerson] = useState(isSupplier ? (editing ? editing.contactPerson || "" : "") : "");
   const [email, setEmail] = useState(editing ? String(editing.email || "") : "");
   const [phone, setPhone] = useState(editing ? String(editing.phone || "") : "");
+  // Supplier's "Linked purchase orders" list can get long, so keep it collapsed
+  // by default and let the user toggle it open.
+  const [showLinkedPOs, setShowLinkedPOs] = useState(false);
   const [street, setStreet] = useState(String(editing?.address?.street || ""));
   const [suburb, setSuburb] = useState(String(editing?.address?.suburb || ""));
   const [state, setState] = useState(editing?.address?.state || "QLD");
@@ -12171,9 +12174,55 @@ function ContactModal({ kind, editing, onCancel, onSave, onCreateQuote, onConver
 
       {editing && (linkedQuotes.length > 0 || linkedPOs.length > 0) && (
         <div style={{ borderTop: "1px solid #e3d8c6", paddingTop: 14, marginTop: 14 }}>
-          <h4 style={{ fontSize: 13, fontWeight: 600, color: "#6b5240", margin: "0 0 10px" }}>
-            {isSupplier ? "Linked purchase orders" : "Linked quotes & purchase orders"}
-          </h4>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", margin: "0 0 10px" }}>
+            <h4 style={{ fontSize: 13, fontWeight: 600, color: "#6b5240", margin: 0 }}>
+              {isSupplier ? "Linked purchase orders" : "Linked quotes & purchase orders"}
+            </h4>
+            {isSupplier && linkedPOs.length > 0 && (
+              <label
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                  fontSize: 11,
+                  fontWeight: 600,
+                  color: "#6b5240",
+                  cursor: "pointer",
+                  userSelect: "none",
+                }}
+              >
+                {showLinkedPOs ? "Hide" : "Show"}
+                <span
+                  role="switch"
+                  aria-checked={showLinkedPOs}
+                  onClick={() => setShowLinkedPOs((v) => !v)}
+                  style={{
+                    position: "relative",
+                    width: 34,
+                    height: 18,
+                    borderRadius: 999,
+                    background: showLinkedPOs ? "#5c7a4f" : "#d8cdba",
+                    transition: "background 0.15s ease",
+                    flexShrink: 0,
+                  }}
+                >
+                  <span
+                    style={{
+                      position: "absolute",
+                      top: 2,
+                      left: showLinkedPOs ? 18 : 2,
+                      width: 14,
+                      height: 14,
+                      borderRadius: "50%",
+                      background: "#fff",
+                      transition: "left 0.15s ease",
+                      boxShadow: "0 1px 2px rgba(0,0,0,0.25)",
+                    }}
+                  />
+                </span>
+              </label>
+            )}
+          </div>
           {linkedQuotes.length > 0 && (
             <div style={{ marginBottom: linkedPOs.length > 0 ? 10 : 0 }}>
               {linkedQuotes.map((q) => (
@@ -12203,7 +12252,7 @@ function ContactModal({ kind, editing, onCancel, onSave, onCreateQuote, onConver
               ))}
             </div>
           )}
-          {linkedPOs.length > 0 && (
+          {linkedPOs.length > 0 && (!isSupplier || showLinkedPOs) && (
             <div>
               {linkedPOs.map((p) => (
                 <div
