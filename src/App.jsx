@@ -1876,7 +1876,6 @@ function TaskModal({ editing, onCancel, onSave, onDelete }) {
 
       <Field label="Description">
         <AutoGrowTextarea
-          ref={descRef}
           style={inputStyle}
           minRows={2}
           placeholder="What needs to be done?"
