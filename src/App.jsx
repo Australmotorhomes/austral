@@ -1641,6 +1641,55 @@ const inputStyle = {
   boxSizing: "border-box",
 };
 
+// A text input with a small "×" button that appears once there's text,
+// letting the user clear a search field in one click instead of deleting
+// it manually. Pass the layout-affecting style props (flex, width,
+// minWidth, marginBottom) on `style` as usual — they're lifted onto the
+// wrapper so the input keeps behaving correctly inside flex rows — plus
+// `value` and `onClear` (e.g. `() => setSearch("")`). All other props
+// (onChange, placeholder, onFocus, onBlur, etc.) pass straight to <input>.
+function ClearableSearchInput({ value, onClear, style, inputRef, ...rest }) {
+  const { flex, width, minWidth, marginBottom, ...inputOnlyStyle } = style || {};
+  return (
+    <div style={{ position: "relative", flex, width, minWidth, marginBottom }}>
+      <input
+        ref={inputRef}
+        style={{ ...inputOnlyStyle, width: "100%", paddingRight: value ? 28 : inputOnlyStyle.paddingRight }}
+        value={value}
+        {...rest}
+      />
+      {value ? (
+        <button
+          type="button"
+          aria-label="Clear search"
+          title="Clear"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={onClear}
+          style={{
+            position: "absolute",
+            right: 6,
+            top: "50%",
+            transform: "translateY(-50%)",
+            width: 20,
+            height: 20,
+            lineHeight: "18px",
+            textAlign: "center",
+            border: "none",
+            background: "transparent",
+            color: "#9a8a76",
+            fontSize: 16,
+            cursor: "pointer",
+            borderRadius: 4,
+            padding: 0,
+          }}
+        >
+          ×
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
 // A <textarea> that grows to fit its content automatically — on first render
 // (so a modal opened with a long saved note shows it all immediately, instead
 // of clipping to a fixed `rows` count) and again on every keystroke as the
@@ -3767,12 +3816,13 @@ function PriceBookTab({ db, update, showToast }) {
             </select>
           </Field>
           <Field label="Search">
-            <input
+            <ClearableSearchInput
               style={inputStyle}
               type="text"
               placeholder="Search item or supplier…"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
+              onClear={() => setSearch("")}
             />
           </Field>
           <Field label="Sort by">
@@ -6212,12 +6262,13 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
             >
               {fixingOrphanedSoldUnits ? "Checking…" : "Fix orphaned sold units"}
             </Btn>
-            <input
+            <ClearableSearchInput
               style={{ ...inputStyle, flex: 1 }}
               type="text"
               placeholder="Search by product code, model, or serial number…"
               value={managerSearch}
               onChange={(e) => setManagerSearch(e.target.value)}
+              onClear={() => setManagerSearch("")}
             />
           </div>
 
@@ -6795,7 +6846,7 @@ function PriceBookSearchModal({ items, isQuote, calcSellPrice, onSelect, onClose
       <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: "0 0 12px", fontSize: 19 }}>
         Add from price book
       </h3>
-      <input
+      <ClearableSearchInput
         autoFocus
         style={{
           width: "100%", boxSizing: "border-box", padding: "10px 12px", fontSize: 14,
@@ -6804,6 +6855,7 @@ function PriceBookSearchModal({ items, isQuote, calcSellPrice, onSelect, onClose
         placeholder="Search by model, name, code, description…"
         value={search}
         onChange={(e) => setSearch(e.target.value)}
+        onClear={() => setSearch("")}
       />
       <div style={{ maxHeight: 420, overflowY: "auto", marginTop: 12, border: "1px solid #e3d8c6", borderRadius: 8 }}>
         {filtered.length === 0 ? (
@@ -8092,7 +8144,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
             {!isQuote && (
               <Field label="Customer (optional)">
                 <div style={{ position: "relative" }}>
-                  <input
+                  <ClearableSearchInput
                     style={inputStyle}
                     type="text"
                     placeholder="Search and select a customer"
@@ -8100,6 +8152,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                     onChange={(e) => setCustomer(e.target.value)}
                     onFocus={() => setCustomerAutocomplete(true)}
                     onBlur={() => setTimeout(() => setCustomerAutocomplete(false), 200)}
+                    onClear={() => setCustomer("")}
                   />
                   {customerAutocomplete && customer.length > 0 && (
                     <div style={{
@@ -11739,12 +11792,13 @@ function ContactsTab({ kind, db, update, showToast, nextNumber, pendingOpen, cle
 
       <Panel>
         <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: !isSupplier ? 4 : 14, flexWrap: "wrap" }}>
-          <input
+          <ClearableSearchInput
             style={{ ...inputStyle, flex: 1, minWidth: 200, marginBottom: 0 }}
             type="text"
             placeholder="Search name, email, phone, notes, address…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
+            onClear={() => setSearch("")}
           />
           <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "#6b5240", whiteSpace: "nowrap", cursor: "pointer" }}>
             <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />
@@ -13640,12 +13694,13 @@ function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOp
 
       <Panel>
         <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 14, flexWrap: "wrap" }}>
-          <input
+          <ClearableSearchInput
             style={{ ...inputStyle, flex: 1, minWidth: 200, marginBottom: 0 }}
             type="text"
             placeholder="Search name, email, phone, notes, activity…"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
+            onClear={() => setSearch("")}
           />
           <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 13, color: "#6b5240", whiteSpace: "nowrap", cursor: "pointer" }}>
             <input type="checkbox" checked={showLost} onChange={(e) => setShowLost(e.target.checked)} />
