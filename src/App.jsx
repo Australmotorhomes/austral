@@ -14120,26 +14120,27 @@ function CRMModal({ editing, db, onCancel, onSave, openRecord, onLogActivity, on
         </Field>
       </div>
 
-      <Field label="Expected order ETA (month)">
-        <input
-          style={inputStyle}
-          type="month"
-          value={expectedOrderEtaMonth}
-          onChange={(e) => setExpectedOrderEtaMonth(e.target.value)}
-        />
-      </Field>
-
-      <Field label="Sales Value (AUD)">
-        <input
-          style={inputStyle}
-          type="number"
-          min="0"
-          step="0.01"
-          placeholder="e.g. 45000 (auto-filled from quote or manual)"
-          value={salesValue}
-          onChange={(e) => setSalesValue(e.target.value)}
-        />
-      </Field>
+      <div className="grid2">
+        <Field label="Expected order ETA (month)">
+          <input
+            style={inputStyle}
+            type="month"
+            value={expectedOrderEtaMonth}
+            onChange={(e) => setExpectedOrderEtaMonth(e.target.value)}
+          />
+        </Field>
+        <Field label="Sales Value (AUD)">
+          <input
+            style={inputStyle}
+            type="number"
+            min="0"
+            step="0.01"
+            placeholder="e.g. 45000 (auto-filled from quote or manual)"
+            value={salesValue}
+            onChange={(e) => setSalesValue(e.target.value)}
+          />
+        </Field>
+      </div>
 
       <Field label="Notes">
         <textarea
