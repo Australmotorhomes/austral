@@ -1883,26 +1883,63 @@ function ConfirmModal({ title, message, confirmLabel = "Delete", onCancel, onCon
 //   null                                            → brand-new, unlinked task
 //   { recordType, recordId, recordLabel }            → brand-new task linked to a record (no id yet)
 //   { id, description, dueDate, reminderDate, ... }   → an existing task being edited
-function TaskModal({ editing, onCancel, onSave, onDelete }) {
+function TaskModal({ editing, onCancel, onSave, onDelete, customers = [], suppliers = [], prospects = [] }) {
   const isNew = !editing || !editing.id;
   const [description, setDescription] = useState(editing?.description || "");
   const [dueDate, setDueDate] = useState(editing?.dueDate || "");
   const [reminderDate, setReminderDate] = useState(editing?.reminderDate || "");
   const [saving, setSaving] = useState(false);
 
+  // Linking a task to an existing Customer / Supplier / Prospect record.
+  // Tasks created from within a Quote or PO already arrive pre-linked
+  // (recordType "quote"/"po") — that link was set programmatically by the
+  // page the task was created from, so it's shown read-only below and left
+  // untouched here. This picker only covers the three CRM-style record
+  // types, which a user can attach (or change) from any task.
+  const LINK_TYPE_LABELS = { customer: "Customer", supplier: "Supplier", prospect: "Prospect" };
+  const isPreLinkedToOther = !!(editing?.recordType && !LINK_TYPE_LABELS[editing.recordType]);
+  const [linkType, setLinkType] = useState(
+    editing?.recordType && LINK_TYPE_LABELS[editing.recordType] ? editing.recordType : ""
+  );
+  const [linkId, setLinkId] = useState(
+    editing?.recordType && LINK_TYPE_LABELS[editing.recordType] ? (editing.recordId || "") : ""
+  );
+
+  const sortByName = (list) => [...(list || [])].sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+  const linkOptions = {
+    customer: sortByName(customers),
+    supplier: sortByName(suppliers),
+    prospect: sortByName(prospects),
+  };
+
   async function handleSave() {
     const trimmed = description.trim();
     if (!trimmed) return;
     setSaving(true);
     try {
+      let recordType = editing?.recordType || null;
+      let recordId = editing?.recordId || null;
+      let recordLabel = editing?.recordLabel || null;
+      if (!isPreLinkedToOther) {
+        if (linkType && linkId) {
+          const match = (linkOptions[linkType] || []).find((r) => r.id === linkId);
+          recordType = linkType;
+          recordId = linkId;
+          recordLabel = match?.name || null;
+        } else {
+          recordType = null;
+          recordId = null;
+          recordLabel = null;
+        }
+      }
       await onSave({
         id: editing?.id,
         description: trimmed,
         dueDate: dueDate || null,
         reminderDate: reminderDate || null,
-        recordType: editing?.recordType || null,
-        recordId: editing?.recordId || null,
-        recordLabel: editing?.recordLabel || null,
+        recordType,
+        recordId,
+        recordLabel,
         completed: editing?.completed || false,
         completedAt: editing?.completedAt || null,
       });
@@ -1916,12 +1953,12 @@ function TaskModal({ editing, onCancel, onSave, onDelete }) {
       <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: "0 0 4px", fontSize: 18 }}>
         {isNew ? "Create Task" : "Edit Task"}
       </h3>
-      {editing?.recordLabel && (
+      {isPreLinkedToOther && editing?.recordLabel && (
         <p style={{ fontSize: 12.5, color: "#8a7a66", margin: "0 0 16px" }}>
           Linked to <strong style={{ color: "#6b5240" }}>{editing.recordLabel}</strong>
         </p>
       )}
-      {!editing?.recordLabel && <div style={{ marginBottom: 16 }} />}
+      {!isPreLinkedToOther && <div style={{ marginBottom: 16 }} />}
 
       <Field label="Description">
         <AutoGrowTextarea
@@ -1955,6 +1992,40 @@ function TaskModal({ editing, onCancel, onSave, onDelete }) {
           </Field>
         </div>
       </div>
+
+      {!isPreLinkedToOther && (
+        <div style={{ display: "flex", gap: 12 }}>
+          <div style={{ flex: 1 }}>
+            <Field label="Link to">
+              <select
+                style={inputStyle}
+                value={linkType}
+                onChange={(e) => {
+                  setLinkType(e.target.value);
+                  setLinkId("");
+                }}
+              >
+                <option value="">None</option>
+                <option value="customer">Customer</option>
+                <option value="supplier">Supplier</option>
+                <option value="prospect">Prospect</option>
+              </select>
+            </Field>
+          </div>
+          {linkType && (
+            <div style={{ flex: 1 }}>
+              <Field label={LINK_TYPE_LABELS[linkType]}>
+                <select style={inputStyle} value={linkId} onChange={(e) => setLinkId(e.target.value)}>
+                  <option value="">Select…</option>
+                  {linkOptions[linkType].map((r) => (
+                    <option key={r.id} value={r.id}>{r.name}</option>
+                  ))}
+                </select>
+              </Field>
+            </div>
+          )}
+        </div>
+      )}
 
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 10 }}>
         <div>
@@ -3319,6 +3390,9 @@ export default function App() {
           onCancel={() => setTaskModal(null)}
           onSave={handleSaveTask}
           onDelete={handleDeleteTask}
+          customers={db?.customers || []}
+          suppliers={db?.suppliers || []}
+          prospects={db?.crm || []}
         />
       )}
 
@@ -15605,37 +15679,72 @@ function DashboardSectionWrapper({
 // Prospect, Customer, Supplier, Quote, or PO (via recordType/recordId) —
 // clicking the linked label jumps straight to that record.
 function TaskListSection({ tasks, openRecord, onEditTask, onToggleTask, onNewTask }) {
-  const [showCompleted, setShowCompleted] = useState(false);
+  // "open" (default) | "completed" | "all" — a filter switch rather than a
+  // one-way "reveal completed" link, so completed tasks can be viewed on
+  // their own instead of only alongside the open ones.
+  const [filter, setFilter] = useState("open");
   const fmtD = (d) => d ? new Date(d).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" }) : "—";
   const todayStr = todayISO();
   const all = tasks || [];
   const open = all.filter((t) => !t.completed);
   const completed = all.filter((t) => t.completed);
-  const sorted = [...open].sort((a, b) => (a.dueDate || "9999-99-99").localeCompare(b.dueDate || "9999-99-99"));
   const isOverdue = (t) => t.dueDate && t.dueDate < todayStr;
   const isDueToday = (t) => t.dueDate === todayStr;
+  const sortByDue = (list) => [...list].sort((a, b) => (a.dueDate || "9999-99-99").localeCompare(b.dueDate || "9999-99-99"));
+
+  const visible =
+    filter === "completed" ? sortByDue(completed) :
+    filter === "all" ? sortByDue(all) :
+    sortByDue(open);
+
+  const FILTERS = [
+    { key: "open", label: `Open${open.length ? ` (${open.length})` : ""}` },
+    { key: "completed", label: `Completed${completed.length ? ` (${completed.length})` : ""}` },
+    { key: "all", label: "All" },
+  ];
+
+  const emptyText =
+    filter === "completed" ? "No completed tasks yet." :
+    filter === "all" ? "No tasks yet." :
+    "No open tasks. Nice and clear.";
 
   return (
     <Panel style={{ marginBottom: 20 }}>
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
-        <h3 style={{ fontFamily: "Georgia,serif", fontSize: 16, color: "#4a3527", margin: 0 }}>
-          Tasks{" "}
-          {open.length > 0 && (
-            <span style={{ fontSize: 12, fontWeight: 400, color: "#8a7a66" }}>({open.length} open)</span>
-          )}
-        </h3>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
+        <h3 style={{ fontFamily: "Georgia,serif", fontSize: 16, color: "#4a3527", margin: 0 }}>Tasks</h3>
         <Btn variant="ghost" size="sm" onClick={() => onNewTask && onNewTask()}>
           + New Task
         </Btn>
       </div>
 
-      {sorted.length === 0 ? (
-        <p className="muted" style={{ fontSize: 13, margin: 0 }}>No open tasks. Nice and clear.</p>
+      <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginBottom: 14 }}>
+        {FILTERS.map((f) => (
+          <button
+            key={f.key}
+            onClick={() => setFilter(f.key)}
+            style={{
+              padding: "5px 12px",
+              fontSize: 12,
+              fontWeight: 600,
+              borderRadius: 14,
+              border: "1px solid " + (filter === f.key ? "#b5552b" : "#e3d8c6"),
+              background: filter === f.key ? "#b5552b" : "#fff",
+              color: filter === f.key ? "#fff" : "#6b5240",
+              cursor: "pointer",
+            }}
+          >
+            {f.label}
+          </button>
+        ))}
+      </div>
+
+      {visible.length === 0 ? (
+        <p className="muted" style={{ fontSize: 13, margin: 0 }}>{emptyText}</p>
       ) : (
-        sorted.map((t) => (
+        visible.map((t) => (
           <div
             key={t.id}
-            style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "10px 0", borderBottom: "1px solid #f0e8d9" }}
+            style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "10px 0", borderBottom: "1px solid #f0e8d9", opacity: t.completed ? 0.6 : 1 }}
           >
             <input
               type="checkbox"
@@ -15647,11 +15756,13 @@ function TaskListSection({ tasks, openRecord, onEditTask, onToggleTask, onNewTas
               style={{ flex: 1, minWidth: 0, cursor: onEditTask ? "pointer" : "default" }}
               onClick={() => onEditTask && onEditTask(t)}
             >
-              <div style={{ fontSize: 13.5, color: "#4a3527", fontWeight: 600 }}>{t.description}</div>
+              <div style={{ fontSize: 13.5, color: t.completed ? "#6b5240" : "#4a3527", fontWeight: 600, textDecoration: t.completed ? "line-through" : "none" }}>
+                {t.description}
+              </div>
               <div style={{ fontSize: 12, color: "#8a7a66", marginTop: 3, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
                 {t.dueDate && (
-                  <span style={{ color: isOverdue(t) ? "#a3442e" : isDueToday(t) ? "#b5552b" : "#8a7a66", fontWeight: (isOverdue(t) || isDueToday(t)) ? 700 : 400 }}>
-                    {isOverdue(t) ? "Overdue · " : isDueToday(t) ? "Due today · " : "Due "}
+                  <span style={{ color: !t.completed && isOverdue(t) ? "#a3442e" : !t.completed && isDueToday(t) ? "#b5552b" : "#8a7a66", fontWeight: !t.completed && (isOverdue(t) || isDueToday(t)) ? 700 : 400 }}>
+                    {!t.completed && isOverdue(t) ? "Overdue · " : !t.completed && isDueToday(t) ? "Due today · " : "Due "}
                     {fmtD(t.dueDate)}
                   </span>
                 )}
@@ -15671,37 +15782,6 @@ function TaskListSection({ tasks, openRecord, onEditTask, onToggleTask, onNewTas
             </div>
           </div>
         ))
-      )}
-
-      {completed.length > 0 && (
-        <div style={{ marginTop: 10 }}>
-          <button
-            onClick={() => setShowCompleted((v) => !v)}
-            style={{ background: "none", border: "none", color: "#8a7a66", fontSize: 12, cursor: "pointer", padding: 0 }}
-          >
-            {showCompleted ? "Hide" : "Show"} {completed.length} completed
-          </button>
-          {showCompleted &&
-            completed.map((t) => (
-              <div
-                key={t.id}
-                style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "8px 0", borderBottom: "1px solid #f0e8d9", opacity: 0.6 }}
-              >
-                <input
-                  type="checkbox"
-                  checked={true}
-                  onChange={() => onToggleTask && onToggleTask(t)}
-                  style={{ marginTop: 3, cursor: "pointer", flexShrink: 0 }}
-                />
-                <div
-                  style={{ flex: 1, minWidth: 0, fontSize: 13, color: "#6b5240", textDecoration: "line-through", cursor: onEditTask ? "pointer" : "default" }}
-                  onClick={() => onEditTask && onEditTask(t)}
-                >
-                  {t.description}
-                </div>
-              </div>
-            ))}
-        </div>
       )}
     </Panel>
   );
