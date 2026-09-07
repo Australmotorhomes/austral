@@ -565,6 +565,19 @@ function toSupabaseFormat(data, table) {
       if (copy.createdAt !== undefined) { copy.created_at = copy.createdAt; delete copy.createdAt; }
       if (copy.updatedAt !== undefined) { copy.updated_at = copy.updatedAt; delete copy.updatedAt; }
       break;
+
+    case "tasks":
+      // tasks: id, description, due_date, reminder_date, record_type, record_id,
+      // record_label, completed, completed_at, created_at, updated_at
+      if (copy.dueDate !== undefined) { copy.due_date = copy.dueDate || null; delete copy.dueDate; }
+      if (copy.reminderDate !== undefined) { copy.reminder_date = copy.reminderDate || null; delete copy.reminderDate; }
+      if (copy.recordType !== undefined) { copy.record_type = copy.recordType || null; delete copy.recordType; }
+      if (copy.recordId !== undefined) { copy.record_id = copy.recordId || null; delete copy.recordId; }
+      if (copy.recordLabel !== undefined) { copy.record_label = copy.recordLabel || null; delete copy.recordLabel; }
+      if (copy.completedAt !== undefined) { copy.completed_at = copy.completedAt || null; delete copy.completedAt; }
+      if (copy.createdAt !== undefined) { copy.created_at = copy.createdAt; delete copy.createdAt; }
+      if (copy.updatedAt !== undefined) { copy.updated_at = copy.updatedAt; delete copy.updatedAt; }
+      break;
   }
   return copy;
 }function fromSupabaseFormat(data, table) {
@@ -703,6 +716,19 @@ function toSupabaseFormat(data, table) {
       if (copy.updated_at !== undefined) { copy.updatedAt = copy.updated_at; delete copy.updated_at; }
       copy.status = copy.status || "in_stock";
       break;
+
+    case "tasks":
+      if (copy.due_date !== undefined) { copy.dueDate = copy.due_date; delete copy.due_date; }
+      if (copy.reminder_date !== undefined) { copy.reminderDate = copy.reminder_date; delete copy.reminder_date; }
+      if (copy.record_type !== undefined) { copy.recordType = copy.record_type; delete copy.record_type; }
+      if (copy.record_id !== undefined) { copy.recordId = copy.record_id; delete copy.record_id; }
+      if (copy.record_label !== undefined) { copy.recordLabel = copy.record_label; delete copy.record_label; }
+      if (copy.completed_at !== undefined) { copy.completedAt = copy.completed_at; delete copy.completed_at; }
+      if (copy.created_at !== undefined) { copy.createdAt = copy.created_at; delete copy.created_at; }
+      if (copy.updated_at !== undefined) { copy.updatedAt = copy.updated_at; delete copy.updated_at; }
+      copy.completed = !!copy.completed;
+      copy.description = copy.description || "";
+      break;
   }
   return copy;
 }
@@ -772,6 +798,15 @@ async function loadAllData() {
       console.warn("stock_units not available yet (fine if its migration hasn't been run):", stockUnitsErr);
     }
 
+    // Same fault-tolerant treatment for tasks (Task list feature — new table,
+    // may not exist yet until its migration is run).
+    let tasks = [];
+    try {
+      tasks = await supabaseREST("GET", "tasks");
+    } catch (tasksErr) {
+      console.warn("tasks not available yet (fine if its migration hasn't been run):", tasksErr);
+    }
+
     return {
       items: items || [],
       quotes: quotes || [],
@@ -783,6 +818,7 @@ async function loadAllData() {
       appSettings: appSettings || [],
       priceBookGroups: priceBookGroups || [],
       stockUnits: stockUnits || [],
+      tasks: tasks || [],
     };
   } catch (err) {
     console.error('Load data error:', err);
@@ -945,6 +981,45 @@ async function deleteCRMProspect(id) {
     await deleteRecord("crm_prospects", id);
   } catch (err) {
     console.error("Delete CRM prospect error:", err);
+    throw err;
+  }
+}
+
+// ---- Tasks (linked to a Prospect, Customer, Supplier, Quote, or PO) ----
+// A task's recordType/recordId point at the record it was created from
+// ("prospect" | "customer" | "supplier" | "quote" | "po"); recordLabel is a
+// snapshot of that record's display name/number so the task list can show
+// something meaningful without re-joining every table. Standalone tasks
+// (created from the Dashboard, not from within a record) have all three
+// of those fields set to null.
+async function createTaskRecord(taskData) {
+  try {
+    const payload = toSupabaseFormat({ ...taskData, createdAt: nowISO() }, "tasks");
+    const result = await createRecord("tasks", payload);
+    return fromSupabaseFormat(result[0], "tasks");
+  } catch (err) {
+    console.error("Create task error:", err);
+    throw err;
+  }
+}
+
+async function updateTaskRecord(id, taskData) {
+  try {
+    const payload = toSupabaseFormat({ ...taskData, updatedAt: nowISO() }, "tasks");
+    delete payload.id;
+    const result = await updateRecord("tasks", id, payload);
+    return fromSupabaseFormat(result[0], "tasks");
+  } catch (err) {
+    console.error("Update task error:", err);
+    throw err;
+  }
+}
+
+async function deleteTaskRecord(id) {
+  try {
+    await deleteRecord("tasks", id);
+  } catch (err) {
+    console.error("Delete task error:", err);
     throw err;
   }
 }
@@ -1755,6 +1830,105 @@ function ConfirmModal({ title, message, confirmLabel = "Delete", onCancel, onCon
   );
 }
 
+// Create/edit a Task. `editing` is one of:
+//   null                                            → brand-new, unlinked task
+//   { recordType, recordId, recordLabel }            → brand-new task linked to a record (no id yet)
+//   { id, description, dueDate, reminderDate, ... }   → an existing task being edited
+function TaskModal({ editing, onCancel, onSave, onDelete }) {
+  const isNew = !editing || !editing.id;
+  const [description, setDescription] = useState(editing?.description || "");
+  const [dueDate, setDueDate] = useState(editing?.dueDate || "");
+  const [reminderDate, setReminderDate] = useState(editing?.reminderDate || "");
+  const [saving, setSaving] = useState(false);
+
+  async function handleSave() {
+    const trimmed = description.trim();
+    if (!trimmed) return;
+    setSaving(true);
+    try {
+      await onSave({
+        id: editing?.id,
+        description: trimmed,
+        dueDate: dueDate || null,
+        reminderDate: reminderDate || null,
+        recordType: editing?.recordType || null,
+        recordId: editing?.recordId || null,
+        recordLabel: editing?.recordLabel || null,
+        completed: editing?.completed || false,
+        completedAt: editing?.completedAt || null,
+      });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Modal onClose={onCancel} width={440} record={isNew ? null : editing}>
+      <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: "0 0 4px", fontSize: 18 }}>
+        {isNew ? "Create Task" : "Edit Task"}
+      </h3>
+      {editing?.recordLabel && (
+        <p style={{ fontSize: 12.5, color: "#8a7a66", margin: "0 0 16px" }}>
+          Linked to <strong style={{ color: "#6b5240" }}>{editing.recordLabel}</strong>
+        </p>
+      )}
+      {!editing?.recordLabel && <div style={{ marginBottom: 16 }} />}
+
+      <Field label="Description">
+        <AutoGrowTextarea
+          ref={descRef}
+          style={inputStyle}
+          minRows={2}
+          placeholder="What needs to be done?"
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+        />
+      </Field>
+
+      <div style={{ display: "flex", gap: 12 }}>
+        <div style={{ flex: 1 }}>
+          <Field label="Due date">
+            <input
+              type="date"
+              style={inputStyle}
+              value={dueDate}
+              onChange={(e) => setDueDate(e.target.value)}
+            />
+          </Field>
+        </div>
+        <div style={{ flex: 1 }}>
+          <Field label="Reminder" hint="Optional — a date to be reminded before it's due">
+            <input
+              type="date"
+              style={inputStyle}
+              value={reminderDate}
+              onChange={(e) => setReminderDate(e.target.value)}
+            />
+          </Field>
+        </div>
+      </div>
+
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 10 }}>
+        <div>
+          {!isNew && onDelete && (
+            <Btn variant="danger" onClick={() => onDelete(editing)} disabled={saving}>
+              Delete
+            </Btn>
+          )}
+        </div>
+        <div style={{ display: "flex", gap: 10 }}>
+          <Btn variant="ghost" onClick={onCancel} disabled={saving}>
+            Cancel
+          </Btn>
+          <Btn variant="primary" onClick={handleSave} disabled={saving || !description.trim()}>
+            {saving ? "Saving…" : "Save Task"}
+          </Btn>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
 function Empty({ icon, text }) {
   return (
     <Panel>
@@ -2206,6 +2380,9 @@ export default function App() {
         data.quotes = (data.quotes || []).map((q) => fromSupabaseFormat(q, "quotes"));
         data.pos = (data.pos || []).map((p) => fromSupabaseFormat(p, "purchase_orders"));
 
+        // Convert tasks from Supabase format
+        data.tasks = (data.tasks || []).map((t) => fromSupabaseFormat(t, "tasks"));
+
         // Delivered quotes stay visible until their warranty window actually
         // lapses (365 days for campers, 730 for pontoon boats, from the last
         // payment date) — not archived the instant they're marked Delivered.
@@ -2305,6 +2482,7 @@ export default function App() {
           fx: { usdAudRate: FALLBACK_USD_AUD_RATE, source: "default", updatedAt: null },
           seq: { quote: 1, po: 1 },
           stockUnits: [],
+          tasks: [],
         };
         setDb(emptyData);
         setSyncStatus("ok");
@@ -2336,6 +2514,7 @@ export default function App() {
           fx: { usdAudRate: FALLBACK_USD_AUD_RATE, source: "default", updatedAt: null },
           seq: { quote: 1, po: 1 },
           stockUnits: [],
+          tasks: [],
         };
         setDb(emptyData);
       }
@@ -2524,6 +2703,85 @@ export default function App() {
 
   const [showFxModal, setShowFxModal] = useState(false);
   const [showSyncModal, setShowSyncModal] = useState(false);
+
+  // ── Tasks (linked to a Prospect, Customer, Supplier, Quote, or PO) ──
+  // taskModal is null when closed, or an "editing" object when open:
+  //   {}                                          → brand-new, unlinked task
+  //   { recordType, recordId, recordLabel }       → brand-new task linked to a record
+  //   { id, description, dueDate, ... }           → an existing task being edited
+  const [taskModal, setTaskModal] = useState(null);
+
+  const openTaskModal = useCallback((recordTypeOrTask, recordId, recordLabel) => {
+    // Three call shapes:
+    //  openTaskModal()                                       → new, unlinked task
+    //  openTaskModal("quote", id, label)                     → new task linked to a record
+    //  openTaskModal(existingTaskObject)                     → edit an existing task
+    if (recordTypeOrTask && typeof recordTypeOrTask === "object") {
+      setTaskModal(recordTypeOrTask);
+    } else if (recordTypeOrTask) {
+      setTaskModal({ recordType: recordTypeOrTask, recordId, recordLabel });
+    } else {
+      setTaskModal({});
+    }
+  }, []);
+
+  async function handleSaveTask(taskData) {
+    try {
+      if (taskData.id) {
+        const saved = await updateTaskRecord(taskData.id, taskData);
+        update((next) => {
+          next.tasks = (next.tasks || []).map((t) => (t.id === saved.id ? saved : t));
+        });
+        showToast("Task updated");
+      } else {
+        const saved = await createTaskRecord(taskData);
+        update((next) => {
+          next.tasks = [...(next.tasks || []), saved];
+        });
+        showToast("Task created");
+      }
+      setTaskModal(null);
+    } catch (err) {
+      showToast(`❌ Failed to save task: ${err.message}`);
+    }
+  }
+
+  async function handleDeleteTask(task) {
+    try {
+      await deleteTaskRecord(task.id);
+      update((next) => {
+        next.tasks = (next.tasks || []).filter((t) => t.id !== task.id);
+      });
+      showToast("Task deleted");
+      setTaskModal(null);
+    } catch (err) {
+      showToast(`❌ Failed to delete task: ${err.message}`);
+    }
+  }
+
+  async function handleToggleTaskComplete(task) {
+    const completed = !task.completed;
+    // Optimistic local update first so the checkbox feels instant.
+    update((next) => {
+      next.tasks = (next.tasks || []).map((t) =>
+        t.id === task.id ? { ...t, completed, completedAt: completed ? nowISO() : null } : t
+      );
+    });
+    try {
+      const saved = await updateTaskRecord(task.id, { ...task, completed, completedAt: completed ? nowISO() : null });
+      update((next) => {
+        next.tasks = (next.tasks || []).map((t) => (t.id === saved.id ? saved : t));
+      });
+    } catch (err) {
+      // Revert on failure
+      update((next) => {
+        next.tasks = (next.tasks || []).map((t) =>
+          t.id === task.id ? { ...t, completed: task.completed, completedAt: task.completedAt || null } : t
+        );
+      });
+      showToast(`❌ Failed to update task: ${err.message}`);
+    }
+  }
 
   // ── Auth gates — placed after ALL hooks to satisfy Rules of Hooks ──
   if (!authSession) {
@@ -2920,6 +3178,7 @@ export default function App() {
             pendingOpen={pendingOpen}
             clearPendingOpen={clearPendingOpen}
             openRecord={openRecord}
+            onCreateTask={openTaskModal}
           />
         )}
         {tab === "pos" && (
@@ -2932,6 +3191,7 @@ export default function App() {
             pendingOpen={pendingOpen}
             clearPendingOpen={clearPendingOpen}
             openRecord={openRecord}
+            onCreateTask={openTaskModal}
           />
         )}
         {tab === "suppliers" && (
@@ -2943,6 +3203,7 @@ export default function App() {
             pendingOpen={pendingOpen}
             clearPendingOpen={clearPendingOpen}
             openRecord={openRecord}
+            onCreateTask={openTaskModal}
           />
         )}
         {tab === "customers" && (
@@ -2955,6 +3216,7 @@ export default function App() {
             pendingOpen={pendingOpen}
             clearPendingOpen={clearPendingOpen}
             openRecord={openRecord}
+            onCreateTask={openTaskModal}
           />
         )}
         {tab === "crm" && (
@@ -2966,10 +3228,17 @@ export default function App() {
             pendingOpen={pendingOpen}
             clearPendingOpen={clearPendingOpen}
             openRecord={openRecord}
+            onCreateTask={openTaskModal}
           />
         )}
         {tab === "dashboard" && (
-          <DashboardTab db={db} setTab={setTab} openRecord={openRecord} />
+          <DashboardTab
+            db={db}
+            setTab={setTab}
+            openRecord={openRecord}
+            onCreateTask={openTaskModal}
+            onToggleTask={handleToggleTaskComplete}
+          />
         )}
         {tab === "shipping" && (
           <ShippingTab db={db} openRecord={openRecord} />
@@ -2994,6 +3263,14 @@ export default function App() {
           onRefresh={async () => {
             await loadFromSupabase(true);
           }}
+        />
+      )}
+      {taskModal && (
+        <TaskModal
+          editing={taskModal}
+          onCancel={() => setTaskModal(null)}
+          onSave={handleSaveTask}
+          onDelete={handleDeleteTask}
         />
       )}
 
@@ -4656,7 +4933,7 @@ function ImportCSVModal({ models, categories, onImport, onCancel, onAddModel, on
    DOCS TAB (shared for Quotes + Purchase Orders)
    ============================================================ */
 
-function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPendingOpen, openRecord }) {
+function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPendingOpen, openRecord, onCreateTask }) {
   // Quick-add a new price book item from the quote/PO line editor.
   // Mirrors saveItem() in PriceBookTab. Returns the new item via callback so
   // the caller can immediately add it as a line.
@@ -6362,6 +6639,7 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
           openRecord={openRecord}
           showToast={showToast}
           update={update}
+          onCreateTask={onCreateTask}
         />
       )}
 
@@ -6575,7 +6853,7 @@ function PriceBookSearchModal({ items, isQuote, calcSellPrice, onSelect, onClose
   );
 }
 
-function DocModal({ kind, editing, db, items, models, categories, fx, statusOptions, onCancel, onSave, onSaveMilestones, onAddItem, onAddModel, onAddCategory, onStatusChange, onDelete, onGeneratePOs, onConsolidatePOs, onReverseConsolidation, openRecord, showToast, update }) {
+function DocModal({ kind, editing, db, items, models, categories, fx, statusOptions, onCancel, onSave, onSaveMilestones, onAddItem, onAddModel, onAddCategory, onStatusChange, onDelete, onGeneratePOs, onConsolidatePOs, onReverseConsolidation, openRecord, showToast, update, onCreateTask }) {
   const isQuote = kind === "quote";
   const isMobile = useIsMobile();
   const isTablet = useIsMobile(880); // covers iPad-width viewports where the desktop payment-schedule grid gets too tight
@@ -10107,6 +10385,14 @@ ${clone?.innerHTML || ""}
               )}
             </>
           )}
+          {!isNew && onCreateTask && (
+            <Btn
+              variant="ghost"
+              onClick={() => onCreateTask(isQuote ? "quote" : "po", editing.id, editing.number)}
+            >
+              + Create Task
+            </Btn>
+          )}
           <Btn variant="ghost" onClick={onCancel}>
             {isNew ? "Cancel" : "Close"}
           </Btn>
@@ -10895,7 +11181,7 @@ function CustomerKanbanBoard({ list, onOpen, onMove, onDelete, showCanceled, db 
   );
 }
 
-function ContactsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPendingOpen, openRecord }) {
+function ContactsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPendingOpen, openRecord, onCreateTask }) {
   const isSupplier = kind === "supplier";
   
   // Move all hooks to TOP, before any conditional returns (React Hook Rules)
@@ -11636,6 +11922,7 @@ function ContactsTab({ kind, db, update, showToast, nextNumber, pendingOpen, cle
           onEditActivity={(activity, index) => setLoggingActivityFor({ contact: editingContact, activity, index })}
           db={db}
           openRecord={openRecord}
+          onCreateTask={onCreateTask}
         />
       )}
 
@@ -11945,7 +12232,7 @@ function mergeLegacyPaymentsIntoInvoices(c) {
   return merged;
 }
 
-function ContactModal({ kind, editing, onCancel, onSave, onCreateQuote, onConvertToProspect, onArchive, onLogActivity, onEditActivity, db, openRecord }) {
+function ContactModal({ kind, editing, onCancel, onSave, onCreateQuote, onConvertToProspect, onArchive, onLogActivity, onEditActivity, db, openRecord, onCreateTask }) {
   const isSupplier = kind === "supplier";
   const [name, setName] = useState(editing ? editing.name : "");
   const [contactPerson, setContactPerson] = useState(isSupplier ? (editing ? editing.contactPerson || "" : "") : "");
@@ -12550,6 +12837,15 @@ function ContactModal({ kind, editing, onCancel, onSave, onCreateQuote, onConver
       )}
 
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 18 }}>
+        {editing && editing.id && onCreateTask && (
+          <Btn
+            variant="ghost"
+            onClick={() => onCreateTask(isSupplier ? "supplier" : "customer", editing.id, editing.name)}
+            style={{ marginRight: "auto" }}
+          >
+            + Create Task
+          </Btn>
+        )}
         <Btn variant="ghost" onClick={onCancel}>
           Cancel
         </Btn>
@@ -12861,7 +13157,7 @@ function ProspectKanbanBoard({ list, onOpen, onMove, onDelete, showLost, db }) {
   );
 }
 
-function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOpen, openRecord }) {
+function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOpen, openRecord, onCreateTask }) {
   const isMobile = useIsMobile();
   const [search, setSearch] = useState("");
   const [showLost, setShowLost] = useState(false);
@@ -13550,6 +13846,7 @@ function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOp
           onCreateQuote={() => createQuoteFromProspect(editingProspect)}
           onConvertToCustomer={() => { convertProspectToCustomer(editingProspect); setEditingProspect(undefined); }}
           onDelete={() => { deleteProspect(editingProspect); setEditingProspect(undefined); }}
+          onCreateTask={onCreateTask}
         />
       )}
 
@@ -13646,7 +13943,7 @@ function CRMTab({ db, update, showToast, nextNumber, pendingOpen, clearPendingOp
   );
 }
 
-function CRMModal({ editing, db, onCancel, onSave, openRecord, onLogActivity, onEditActivity, onCreateQuote, onConvertToCustomer, onDelete }) {
+function CRMModal({ editing, db, onCancel, onSave, openRecord, onLogActivity, onEditActivity, onCreateQuote, onConvertToCustomer, onDelete, onCreateTask }) {
   const isMobile = useIsMobile();
   const [name, setName] = useState(editing ? editing.name : "");
   const [email, setEmail] = useState(editing ? editing.email || "" : "");
@@ -13931,6 +14228,15 @@ function CRMModal({ editing, db, onCancel, onSave, openRecord, onLogActivity, on
       )}
 
       <div style={{ display: "flex", justifyContent: "flex-end", gap: 10, marginTop: 18 }}>
+        {editing && editing.id && onCreateTask && (
+          <Btn
+            variant="ghost"
+            onClick={() => onCreateTask("prospect", editing.id, editing.name)}
+            style={{ marginRight: "auto" }}
+          >
+            + Create Task
+          </Btn>
+        )}
         <Btn variant="ghost" onClick={onCancel}>
           Cancel
         </Btn>
@@ -15238,7 +15544,115 @@ function DashboardSectionWrapper({
   );
 }
 
-function DashboardTab({ db, setTab, openRecord }) {
+// ── TASK LIST ──────────────────────────────────────────────────────────────
+// Shown at the top of the Dashboard. Open tasks sorted soonest-due-first;
+// completed tasks collapse behind a toggle. Each task can be linked to a
+// Prospect, Customer, Supplier, Quote, or PO (via recordType/recordId) —
+// clicking the linked label jumps straight to that record.
+function TaskListSection({ tasks, openRecord, onEditTask, onToggleTask, onNewTask }) {
+  const [showCompleted, setShowCompleted] = useState(false);
+  const fmtD = (d) => d ? new Date(d).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" }) : "—";
+  const todayStr = todayISO();
+  const all = tasks || [];
+  const open = all.filter((t) => !t.completed);
+  const completed = all.filter((t) => t.completed);
+  const sorted = [...open].sort((a, b) => (a.dueDate || "9999-99-99").localeCompare(b.dueDate || "9999-99-99"));
+  const isOverdue = (t) => t.dueDate && t.dueDate < todayStr;
+  const isDueToday = (t) => t.dueDate === todayStr;
+
+  return (
+    <Panel style={{ marginBottom: 20 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+        <h3 style={{ fontFamily: "Georgia,serif", fontSize: 16, color: "#4a3527", margin: 0 }}>
+          Tasks{" "}
+          {open.length > 0 && (
+            <span style={{ fontSize: 12, fontWeight: 400, color: "#8a7a66" }}>({open.length} open)</span>
+          )}
+        </h3>
+        <Btn variant="ghost" size="sm" onClick={() => onNewTask && onNewTask()}>
+          + New Task
+        </Btn>
+      </div>
+
+      {sorted.length === 0 ? (
+        <p className="muted" style={{ fontSize: 13, margin: 0 }}>No open tasks. Nice and clear.</p>
+      ) : (
+        sorted.map((t) => (
+          <div
+            key={t.id}
+            style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "10px 0", borderBottom: "1px solid #f0e8d9" }}
+          >
+            <input
+              type="checkbox"
+              checked={!!t.completed}
+              onChange={() => onToggleTask && onToggleTask(t)}
+              style={{ marginTop: 3, cursor: "pointer", flexShrink: 0 }}
+            />
+            <div
+              style={{ flex: 1, minWidth: 0, cursor: onEditTask ? "pointer" : "default" }}
+              onClick={() => onEditTask && onEditTask(t)}
+            >
+              <div style={{ fontSize: 13.5, color: "#4a3527", fontWeight: 600 }}>{t.description}</div>
+              <div style={{ fontSize: 12, color: "#8a7a66", marginTop: 3, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                {t.dueDate && (
+                  <span style={{ color: isOverdue(t) ? "#a3442e" : isDueToday(t) ? "#b5552b" : "#8a7a66", fontWeight: (isOverdue(t) || isDueToday(t)) ? 700 : 400 }}>
+                    {isOverdue(t) ? "Overdue · " : isDueToday(t) ? "Due today · " : "Due "}
+                    {fmtD(t.dueDate)}
+                  </span>
+                )}
+                {t.reminderDate && <span>🔔 Reminder {fmtD(t.reminderDate)}</span>}
+                {t.recordLabel && (
+                  <span
+                    style={{ color: "#b5552b", cursor: openRecord ? "pointer" : "default", fontWeight: 600, textDecoration: "underline" }}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (openRecord && t.recordType && t.recordId) openRecord(t.recordType, t.recordId);
+                    }}
+                  >
+                    {t.recordLabel}
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+        ))
+      )}
+
+      {completed.length > 0 && (
+        <div style={{ marginTop: 10 }}>
+          <button
+            onClick={() => setShowCompleted((v) => !v)}
+            style={{ background: "none", border: "none", color: "#8a7a66", fontSize: 12, cursor: "pointer", padding: 0 }}
+          >
+            {showCompleted ? "Hide" : "Show"} {completed.length} completed
+          </button>
+          {showCompleted &&
+            completed.map((t) => (
+              <div
+                key={t.id}
+                style={{ display: "flex", alignItems: "flex-start", gap: 10, padding: "8px 0", borderBottom: "1px solid #f0e8d9", opacity: 0.6 }}
+              >
+                <input
+                  type="checkbox"
+                  checked={true}
+                  onChange={() => onToggleTask && onToggleTask(t)}
+                  style={{ marginTop: 3, cursor: "pointer", flexShrink: 0 }}
+                />
+                <div
+                  style={{ flex: 1, minWidth: 0, fontSize: 13, color: "#6b5240", textDecoration: "line-through", cursor: onEditTask ? "pointer" : "default" }}
+                  onClick={() => onEditTask && onEditTask(t)}
+                >
+                  {t.description}
+                </div>
+              </div>
+            ))}
+        </div>
+      )}
+    </Panel>
+  );
+}
+
+function DashboardTab({ db, setTab, openRecord, onCreateTask, onToggleTask }) {
   const isMobile = useIsMobile();
   // Each column is a fiscal year ending June 30 of fyYear
   // FY2026 = Jul 2025 – Jun 2026
@@ -15719,6 +16133,13 @@ function DashboardTab({ db, setTab, openRecord }) {
 
     return (
       <div style={{ overflow: "hidden", userSelect: "none" }}>
+        <TaskListSection
+          tasks={db.tasks}
+          openRecord={openRecord}
+          onEditTask={(t) => onCreateTask && onCreateTask(t)}
+          onToggleTask={onToggleTask}
+          onNewTask={() => onCreateTask && onCreateTask()}
+        />
         {/* Title + counter */}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0 2px 10px", gap: 8 }}>
           <span style={{ fontFamily: "Georgia,serif", fontSize: 17, fontWeight: 700, color: "#4a3527", minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
@@ -16974,6 +17395,13 @@ function DashboardTab({ db, setTab, openRecord }) {
 
   return (
     <>
+      <TaskListSection
+        tasks={db.tasks}
+        openRecord={openRecord}
+        onEditTask={(t) => onCreateTask && onCreateTask(t)}
+        onToggleTask={onToggleTask}
+        onNewTask={() => onCreateTask && onCreateTask()}
+      />
       {sectionOrder.map((key, idx) => (
         <DashboardSectionWrapper
           key={key}
