@@ -352,7 +352,9 @@ function toSupabaseFormat(data, table) {
         delete copy.invoiceAmount3rd;
       }
       if (copy.invoiceDate1st !== undefined) {
-        copy.invoice_date_1st = copy.invoiceDate1st;
+        // Column dropped from the customers table (superseded by the
+        // invoices array) — strip it rather than send it, or Supabase
+        // rejects the whole request with "Could not find the column".
         delete copy.invoiceDate1st;
       }
       if (copy.invoiceMonth1st !== undefined) {
@@ -601,7 +603,6 @@ function toSupabaseFormat(data, table) {
       if (copy.invoice_amount_1st !== undefined) copy.invoiceAmount1st = parseFloat(copy.invoice_amount_1st) || 0;
       if (copy.invoice_amount_2nd !== undefined) copy.invoiceAmount2nd = parseFloat(copy.invoice_amount_2nd) || 0;
       if (copy.invoice_amount_3rd !== undefined) copy.invoiceAmount3rd = parseFloat(copy.invoice_amount_3rd) || 0;
-      if (copy.invoice_date_1st !== undefined) copy.invoiceDate1st = copy.invoice_date_1st || "";
       if (copy.invoice_month_1st !== undefined) copy.invoiceMonth1st = copy.invoice_month_1st || "";
       if (copy.invoice_month_2nd !== undefined) copy.invoiceMonth2nd = copy.invoice_month_2nd || "";
       if (copy.invoice_month_3rd !== undefined) copy.invoiceMonth3rd = copy.invoice_month_3rd || "";
@@ -12492,7 +12493,6 @@ function ContactModal({ kind, editing, onCancel, onSave, onCreateQuote, onConver
         ...(!isSupplier && { invoiceAmount1st: 0 }),
         ...(!isSupplier && { invoiceAmount2nd: 0 }),
         ...(!isSupplier && { invoiceAmount3rd: 0 }),
-        ...(!isSupplier && { invoiceDate1st: "" }),
         ...(!isSupplier && { invoiceMonth1st: "" }),
         ...(!isSupplier && { invoiceMonth2nd: "" }),
         ...(!isSupplier && { invoiceMonth3rd: "" }),
