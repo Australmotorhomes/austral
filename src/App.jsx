@@ -5526,7 +5526,7 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
             
             // If this is a quote, auto-update the matching prospect's sales value
             if (isQuote && next.crm) {
-              const prospect = next.crm.find((p) => p.name === payload.party);
+              const prospect = next.crm.find((p) => p.name === payload.party && !isConvertedProspect(p));
               if (prospect && payload.total != null && payload.total > 0) {
                 prospect.salesValue = payload.total;
                 prospect.updatedAt = nowISO();
@@ -6167,7 +6167,7 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
               last_quote_value: doc.total || 0,
             });
           }
-          matchedProspect = (db.crm || []).find((p) => p.name === doc.party);
+          matchedProspect = (db.crm || []).find((p) => p.name === doc.party && !isConvertedProspect(p));
           if (matchedProspect) {
             // "Deposit received" was removed from the prospect stage set — a
             // deposit belongs on the customer record, which is what
@@ -6862,6 +6862,17 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
                   // like conversion rate and lost rate have an accurate denominator.
                   await supabaseREST("PATCH", `crm_prospects?id=eq.${prospect.id}`, { current_status: "converted" });
 
+                  // Move the prospect's quotes (the accepted one plus any others
+                  // matched by name) onto the new customer record.
+                  const wfQuotes = (db.quotes || []).filter(
+                    (q) =>
+                      q.id === conversionWorkflow.quoteId ||
+                      (q.party && q.party.trim().toLowerCase() === prospect.name.trim().toLowerCase())
+                  );
+                  for (const q of wfQuotes) {
+                    await supabaseREST("PATCH", `quotes?id=eq.${q.id}`, { customer_id: savedCustomerRow.id });
+                  }
+
                   // Update local state
                   update((next) => {
                     // Add customer
@@ -6873,6 +6884,10 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
                     // Mark prospect converted (kept, not removed)
                     const target = next.crm.find((p) => p.id === conversionWorkflow.prospectId);
                     if (target) target.currentStatus = "converted";
+                    wfQuotes.forEach((wq) => {
+                      const qt = next.quotes.find((q) => q.id === wq.id);
+                      if (qt) qt.customerId = savedCustomerRow.id;
+                    });
                   });
                   showToast(`${conversionWorkflow.prospectName} converted to customer`);
                 } catch (err) {
@@ -7883,7 +7898,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
     if (!name || !db) return null;
     const n = name.trim().toLowerCase();
     if (!n) return null;
-    const prospect = (db.crm || []).find((p) => p.name.toLowerCase() === n);
+    const prospect = (db.crm || []).find((p) => p.name.toLowerCase() === n && !isConvertedProspect(p));
     if (prospect) return { type: "prospect", id: prospect.id };
     const customer = (db.customers || []).find((c) => c.name.toLowerCase() === n);
     if (customer) return { type: "customer", id: customer.id };
@@ -8131,7 +8146,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                     {isQuote && (
                       <>
                         {(db.crm || [])
-                          .filter(p => p.name.toLowerCase().includes(party.toLowerCase()))
+                          .filter(p => !isConvertedProspect(p) && p.name.toLowerCase().includes(party.toLowerCase()))
                           .map(p => (
                             <div
                               key={p.id}
@@ -13015,6 +13030,12 @@ const PROSPECT_STAGE_COLORS = {
 // whether Lost/Converted prospects show up in the List view — converting a
 // prospect no longer deletes its record (see convertProspectToCustomer), it's
 // kept and marked "Converted" so historical funnel metrics stay accurate.
+// A prospect that has been converted to a customer is kept only as a historical
+// funnel record. Nothing should link to it, match against it, or revive it —
+// the customer record is the live one.
+function isConvertedProspect(p) {
+  return !!p && (p.currentStatus || "").trim().toLowerCase() === "converted";
+}
 const PROSPECT_KANBAN_COLUMNS = PROSPECT_STAGES.filter((s) => s.key !== "lost" && s.key !== "converted");
 
 // Kanban view of the prospect pipeline. Cards are draggable between columns
@@ -14090,9 +14111,14 @@ function CRMModal({ editing, db, onCancel, onSave, openRecord, onLogActivity, on
   const [attachments, setAttachments] = useState(editing ? editing.attachments || [] : []);
   const [error, setError] = useState("");
 
+  // Once a prospect is converted, its quotes belong to the customer record
+  // (customerId). A converted prospect never lists quotes, and any quote that
+  // already carries a customerId is excluded from the name-match.
   const linkedQuotes =
-    editing && db
-      ? (db.quotes || []).filter((q) => q.party && q.party.trim().toLowerCase() === editing.name.trim().toLowerCase())
+    editing && db && !isConvertedProspect(editing)
+      ? (db.quotes || []).filter(
+          (q) => !q.customerId && q.party && q.party.trim().toLowerCase() === editing.name.trim().toLowerCase()
+        )
       : [];
 
   // Build dropdown options dynamically from all prospects in the database,
