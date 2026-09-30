@@ -7240,6 +7240,26 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
   const discountNum = parseFloat(discount) || 0;
   const total = Math.max(subtotal - discountNum, 0);
 
+  // Consolidated POs: the primary's own `total` only covers its own lines.
+  // The payment schedule (and the Summary tab's Consolidated Total) must work
+  // from the combined AUD total of the primary + every merged-in PO.
+  // The primary uses the live in-editor total; members use their stored total.
+  const isConsolidatedGroup = !isQuote && !isNew && (editing?.consolidatedMemberIds?.length > 0);
+  const consolidatedGroupTotal = (() => {
+    if (!isConsolidatedGroup) return total;
+    const sumMemberLines = (poLines) => (poLines || []).reduce((s, l) => {
+      const qty = Number(l.qty || l.quantity || 1);
+      const price = Number(l.price || l.unitPrice || 0);
+      return s + (Number(l.amount || 0) || qty * price);
+    }, 0);
+    const memberTotal = (db.pos || [])
+      .filter((p) => (editing.consolidatedMemberIds || []).includes(p.id))
+      .reduce((s, p) => s + (parseFloat(p.total) || sumMemberLines(p.lines)), 0);
+    return Math.round((total + memberTotal) * 100) / 100;
+  })();
+  // What the payment schedule should add up to
+  const scheduleTarget = isConsolidatedGroup ? consolidatedGroupTotal : total;
+
   // Gross profit %: (AUD sell total - AUD cost total) / AUD sell total, using only lines with a known cost.
   const costEntries = lines.map(lineAudCost);
   const knownCostTotal = costEntries.reduce((s, c) => s + (c || 0), 0);
@@ -8404,7 +8424,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                 size="sm"
                 onClick={() => {
                   const scheduled = paymentMilestones.reduce((s, m) => s + (parseFloat(m.amount) || 0), 0);
-                  const remaining = Math.round((total - scheduled) * 100) / 100;
+                  const remaining = Math.round((scheduleTarget - scheduled) * 100) / 100;
                   setPaymentMilestones([...paymentMilestones, { due: "", amount: remaining > 0 ? remaining : "", paid: false, paidDate: "" }]);
                 }}
               >
@@ -8515,6 +8535,24 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                     </span>
                   </div>
                 )}
+                {isConsolidatedGroup && (() => {
+                  const scheduled = paymentMilestones.reduce((s, m) => s + (parseFloat(m.amount) || 0), 0);
+                  const unscheduled = Math.round((scheduleTarget - scheduled) * 100) / 100;
+                  return (
+                    <div style={{ fontSize: 11, color: "#8a7a66", padding: "4px 0 0" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between" }}>
+                        <span>Consolidated total (all POs)</span>
+                        <span>{fmtMoney(scheduleTarget, "AUD")}</span>
+                      </div>
+                      {Math.abs(unscheduled) >= 0.005 && (
+                        <div style={{ display: "flex", justifyContent: "space-between", color: unscheduled < 0 ? "#a3442e" : "#8a7a66", fontWeight: 600 }}>
+                          <span>{unscheduled < 0 ? "Over-scheduled by" : "Still to schedule"}</span>
+                          <span>{fmtMoney(Math.abs(unscheduled), "AUD")}</span>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
               </>
             )}
           </Panel>
@@ -8811,7 +8849,8 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
               return p.subtotal || calculated;
             };
 
-            const groupTotal = allPOs.reduce((s, p) => s + poTotal(p), 0);
+            // Same figure the Payment Schedule panel works from
+            const groupTotal = consolidatedGroupTotal;
 
             // Strip any leading "PO-" prefix so we can format as PO5006/5007, not POPO-5006/PO-5007
             const stripPO = (n) => String(n).replace(/^PO-?/i, "");
@@ -8996,14 +9035,19 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                             </span>
                           </div>
                         ))}
-                        {paymentMilestones.filter(m => m.due || m.amount).length > 1 && (
-                          <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 0 2px", borderTop: "2px solid #b5552b", marginTop: 4 }}>
-                            <span style={{ fontWeight: 600, color: "#4a3527", fontSize: 12 }}>Total</span>
-                            <span style={{ fontWeight: 700, color: "#b5552b", fontSize: 12 }}>
-                              ${Number(paymentMilestones.filter(m => m.amount).reduce((s, m) => s + (parseFloat(m.amount) || 0), 0)).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",")}
-                            </span>
-                          </div>
-                        )}
+                        {(() => {
+                          // No second "Total" here — the Consolidated Total below is the
+                          // single bottom line. Only flag if the schedule doesn't cover it.
+                          const scheduled = paymentMilestones.reduce((s, m) => s + (parseFloat(m.amount) || 0), 0);
+                          const gap = Math.round((groupTotal - scheduled) * 100) / 100;
+                          if (Math.abs(gap) < 0.005) return null;
+                          return (
+                            <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 0 2px", marginTop: 4, fontSize: 11, fontWeight: 600, color: gap < 0 ? "#a3442e" : "#8a7a66" }}>
+                              <span>{gap < 0 ? "Over-scheduled by" : "Not yet scheduled"}</span>
+                              <span>${Math.abs(gap).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ",")}</span>
+                            </div>
+                          );
+                        })()}
                       </div>
                     )}
 
