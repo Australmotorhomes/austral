@@ -14780,7 +14780,7 @@ function getIncomeQuoteMilestones(db) {
       const due = m && m.due ? String(m.due).slice(0, 7) : "";
       if (!due || amount <= 0) return;
       any = true;
-      items.push({ quote: q, customer: cust, month: due, amount });
+      items.push({ quote: q, customer: cust, month: due, amount, paid: !!(m && m.paid) });
     });
     if (any && cust) covered.add(cust);
   });
@@ -14840,6 +14840,7 @@ function getTransactionsForMonth(db, monthKey, brand) {
       customerId: it.customer?.id || q.customerId,
       invoiceNumber: q.quoteNumber || q.number || it.customer?.invoiceNumber || "—",
       amount: it.amount,
+      paid: it.paid,
       product: q.lines?.[0]?.desc || q.lines?.[0]?.description || q.model || it.customer?.product || "—",
       invoiceMonth: it.month,
     });
@@ -14859,6 +14860,7 @@ function getTransactionsForMonth(db, monthKey, brand) {
         customerId: c.id,
         invoiceNumber: c.invoiceNumber || "—",
         amount: parseFloat(inv.amount) || 0,
+        paid: true, // customer-stored payments are recorded receipts
         product: c.product || "—",
         invoiceMonth: inv.invoiceMonth,
       });
@@ -15920,6 +15922,7 @@ function DashboardTab({ db, setTab, openRecord, onCreateTask, onToggleTask }) {
   for (let y = EARLIEST_FY_END; y <= currentFYEnd; y++) defaultColumns.push(y);
   const [columns, setColumns] = React.useState(defaultColumns);
   const [drillDown, setDrillDown] = React.useState(null); // { key: "2026-06", label: "June FY25/26" }
+  const [showPaidSplit, setShowPaidSplit] = React.useState(false);
   const [salesTableCollapsed, setSalesTableCollapsed] = React.useState(true);
   const [depositsTableCollapsed, setDepositsTableCollapsed] = React.useState(true);
   const [showPaidDeposits, setShowPaidDeposits] = React.useState(false);
@@ -17707,12 +17710,18 @@ function DashboardTab({ db, setTab, openRecord, onCreateTask, onToggleTask }) {
           <p style={{ fontSize: 12, color: "#8a7a66", margin: "0 0 16px" }}>
             Individual invoices contributing to this month's total.
           </p>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "#4a3527", margin: "0 0 14px", cursor: "pointer" }}>
+            <input type="checkbox" checked={showPaidSplit} onChange={(e) => setShowPaidSplit(e.target.checked)} />
+            Show paid vs unpaid
+          </label>
           {(() => {
             const allRows = getTransactionsForMonth(db, drillDown.key, drillDown.brand);
             const rows = drillDown.filterCustomer
               ? allRows.filter(r => r.customerName === drillDown.filterCustomer)
               : allRows;
             const total = rows.reduce((s, r) => s + r.amount, 0);
+            const paidTotal = rows.reduce((s, r) => s + (r.paid ? r.amount : 0), 0);
+            const unpaidTotal = total - paidTotal;
             if (rows.length === 0) {
               return <p className="muted" style={{ fontSize: 13 }}>No transactions found for this month.</p>;
             }
@@ -17726,6 +17735,7 @@ function DashboardTab({ db, setTab, openRecord, onCreateTask, onToggleTask }) {
                         <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11, color: "#6b5240" }}>Invoice #</th>
                         <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11, color: "#6b5240" }}>Product</th>
                         <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11, color: "#6b5240" }}>Date</th>
+                        {showPaidSplit && <th style={{ textAlign: "left", padding: "6px 8px", fontSize: 11, color: "#6b5240" }}>Status</th>}
                         <th style={{ textAlign: "right", padding: "6px 8px", fontSize: 11, color: "#6b5240" }}>Amount</th>
                       </tr>
                     </thead>
@@ -17736,6 +17746,9 @@ function DashboardTab({ db, setTab, openRecord, onCreateTask, onToggleTask }) {
                           <td style={{ padding: "8px", color: "#4a3527" }}>{r.invoiceNumber}</td>
                           <td style={{ padding: "8px", color: "#4a3527" }}>{r.product}</td>
                           <td style={{ padding: "8px", color: "#4a3527" }}>{r.invoiceMonth}</td>
+                          {showPaidSplit && (
+                            <td style={{ padding: "8px", fontWeight: 600, color: r.paid ? "#2e7d32" : "#b5552b" }}>{r.paid ? "Paid" : "Unpaid"}</td>
+                          )}
                           <td style={{ padding: "8px", color: "#4a3527", textAlign: "right", fontWeight: 600 }}>
                             ${r.amount.toLocaleString()}
                           </td>
@@ -17744,9 +17757,21 @@ function DashboardTab({ db, setTab, openRecord, onCreateTask, onToggleTask }) {
                     </tbody>
                     <tfoot>
                       <tr style={{ borderTop: "2px solid #b5552b", fontWeight: 700 }}>
-                        <td colSpan={4} style={{ padding: "10px 8px", color: "#4a3527" }}>Total</td>
+                        <td colSpan={showPaidSplit ? 5 : 4} style={{ padding: "10px 8px", color: "#4a3527" }}>Total</td>
                         <td style={{ padding: "10px 8px", color: "#4a3527", textAlign: "right" }}>${total.toLocaleString()}</td>
                       </tr>
+                      {showPaidSplit && (
+                        <>
+                          <tr style={{ fontWeight: 600 }}>
+                            <td colSpan={5} style={{ padding: "6px 8px", color: "#2e7d32" }}>Paid</td>
+                            <td style={{ padding: "6px 8px", color: "#2e7d32", textAlign: "right" }}>${paidTotal.toLocaleString()}</td>
+                          </tr>
+                          <tr style={{ fontWeight: 600 }}>
+                            <td colSpan={5} style={{ padding: "6px 8px", color: "#b5552b" }}>Unpaid</td>
+                            <td style={{ padding: "6px 8px", color: "#b5552b", textAlign: "right" }}>${unpaidTotal.toLocaleString()}</td>
+                          </tr>
+                        </>
+                      )}
                     </tfoot>
                   </table>
                 </div>
