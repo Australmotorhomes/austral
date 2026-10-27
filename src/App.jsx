@@ -14793,7 +14793,11 @@ function getIncomeQuoteMilestones(db) {
 function calculatePeriodSales(db, startDate, endDate, status, brand) {
   const { items, covered, customers } = getIncomeQuoteMilestones(db);
   const monthTotals = {};
-  const add = (key, amt) => { monthTotals[key] = (monthTotals[key] || 0) + amt; };
+  const monthPaid = {};
+  const add = (key, amt, paid) => {
+    monthTotals[key] = (monthTotals[key] || 0) + amt;
+    if (paid) monthPaid[key] = (monthPaid[key] || 0) + amt;
+  };
   items.forEach((it) => {
     if (!isInDateRange(it.month, startDate, endDate)) return;
     if (brand) {
@@ -14801,7 +14805,7 @@ function calculatePeriodSales(db, startDate, endDate, status, brand) {
       if (brand === "AM" && isAustral !== true) return;
       if (brand === "PP" && isAustral !== false) return;
     }
-    add(it.month, it.amount);
+    add(it.month, it.amount, it.paid);
   });
   customers.forEach((c) => {
     if (covered.has(c)) return;
@@ -14815,11 +14819,12 @@ function calculatePeriodSales(db, startDate, endDate, status, brand) {
     }
     getCustomerInvoicesForCalc(c).forEach((inv) => {
       if (!inv || !inv.invoiceMonth) return;
-      if (isInDateRange(inv.invoiceMonth, startDate, endDate)) add(inv.invoiceMonth.slice(0, 7), parseFloat(inv.amount) || 0);
+      if (isInDateRange(inv.invoiceMonth, startDate, endDate)) add(inv.invoiceMonth.slice(0, 7), parseFloat(inv.amount) || 0, true); // stored customer payments count as paid
     });
   });
   const periodTotal = Object.values(monthTotals).reduce((t, v) => t + v, 0);
-  return { monthTotals, periodTotal };
+  const periodPaid = Object.values(monthPaid).reduce((t, v) => t + v, 0);
+  return { monthTotals, monthPaid, periodTotal, periodPaid };
 }
 
 // Companion to calculatePeriodSales: transaction-level rows for one YYYY-MM
@@ -15922,7 +15927,7 @@ function DashboardTab({ db, setTab, openRecord, onCreateTask, onToggleTask }) {
   for (let y = EARLIEST_FY_END; y <= currentFYEnd; y++) defaultColumns.push(y);
   const [columns, setColumns] = React.useState(defaultColumns);
   const [drillDown, setDrillDown] = React.useState(null); // { key: "2026-06", label: "June FY25/26" }
-  const [showPaidSplit, setShowPaidSplit] = React.useState(false);
+  const [paidFilter, setPaidFilter] = React.useState("all"); // "all" | "paid" | "unpaid"
   const [salesTableCollapsed, setSalesTableCollapsed] = React.useState(true);
   const [depositsTableCollapsed, setDepositsTableCollapsed] = React.useState(true);
   const [showPaidDeposits, setShowPaidDeposits] = React.useState(false);
@@ -17166,6 +17171,16 @@ function DashboardTab({ db, setTab, openRecord, onCreateTask, onToggleTask }) {
                 });
                 const depositGrandTotal = Object.values(depositMonthTotals).reduce((s, v) => s + v, 0);
 
+                // Amount to show for a month/period given the Paid/Unpaid/All switch.
+                const pick = (res, key) => {
+                  const total = key == null ? res.periodTotal : res.monthTotals[key];
+                  const paid = key == null ? res.periodPaid : res.monthPaid[key];
+                  if (!total) return 0;
+                  if (paidFilter === "paid") return paid || 0;
+                  if (paidFilter === "unpaid") return Math.round((total - (paid || 0)) * 100) / 100;
+                  return total;
+                };
+
                 return (
                   <>
                     {/* ── Income / Sales table ── */}
@@ -17182,6 +17197,24 @@ function DashboardTab({ db, setTab, openRecord, onCreateTask, onToggleTask }) {
                     {!salesTableCollapsed && (
                       <>
                         <p style={{ fontSize: 11, color: "#8a7a66", margin: "0 0 10px" }}>Click any monthly total to see the individual transactions behind it. <strong>AM</strong> = Austral Motorhomes (campers), <strong>PP</strong> = Platinum Pontoons (boats).</p>
+                        <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "0 0 10px", flexWrap: "wrap" }}>
+                          <div role="group" aria-label="Show paid or unpaid amounts" style={{ display: "inline-flex", border: "1px solid #d4a574", borderRadius: 6, overflow: "hidden" }}>
+                            {[["all", "All"], ["paid", "Paid"], ["unpaid", "Unpaid"]].map(([val, lbl]) => (
+                              <button
+                                key={val}
+                                type="button"
+                                onClick={() => setPaidFilter(val)}
+                                aria-pressed={paidFilter === val}
+                                style={{ fontSize: 12, padding: "4px 14px", border: "none", cursor: "pointer", background: paidFilter === val ? "#b5552b" : "#fff", color: paidFilter === val ? "#fff" : "#6b5240", fontWeight: paidFilter === val ? 700 : 500 }}
+                              >
+                                {lbl}
+                              </button>
+                            ))}
+                          </div>
+                          <span style={{ fontSize: 11, color: "#8a7a66" }}>
+                            {paidFilter === "paid" ? "Showing only amounts already received (paid milestones)." : paidFilter === "unpaid" ? "Showing only amounts still to be paid (unpaid milestones)." : "Showing all scheduled amounts, paid and unpaid."}
+                          </span>
+                        </div>
                         <div style={{ overflowX: "auto", marginBottom: unmatchedBrandCustomers.length ? 8 : 32, WebkitOverflowScrolling: "touch" }}>
                           <table style={{ width: "100%", minWidth: 360 + periodData.length * 150, borderCollapse: "collapse", background: "#fff", borderRadius: 6, overflow: "hidden", border: "1px solid #e3d8c6" }}>
                             <thead>
@@ -17211,8 +17244,8 @@ function DashboardTab({ db, setTab, openRecord, onCreateTask, onToggleTask }) {
                                       const fyEndYear = columns[i];
                                       const calYear = monthNum >= 7 ? fyEndYear - 1 : fyEndYear;
                                       const key = `${calYear}-${String(monthNum).padStart(2, '0')}`;
-                                      const amVal = pd.am.monthTotals[key];
-                                      const ppVal = pd.pp.monthTotals[key];
+                                      const amVal = pick(pd.am, key);
+                                      const ppVal = pick(pd.pp, key);
                                       const cellStyle = (val) => ({
                                         ...tdStyle,
                                         borderLeft: "2px solid #e3d8c6",
@@ -17246,10 +17279,10 @@ function DashboardTab({ db, setTab, openRecord, onCreateTask, onToggleTask }) {
                                 {periodData.map((pd, i) => (
                                   <React.Fragment key={i}>
                                     <td style={{ ...tdStyle, borderLeft: "2px solid #e3d8c6", color: "#b5552b", fontWeight: 700 }}>
-                                      ${pd.am.periodTotal.toLocaleString()}
+                                      ${pick(pd.am).toLocaleString()}
                                     </td>
                                     <td style={{ ...tdStyle, borderLeft: "1px solid #f0e8d9", color: "#b5552b", fontWeight: 700 }}>
-                                      ${pd.pp.periodTotal.toLocaleString()}
+                                      ${pick(pd.pp).toLocaleString()}
                                     </td>
                                   </React.Fragment>
                                 ))}
@@ -17710,15 +17743,20 @@ function DashboardTab({ db, setTab, openRecord, onCreateTask, onToggleTask }) {
           <p style={{ fontSize: 12, color: "#8a7a66", margin: "0 0 16px" }}>
             Individual invoices contributing to this month's total.
           </p>
-          <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13, color: "#4a3527", margin: "0 0 14px", cursor: "pointer" }}>
-            <input type="checkbox" checked={showPaidSplit} onChange={(e) => setShowPaidSplit(e.target.checked)} />
-            Show paid vs unpaid
-          </label>
+          {paidFilter !== "all" && (
+            <p style={{ fontSize: 12, color: "#b5552b", margin: "0 0 12px" }}>
+              Showing {paidFilter} amounts only (change this with the All / Paid / Unpaid switch on the table).
+            </p>
+          )}
           {(() => {
             const allRows = getTransactionsForMonth(db, drillDown.key, drillDown.brand);
-            const rows = drillDown.filterCustomer
+            const byCustomer = drillDown.filterCustomer
               ? allRows.filter(r => r.customerName === drillDown.filterCustomer)
               : allRows;
+            const rows = paidFilter === "paid" ? byCustomer.filter(r => r.paid)
+              : paidFilter === "unpaid" ? byCustomer.filter(r => !r.paid)
+              : byCustomer;
+            const showPaidSplit = true; // Status column + paid/unpaid subtotals always shown in the pop-up
             const total = rows.reduce((s, r) => s + r.amount, 0);
             const paidTotal = rows.reduce((s, r) => s + (r.paid ? r.amount : 0), 0);
             const unpaidTotal = total - paidTotal;
