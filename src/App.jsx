@@ -12780,7 +12780,7 @@ function ContactModal({ kind, editing, onCancel, onSave, onCreateQuote, onConver
               </select>
             </Field>
           </div>
-          <div style={{ marginBottom: 8 }}>
+          <div style={{ marginBottom: 8, display: "none" }} aria-hidden="true">
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
               <p style={{ fontSize: 12, fontWeight: 600, color: "#6b5240", margin: 0 }}>Payment schedule</p>
               <button
@@ -14750,54 +14750,64 @@ function dedupeCustomerRows(customers) {
   return result;
 }
 
-// brand: optional "AM" (Austral Motorhomes / campers) or "PP" (Platinum
-// Pontoons / boats) to restrict the total to just that business. Customers
-// whose product doesn't match any known model keyword (matchSalesModel
-// returns null) are excluded from both brand-filtered totals — they're
-// surfaced separately via unmatchedBrandRows so nothing silently vanishes.
-function calculatePeriodSales(customers, startDate, endDate, status, brand) {
-  customers = dedupeCustomerRows(customers);
-  const filtered = customers.filter((c) => {
-    const hasInvoices = Array.isArray(c.invoices) && c.invoices.length > 0;
-    const hasLegacyInvoice = getCustomerInvoicesForCalc(c).length > (hasInvoices ? c.invoices.length : 0);
-    if (!hasInvoices && !hasLegacyInvoice) return false;
-    const s = (c.status || "").trim();
-    if (status) { if (s !== status.trim()) return false; }
-    else if (s.toLowerCase() === "canceled") return false;
-    if (brand) {
-      const isAustral = isAustralCustomerProduct(c);
-      if (brand === "AM" && isAustral !== true) return false;
-      if (brand === "PP" && isAustral !== false) return false;
+// ---- Dashboard Income / Sales source ----
+// Income now comes from the ORDER (quote) payment schedules: every milestone
+// (paid or unpaid) on an Accepted or Delivered quote, bucketed by the month of
+// its due date. Customers that have NO usable quote schedule (e.g. bulk-imported
+// FY23-FY26 history) fall back to their own stored payments so they don't vanish.
+function getIncomeQuoteMilestones(db) {
+  const customers = dedupeCustomerRows(db.customers || []);
+  const quotes = (db.quotes || []).filter((q) => q && (q.status === "Accepted" || q.status === "Delivered"));
+  const findCustomer = (q) => {
+    let c = q.customerId ? customers.find((x) => x.id && x.id === q.customerId) : null;
+    if (!c) {
+      const n = normalizeSalesName(q.party || q.customer || "");
+      if (n) c = customers.find((x) => normalizeSalesName(x.name) === n);
     }
-    return true;
-  });
-  const monthTotals = {};
-  filtered.forEach((c) => {
-    getCustomerInvoicesForCalc(c).forEach((inv) => {
-      if (!inv || !inv.invoiceMonth) return;
-      if (isInDateRange(inv.invoiceMonth, startDate, endDate)) {
-        const key = inv.invoiceMonth.slice(0, 7);
-        if (!monthTotals[key]) monthTotals[key] = 0;
-        monthTotals[key] += parseFloat(inv.amount) || 0;
-      }
+    return c || null;
+  };
+  const items = [];          // {quote, customer, due, amount}
+  const covered = new Set(); // customer ids/objects that have a usable quote schedule
+  quotes.forEach((q) => {
+    const cust = findCustomer(q);
+    if (cust && (cust.status || "").trim().toLowerCase() === "canceled") {
+      covered.add(cust); // cancelled customer: don't count quote or fallback
+      return;
+    }
+    let any = false;
+    (q.paymentMilestones || []).forEach((m) => {
+      const amount = parseFloat(m && m.amount) || 0;
+      const due = m && m.due ? String(m.due).slice(0, 7) : "";
+      if (!due || amount <= 0) return;
+      any = true;
+      items.push({ quote: q, customer: cust, month: due, amount });
     });
+    if (any && cust) covered.add(cust);
   });
-  const periodTotal = Object.values(monthTotals).reduce((s, v) => s + v, 0);
-  return { monthTotals, periodTotal };
+  return { items, covered, customers };
 }
 
-// Companion to calculatePeriodSales: returns individual transaction-level detail
-// for a single YYYY-MM month, for the "click a monthly total to drill down" view.
-// Each row uses the customer's invoiceNumber (customers have one invoice number
-// covering potentially multiple payments — there is no separate per-payment
-// invoice number in the current data model, confirmed by the Payment Schedule
-// editor's fields, which are just amount + month, not a place to enter a
-// distinct invoice number per payment).
-function getTransactionsForMonth(customers, monthKey, brand) {
-  const rows = [];
-  (dedupeCustomerRows(customers) || []).forEach((c) => {
-    const s = (c.status || "").trim().toLowerCase();
-    if (s === "canceled") return;
+// brand: optional "AM" (Austral Motorhomes / campers) or "PP" (Platinum
+// Pontoons / boats). Items whose product can't be matched are excluded from
+// brand-filtered totals (surfaced via a note on the dashboard).
+function calculatePeriodSales(db, startDate, endDate, status, brand) {
+  const { items, covered, customers } = getIncomeQuoteMilestones(db);
+  const monthTotals = {};
+  const add = (key, amt) => { monthTotals[key] = (monthTotals[key] || 0) + amt; };
+  items.forEach((it) => {
+    if (!isInDateRange(it.month, startDate, endDate)) return;
+    if (brand) {
+      const isAustral = isAustralQuoteProduct(it.quote, db);
+      if (brand === "AM" && isAustral !== true) return;
+      if (brand === "PP" && isAustral !== false) return;
+    }
+    add(it.month, it.amount);
+  });
+  customers.forEach((c) => {
+    if (covered.has(c)) return;
+    const s = (c.status || "").trim();
+    if (status) { if (s !== status.trim()) return; }
+    else if (s.toLowerCase() === "canceled") return;
     if (brand) {
       const isAustral = isAustralCustomerProduct(c);
       if (brand === "AM" && isAustral !== true) return;
@@ -14805,7 +14815,45 @@ function getTransactionsForMonth(customers, monthKey, brand) {
     }
     getCustomerInvoicesForCalc(c).forEach((inv) => {
       if (!inv || !inv.invoiceMonth) return;
-      if (inv.invoiceMonth.slice(0, 7) !== monthKey) return;
+      if (isInDateRange(inv.invoiceMonth, startDate, endDate)) add(inv.invoiceMonth.slice(0, 7), parseFloat(inv.amount) || 0);
+    });
+  });
+  const periodTotal = Object.values(monthTotals).reduce((t, v) => t + v, 0);
+  return { monthTotals, periodTotal };
+}
+
+// Companion to calculatePeriodSales: transaction-level rows for one YYYY-MM
+// month (drill-down view). Quote milestones first; customer fallback otherwise.
+function getTransactionsForMonth(db, monthKey, brand) {
+  const rows = [];
+  const { items, covered, customers } = getIncomeQuoteMilestones(db);
+  items.forEach((it) => {
+    if (it.month !== monthKey) return;
+    if (brand) {
+      const isAustral = isAustralQuoteProduct(it.quote, db);
+      if (brand === "AM" && isAustral !== true) return;
+      if (brand === "PP" && isAustral !== false) return;
+    }
+    const q = it.quote;
+    rows.push({
+      customerName: it.customer?.name || q.party || q.customer || "—",
+      customerId: it.customer?.id || q.customerId,
+      invoiceNumber: q.quoteNumber || q.number || it.customer?.invoiceNumber || "—",
+      amount: it.amount,
+      product: q.lines?.[0]?.desc || q.lines?.[0]?.description || q.model || it.customer?.product || "—",
+      invoiceMonth: it.month,
+    });
+  });
+  customers.forEach((c) => {
+    if (covered.has(c)) return;
+    if ((c.status || "").trim().toLowerCase() === "canceled") return;
+    if (brand) {
+      const isAustral = isAustralCustomerProduct(c);
+      if (brand === "AM" && isAustral !== true) return;
+      if (brand === "PP" && isAustral !== false) return;
+    }
+    getCustomerInvoicesForCalc(c).forEach((inv) => {
+      if (!inv || !inv.invoiceMonth || inv.invoiceMonth.slice(0, 7) !== monthKey) return;
       rows.push({
         customerName: c.name,
         customerId: c.id,
@@ -14816,7 +14864,7 @@ function getTransactionsForMonth(customers, monthKey, brand) {
       });
     });
   });
-  return rows.sort((a, b) => (a.customerName || "").localeCompare(b.customerName || ""));
+  return rows.sort((x, y) => (x.customerName || "").localeCompare(y.customerName || ""));
 }
 
 // Helper: Count distinct products sold in period
@@ -16375,8 +16423,8 @@ function DashboardTab({ db, setTab, openRecord, onCreateTask, onToggleTask }) {
             <div style={{ display: "flex", gap: 10, overflowX: "auto", paddingBottom: 8 }}>
               {columns.map(fyEnd => {
                 const { start, end, label } = getFYRange(fyEnd);
-                const amIncome = calculatePeriodSales(db.customers || [], start, end, undefined, "AM");
-                const ppIncome = calculatePeriodSales(db.customers || [], start, end, undefined, "PP");
+                const amIncome = calculatePeriodSales(db, start, end, undefined, "AM");
+                const ppIncome = calculatePeriodSales(db, start, end, undefined, "PP");
                 const fyQuotes = (db.quotes || []).filter(q => (q.date || "").slice(0,10) >= start && (q.date || "").slice(0,10) <= end);
                 const acc = fyQuotes.filter(q => q.status === "Accepted" || q.status === "Delivered");
                 return (
@@ -17045,8 +17093,8 @@ function DashboardTab({ db, setTab, openRecord, onCreateTask, onToggleTask }) {
 
                 const periodData = periods.map(period => ({
                   ...period,
-                  am: calculatePeriodSales(db.customers || [], period.start, period.end, undefined, "AM"),
-                  pp: calculatePeriodSales(db.customers || [], period.start, period.end, undefined, "PP"),
+                  am: calculatePeriodSales(db, period.start, period.end, undefined, "AM"),
+                  pp: calculatePeriodSales(db, period.start, period.end, undefined, "PP"),
                 }));
 
                 // Customers whose product doesn't match any known AM/PP keyword (see
@@ -17056,15 +17104,23 @@ function DashboardTab({ db, setTab, openRecord, onCreateTask, onToggleTask }) {
                 // the same way unmatched products are surfaced on Sales by Model.
                 const overallRangeStart = periods.reduce((min, p) => !min || p.start < min ? p.start : min, null);
                 const overallRangeEnd = periods.reduce((max, p) => !max || p.end > max ? p.end : max, null);
-                const unmatchedBrandCustomers = overallRangeStart
-                  ? dedupeCustomerRows(db.customers || []).filter((c) => {
-                      if ((c.status || "").trim().toLowerCase() === "canceled") return false;
-                      if (isAustralCustomerProduct(c) !== null) return false;
-                      return getCustomerInvoicesForCalc(c).some(
-                        (inv) => inv && inv.invoiceMonth && isInDateRange(inv.invoiceMonth, overallRangeStart, overallRangeEnd)
-                      );
-                    })
-                  : [];
+                const unmatchedBrandCustomers = (() => {
+                  if (!overallRangeStart) return [];
+                  const { items, covered, customers } = getIncomeQuoteMilestones(db);
+                  const names = new Set();
+                  items.forEach((it) => {
+                    if (isAustralQuoteProduct(it.quote, db) !== null) return;
+                    if (!isInDateRange(it.month, overallRangeStart, overallRangeEnd)) return;
+                    names.add(it.quote.id || it.quote.number || it.quote.party);
+                  });
+                  customers.forEach((c) => {
+                    if (covered.has(c)) return;
+                    if ((c.status || "").trim().toLowerCase() === "canceled") return;
+                    if (isAustralCustomerProduct(c) !== null) return;
+                    if (getCustomerInvoicesForCalc(c).some((inv) => inv && inv.invoiceMonth && isInDateRange(inv.invoiceMonth, overallRangeStart, overallRangeEnd))) names.add(c.id || c.name);
+                  });
+                  return Array.from(names);
+                })();
 
                 // ---- Build "Deposits Received + Forecast" table data ----
                 // Source: Quote payment schedules (milestones with a due date and amount)
@@ -17200,7 +17256,7 @@ function DashboardTab({ db, setTab, openRecord, onCreateTask, onToggleTask }) {
                         </div>
                         {unmatchedBrandCustomers.length > 0 && (
                           <p style={{ fontSize: 11, color: "#a06a3f", margin: "0 0 32px" }}>
-                            {unmatchedBrandCustomers.length} customer{unmatchedBrandCustomers.length > 1 ? "s" : ""} with a payment in the FYs shown couldn't be matched to a Campo/Scout/Savanna (AM) or Pontoon Boat (PP) product, so {unmatchedBrandCustomers.length > 1 ? "they're" : "it's"} excluded from both columns above. Open the customer record and check the Product field to have it counted.
+                            {unmatchedBrandCustomers.length} order/customer{unmatchedBrandCustomers.length > 1 ? "s" : ""} with a payment in the FYs shown couldn't be matched to a Campo/Scout/Savanna (AM) or Pontoon Boat (PP) product, so {unmatchedBrandCustomers.length > 1 ? "they're" : "it's"} excluded from both columns above. Check the order line description or the customer's Product field to have it counted.
                           </p>
                         )}
                       </>
@@ -17652,7 +17708,7 @@ function DashboardTab({ db, setTab, openRecord, onCreateTask, onToggleTask }) {
             Individual invoices contributing to this month's total.
           </p>
           {(() => {
-            const allRows = getTransactionsForMonth(db.customers, drillDown.key, drillDown.brand);
+            const allRows = getTransactionsForMonth(db, drillDown.key, drillDown.brand);
             const rows = drillDown.filterCustomer
               ? allRows.filter(r => r.customerName === drillDown.filterCustomer)
               : allRows;
