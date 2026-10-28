@@ -7315,7 +7315,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
   }
   function addItemToLines(item) {
     const defaultPrice = isQuote ? (item.sellPrice != null ? item.sellPrice : calcSellPrice(item.cost)) : item.cost;
-    const newLine = { desc: `${item.model} — ${item.name}`, qty: 1, price: defaultPrice, currency: item.currency || "AUD", itemId: item.id, cost: item.cost || 0, lineNote: item.itemDescription || "" };
+    const newLine = { desc: item.name, qty: 1, price: defaultPrice, currency: item.currency || "AUD", itemId: item.id, cost: item.cost || 0, lineNote: item.itemDescription || "" };
     if (lineItemsPoId) {
       // A member PO tab is active — add to that PO's own lines, not the primary's
       setMLinesState((prev) => [...prev, newLine]);
@@ -7348,7 +7348,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
   function handleQuickAddItem(payload) {
     onAddItem(payload, (newItem) => {
       const defaultPrice = isQuote ? (newItem.sellPrice != null ? newItem.sellPrice : calcSellPrice(newItem.cost)) : newItem.cost;
-      const newLine = { desc: `${newItem.model} — ${newItem.name}`, qty: 1, price: defaultPrice, currency: newItem.currency || "AUD", itemId: newItem.id, cost: newItem.cost || 0, lineNote: newItem.itemDescription || "" };
+      const newLine = { desc: newItem.name, qty: 1, price: defaultPrice, currency: newItem.currency || "AUD", itemId: newItem.id, cost: newItem.cost || 0, lineNote: newItem.itemDescription || "" };
       if (lineItemsPoId) {
         setMLinesState((prev) => [...prev, newLine]);
         setMLinesDirty(true);
@@ -7382,7 +7382,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
   function addItemToHiddenCosts(item) {
     setHiddenCosts((prev) => [
       ...prev,
-      { desc: `${item.model} — ${item.name}`, qty: 1, cost: item.cost || 0, currency: item.currency || "AUD", supplierName: item.supplier || "", itemId: item.id },
+      { desc: item.name, qty: 1, cost: item.cost || 0, currency: item.currency || "AUD", supplierName: item.supplier || "", itemId: item.id },
     ]);
     // Deliberately not closing the picker here — PriceBookSearchModal is
     // designed for adding several items in a row (it shows a brief "Added ✓"
@@ -7420,7 +7420,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
     }
     groupItems.forEach((item) => {
       const defaultPrice = isQuote ? (item.sellPrice != null ? item.sellPrice : calcSellPrice(item.cost)) : item.cost;
-      setMLinesState((prev) => [...prev, { desc: `${item.model} — ${item.name}`, qty: 1, price: defaultPrice, currency: item.currency || "AUD", itemId: item.id }]);
+      setMLinesState((prev) => [...prev, { desc: item.name, qty: 1, price: defaultPrice, currency: item.currency || "AUD", itemId: item.id }]);
     });
     setMLinesDirty(true);
     showToast(`Added ${groupItems.length} item${groupItems.length !== 1 ? "s" : ""} from group`);
@@ -11280,7 +11280,8 @@ function CustomerKanbanBoard({ list, onOpen, onMove, onDelete, showCanceled, db 
                 )}
                 {cards.map((c) => {
                   const value = customerValue(c);
-                  const lastPaymentMonth = getLastPaymentMonth(c);
+                  const quoteFinalPayment = getCustomerFinalPaymentDate(c, db);
+                  const lastPaymentMonth = quoteFinalPayment ? quoteFinalPayment.slice(0, 7) : getLastPaymentMonth(c);
                   const warranty = getWarrantyStatus(c, db);
                   return (
                     <div
@@ -11325,7 +11326,7 @@ function CustomerKanbanBoard({ list, onOpen, onMove, onDelete, showCanceled, db 
                       {warranty && (
                         <div style={{ marginTop: 4 }}>
                           <span
-                            title={`${warranty.brand} warranty — ${warranty.years} year${warranty.years > 1 ? "s" : ""} from last payment, expires ${warranty.expiresLabel}`}
+                            title={`${warranty.brand} warranty — ${warranty.years} year${warranty.years > 1 ? "s" : ""} from final payment, expires ${warranty.expiresLabel}`}
                             style={{ background: "#e3ecdc", color: "#5c7a4f", padding: "2px 7px", borderRadius: 999, fontSize: 10, fontWeight: 700 }}
                           >
                             🛡️ Warranty until {warranty.expiresLabel}
@@ -14641,16 +14642,24 @@ function isAustralCustomerProduct(c, db) {
 // window has lapsed (or if there's nothing to base it on) so the pin simply
 // stops appearing on its own — no separate "expire" step needed anywhere.
 function getWarrantyStatus(c, db) {
-  const lastMonth = getLastPaymentMonth(c);
-  if (!lastMonth) return null;
+  // Warranty starts when the final payment on the quote's payment schedule is
+  // received. Customers with no quote schedule (bulk-imported history) fall
+  // back to their own stored payments.
+  let start = getCustomerFinalPaymentDate(c, db);
+  if (!start) {
+    const lastMonth = getLastPaymentMonth(c);
+    if (!lastMonth) return null;
+    start = `${lastMonth}-01`;
+  }
   const isAustral = isAustralCustomerProduct(c, db);
   if (isAustral === null) return null;
   const years = isAustral ? 1 : 2;
-  const [y, m] = lastMonth.split("-").map(Number);
-  const expiry = new Date(y, (m - 1) + years * 12, 1);
+  const [y, m, d] = start.slice(0, 10).split("-").map(Number);
+  if (!y || !m) return null;
+  const expiry = new Date(y + years, m - 1, d || 1);
   const now = new Date();
   if (now >= expiry) return null; // lapsed
-  return { brand: isAustral ? "Austral" : "Platinum Pontoons", years, expiresLabel: expiry.toLocaleDateString("en-AU", { month: "short", year: "numeric" }) };
+  return { brand: isAustral ? "Austral" : "Platinum Pontoons", years, expiresLabel: expiry.toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" }) };
 }
 
 // Same brand determination as computeSalesByModel's getModel() — a quote's
@@ -14679,18 +14688,44 @@ function isAustralQuoteProduct(quote, db) {
   return matched !== "Pontoon Boat";
 }
 
-// The most recent date a payment milestone was actually marked paid — the
-// anchor date for camper/boat warranty, per the business rule (365 days for
-// campers, 730 for pontoon boats, from the LAST payment, not from delivery).
-// Falls back to deliveredDate for quotes whose payment schedule predates this
-// field (or has none), so those don't sit un-archivable forever.
+// The date the FINAL payment on the quote's payment schedule was received —
+// the anchor date for camper/boat warranty (365 days for campers, 730 for
+// pontoon boats). Warranty only starts once every milestone is marked paid;
+// until then this returns null (no warranty running, nothing to archive).
+// The date is the latest milestone paidDate (falling back to its due date if
+// the paid date was left blank). Quotes with no payment schedule at all fall
+// back to deliveredDate so they don't sit un-archivable forever.
 function getQuoteLastPaymentDate(quote) {
-  const paidDates = (quote.paymentMilestones || [])
-    .filter((m) => m.paid && m.paidDate)
-    .map((m) => m.paidDate)
+  const milestones = (quote.paymentMilestones || []).filter((m) => m && (parseFloat(m.amount) || 0) > 0);
+  if (!milestones.length) return quote.deliveredDate || null;
+  if (!milestones.every((m) => m.paid)) return null; // final payment not received yet
+  const paidDates = milestones.map((m) => m.paidDate || m.due).filter(Boolean);
+  if (!paidDates.length) return quote.deliveredDate || null;
+  return paidDates.slice().sort().pop();
+}
+
+// Quotes belonging to a customer: linked by customerId, else by normalised
+// name (same matching the income/sales code uses).
+function getCustomerQuotes(c, db) {
+  const cNorm = normalizeSalesName(c.name || "");
+  return (db.quotes || []).filter((q) => {
+    if (!q || (q.status !== "Accepted" && q.status !== "Delivered")) return false;
+    if (q.customerId && c.id && q.customerId === c.id) return true;
+    if (q.customerId) return false;
+    const n = normalizeSalesName(q.party || q.customer || "");
+    return !!n && !!cNorm && n === cNorm;
+  });
+}
+
+// Date (YYYY-MM-DD) the customer's final payment was received, taken from
+// their quotes' payment schedules: the most recent fully-paid schedule's last
+// payment. Null if no quote schedule has been fully paid yet.
+function getCustomerFinalPaymentDate(c, db) {
+  const dates = getCustomerQuotes(c, db)
+    .filter((q) => (q.paymentMilestones || []).some((m) => m && (parseFloat(m.amount) || 0) > 0))
+    .map((q) => getQuoteLastPaymentDate(q))
     .filter(Boolean);
-  if (paidDates.length) return paidDates.slice().sort().pop();
-  return quote.deliveredDate || null;
+  return dates.length ? dates.slice().sort().pop() : null;
 }
 
 // Whether a Delivered quote's warranty window has actually lapsed — 365 days
