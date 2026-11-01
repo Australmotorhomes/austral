@@ -15966,6 +15966,7 @@ function DashboardTab({ db, setTab, openRecord, onCreateTask, onToggleTask }) {
   const [salesTableCollapsed, setSalesTableCollapsed] = React.useState(true);
   const [depositsTableCollapsed, setDepositsTableCollapsed] = React.useState(true);
   const [showPaidDeposits, setShowPaidDeposits] = React.useState(false);
+  const [showMonthlyTotalCol, setShowMonthlyTotalCol] = React.useState(true);
   const [stockTableCollapsed, setStockTableCollapsed] = React.useState(true);
   const [salesDashboardCollapsed, setSalesDashboardCollapsed] = React.useState(false);
   const [shipmentsDueCollapsed, setShipmentsDueCollapsed] = React.useState(true);
@@ -17138,6 +17139,7 @@ function DashboardTab({ db, setTab, openRecord, onCreateTask, onToggleTask }) {
                   ...period,
                   am: calculatePeriodSales(db, period.start, period.end, undefined, "AM"),
                   pp: calculatePeriodSales(db, period.start, period.end, undefined, "PP"),
+                  all: calculatePeriodSales(db, period.start, period.end, undefined),
                 }));
 
                 // Customers whose product doesn't match any known AM/PP keyword (see
@@ -17246,17 +17248,21 @@ function DashboardTab({ db, setTab, openRecord, onCreateTask, onToggleTask }) {
                               </button>
                             ))}
                           </div>
+                          <label style={{ display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, color: "#6b5240", cursor: "pointer" }}>
+                            <input type="checkbox" checked={showMonthlyTotalCol} onChange={e => setShowMonthlyTotalCol(e.target.checked)} />
+                            Show monthly total column
+                          </label>
                           <span style={{ fontSize: 11, color: "#8a7a66" }}>
                             {paidFilter === "paid" ? "Showing only amounts already received (paid milestones)." : paidFilter === "unpaid" ? "Showing only amounts still to be paid (unpaid milestones)." : "Showing all scheduled amounts, paid and unpaid."}
                           </span>
                         </div>
                         <div style={{ overflowX: "auto", marginBottom: unmatchedBrandCustomers.length ? 8 : 32, WebkitOverflowScrolling: "touch" }}>
-                          <table style={{ width: "100%", minWidth: 360 + periodData.length * 150, borderCollapse: "collapse", background: "#fff", borderRadius: 6, overflow: "hidden", border: "1px solid #e3d8c6" }}>
+                          <table style={{ width: "100%", minWidth: 360 + periodData.length * (showMonthlyTotalCol ? 230 : 150), borderCollapse: "collapse", background: "#fff", borderRadius: 6, overflow: "hidden", border: "1px solid #e3d8c6" }}>
                             <thead>
                               <tr style={{ background: "#f0e8d9", borderBottom: "1px solid #e3d8c6" }}>
                                 <th rowSpan={2} style={{ ...thStyle, textAlign: "left", width: 70, verticalAlign: "bottom" }}>Month</th>
                                 {periodData.map((pd, i) => (
-                                  <th key={i} colSpan={2} style={{ ...thStyle, textAlign: "center", color: "#b5552b", borderLeft: "2px solid #e3d8c6" }}>{pd.label}</th>
+                                  <th key={i} colSpan={showMonthlyTotalCol ? 3 : 2} style={{ ...thStyle, textAlign: "center", color: "#b5552b", borderLeft: "2px solid #e3d8c6" }}>{pd.label}</th>
                                 ))}
                               </tr>
                               <tr style={{ background: "#f0e8d9", borderBottom: "2px solid #b5552b" }}>
@@ -17264,6 +17270,7 @@ function DashboardTab({ db, setTab, openRecord, onCreateTask, onToggleTask }) {
                                   <React.Fragment key={i}>
                                     <th style={{ ...thStyle, color: "#6b5240", borderLeft: "2px solid #e3d8c6", fontSize: 11 }}>AM</th>
                                     <th style={{ ...thStyle, color: "#6b5240", fontSize: 11 }}>PP</th>
+                                    {showMonthlyTotalCol && <th style={{ ...thStyle, color: "#6b5240", fontSize: 11, borderLeft: "1px solid #e3d8c6" }}>Total</th>}
                                   </React.Fragment>
                                 ))}
                               </tr>
@@ -17281,6 +17288,7 @@ function DashboardTab({ db, setTab, openRecord, onCreateTask, onToggleTask }) {
                                       const key = `${calYear}-${String(monthNum).padStart(2, '0')}`;
                                       const amVal = pick(pd.am, key);
                                       const ppVal = pick(pd.pp, key);
+                                      const totVal = pick(pd.all, key);
                                       const cellStyle = (val) => ({
                                         ...tdStyle,
                                         borderLeft: "2px solid #e3d8c6",
@@ -17303,6 +17311,14 @@ function DashboardTab({ db, setTab, openRecord, onCreateTask, onToggleTask }) {
                                           >
                                             {ppVal ? `$${ppVal.toLocaleString()}` : "—"}
                                           </td>
+                                          {showMonthlyTotalCol && (
+                                            <td
+                                              onClick={() => totVal && setDrillDown({ key, label: `${mn} ${pd.label} — Total` })}
+                                              style={{ ...cellStyle(totVal), borderLeft: "1px solid #e3d8c6", fontWeight: 700, background: "#faf3ea" }}
+                                            >
+                                              {totVal ? `$${totVal.toLocaleString()}` : "—"}
+                                            </td>
+                                          )}
                                         </React.Fragment>
                                       );
                                     })}
@@ -17319,6 +17335,11 @@ function DashboardTab({ db, setTab, openRecord, onCreateTask, onToggleTask }) {
                                     <td style={{ ...tdStyle, borderLeft: "1px solid #f0e8d9", color: "#b5552b", fontWeight: 700 }}>
                                       ${pick(pd.pp).toLocaleString()}
                                     </td>
+                                    {showMonthlyTotalCol && (
+                                      <td style={{ ...tdStyle, borderLeft: "1px solid #e3d8c6", color: "#b5552b", fontWeight: 700 }}>
+                                        ${pick(pd.all).toLocaleString()}
+                                      </td>
+                                    )}
                                   </React.Fragment>
                                 ))}
                               </tr>
