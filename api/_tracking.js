@@ -18,7 +18,7 @@ const DONE_STATUSES = ["Cancelled", "Received", "Archived"];
 // order, before falling back to predictive_eta.
 // Example shape (NOT confirmed): ["data.route.pod.date"]
 // ---------------------------------------------------------------------------
-const CARRIER_ETA_PATHS = [];
+const CARRIER_ETA_PATHS = ["data.route.pod.date"];
 const PREDICTIVE_ETA_PATH = "data.route.pod.predictive_eta";
 
 function getPath(obj, path) {
@@ -128,9 +128,11 @@ async function fetchActivePOs(extraFilter = "") {
 // Confirms the caller is a signed-in app user (stops strangers spending DataLoop credits).
 async function verifyUser(req) {
   const auth = req.headers.authorization || "";
-  if (!auth.startsWith("Bearer ")) return false;
+  if (!auth.startsWith("Bearer ")) { console.log("verifyUser: no Bearer header"); return false; }
   const anon = process.env.SUPABASE_ANON_KEY || process.env.REACT_APP_SUPABASE_ANON_KEY;
+  console.log("verifyUser: anon key present:", !!anon);
   const r = await fetch(`${SUPABASE_URL}/auth/v1/user`, { headers: { apikey: anon || "", Authorization: auth } });
+  if (!r.ok) console.log("verifyUser: Supabase said", r.status, (await r.text()).slice(0, 200));
   return r.ok;
 }
 
