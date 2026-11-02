@@ -544,6 +544,14 @@ function toSupabaseFormat(data, table) {
         copy.pre_archive_status = copy.preArchiveStatus;
         delete copy.preArchiveStatus;
       }
+      // Shipment tracking (DataLoop). The three user-entered fields are saved normally;
+      // the live_* / tracking_* fields are written ONLY by the server (daily cron / Refresh
+      // button), so the app must never send them back or it could overwrite fresh data.
+      if (copy.shippingLine !== undefined) { copy.shipping_line = copy.shippingLine || null; delete copy.shippingLine; }
+      if (copy.billOfLading !== undefined) { copy.bill_of_lading = copy.billOfLading || null; delete copy.billOfLading; }
+      if (copy.containerNumber !== undefined) { copy.container_number = copy.containerNumber || null; delete copy.containerNumber; }
+      delete copy.liveEta; delete copy.liveEtaSource; delete copy.trackingUpdatedAt;
+      delete copy.trackingStatus; delete copy.trackingError; delete copy.trackingRaw;
       // Strip camelCase timestamps — columns are created_at/updated_at (server defaults)
       delete copy.createdAt;
       delete copy.updatedAt;
@@ -668,6 +676,15 @@ function toSupabaseFormat(data, table) {
       if (copy.hidden_costs !== undefined) { copy.hiddenCosts = copy.hidden_costs; delete copy.hidden_costs; }
       if (copy.supplier_note !== undefined) { copy.supplierNote = copy.supplier_note; delete copy.supplier_note; }
       if (copy.pre_archive_status !== undefined) { copy.preArchiveStatus = copy.pre_archive_status; delete copy.pre_archive_status; }
+      if (copy.shipping_line !== undefined) { copy.shippingLine = copy.shipping_line || ""; delete copy.shipping_line; }
+      if (copy.bill_of_lading !== undefined) { copy.billOfLading = copy.bill_of_lading || ""; delete copy.bill_of_lading; }
+      if (copy.container_number !== undefined) { copy.containerNumber = copy.container_number || ""; delete copy.container_number; }
+      if (copy.live_eta !== undefined) { copy.liveEta = copy.live_eta || ""; delete copy.live_eta; }
+      if (copy.live_eta_source !== undefined) { copy.liveEtaSource = copy.live_eta_source || ""; delete copy.live_eta_source; }
+      if (copy.tracking_updated_at !== undefined) { copy.trackingUpdatedAt = copy.tracking_updated_at || ""; delete copy.tracking_updated_at; }
+      if (copy.tracking_status !== undefined) { copy.trackingStatus = copy.tracking_status || ""; delete copy.tracking_status; }
+      if (copy.tracking_error !== undefined) { copy.trackingError = copy.tracking_error || ""; delete copy.tracking_error; }
+      delete copy.tracking_raw; // large; only used for debugging on the server side
       copy.lines = Array.isArray(copy.lines) ? copy.lines : [];
       copy.hiddenCosts = Array.isArray(copy.hiddenCosts) ? copy.hiddenCosts : [];
       copy.paymentMilestones = Array.isArray(copy.paymentMilestones) ? copy.paymentMilestones : [];
@@ -7054,6 +7071,14 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
   const [eta, setEta] = useState(
     editing?.eta ? editing.eta : ""
   );
+  // Shipment tracking details (International POs) — used by the daily DataLoop lookup.
+  const [shippingLine, setShippingLine] = useState(editing?.shippingLine || "");
+  const [billOfLading, setBillOfLading] = useState(editing?.billOfLading || "");
+  const [containerNumber, setContainerNumber] = useState(editing?.containerNumber || "");
+  // Consolidated PO "Shipment" pop-up (container / B/L for the whole group)
+  const [showShipmentModal, setShowShipmentModal] = useState(false);
+  const [shipDraft, setShipDraft] = useState({ shippingLine: "", billOfLading: "", containerNumber: "" });
+  const [shipSaving, setShipSaving] = useState(false);
   const [ref, setRef] = useState(
     editing?.ref ? editing.ref : ""
   );
@@ -7470,6 +7495,37 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
     } catch (err) {
       showToast("Save failed");
       console.error(err);
+    }
+  }
+
+  // Container / bill of lading for a consolidated shipment. The whole group travels in
+  // one container, so it is stored once on the primary PO (the one being edited); the
+  // Dashboard falls back to it for the member POs. Storing it on every member would make
+  // the daily DataLoop lookup query the same container several times.
+  async function saveGroupShipment() {
+    const vals = {
+      shippingLine: shipDraft.shippingLine.trim(),
+      billOfLading: shipDraft.billOfLading.trim(),
+      containerNumber: shipDraft.containerNumber.trim().toUpperCase(),
+    };
+    setShipSaving(true);
+    try {
+      const payload = toSupabaseFormat({ ...vals, updatedAt: nowISO() }, "purchase_orders");
+      await supabaseRESTWithSchemaFallback("PATCH", `purchase_orders?id=eq.${editing.id}`, payload);
+      update((next) => {
+        const p = (next.pos || []).find((x) => x.id === editing.id);
+        if (p) Object.assign(p, vals);
+      });
+      setShippingLine(vals.shippingLine);
+      setBillOfLading(vals.billOfLading);
+      setContainerNumber(vals.containerNumber);
+      setShowShipmentModal(false);
+      showToast("Shipment details saved");
+    } catch (err) {
+      console.error("Error saving shipment details:", err);
+      showToast("Error saving shipment details");
+    } finally {
+      setShipSaving(false);
     }
   }
 
@@ -7899,6 +7955,11 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
         attachments,
         ...(paymentMilestones.length > 0 && { paymentMilestones }),
         ...(!isQuote && { shippingType }),  // Always include for POs (Domestic/International)
+        ...(!isQuote && {
+          shippingLine: shippingLine.trim(),
+          billOfLading: billOfLading.trim(),
+          containerNumber: containerNumber.trim().toUpperCase(),
+        }),
         ...(!isQuote && customer && { customer }),
         eta,  // Always include ETA for both quotes and POs (persist to Supabase)
         ...(isQuote && { ref: ref.trim(), hiddenCosts }),
@@ -8583,6 +8644,30 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                   </Btn>
                 )}
               </div>
+              {shippingType === "International" && (
+                <div style={{ marginTop: 12 }}>
+                  <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+                    <div style={{ flex: "1 1 160px" }}>
+                      <Field label="Shipping line (SCAC code)">
+                        <input style={inputStyle} type="text" placeholder="e.g. MAEU — blank = auto-detect" value={shippingLine} onChange={(e) => setShippingLine(e.target.value)} />
+                      </Field>
+                    </div>
+                    <div style={{ flex: "1 1 180px" }}>
+                      <Field label="Bill of lading">
+                        <input style={inputStyle} type="text" value={billOfLading} onChange={(e) => setBillOfLading(e.target.value)} />
+                      </Field>
+                    </div>
+                    <div style={{ flex: "1 1 180px" }}>
+                      <Field label="Container number">
+                        <input style={inputStyle} type="text" placeholder="e.g. MAEU1234567" value={containerNumber} onChange={(e) => setContainerNumber(e.target.value)} />
+                      </Field>
+                    </div>
+                  </div>
+                  <p style={{ fontSize: 11, color: "#8a7a66", margin: "0 0 4px" }}>
+                    Used for the daily live-ETA lookup shown on the Dashboard. The container number is tracked if entered, otherwise the bill of lading.
+                  </p>
+                </div>
+              )}
             </Panel>
           )}
 
@@ -8965,6 +9050,16 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                     {consolidatedPONumber} — {allPOs.length} POs
                   </h4>
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <Btn
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => {
+                        setShipDraft({ shippingLine, billOfLading, containerNumber });
+                        setShowShipmentModal(true);
+                      }}
+                    >
+                      🚢 Shipment{(containerNumber || billOfLading) ? " ✓" : ""}
+                    </Btn>
                     <select
                       style={{ ...inputStyle, width: 140 }}
                       value={shippingType}
@@ -8980,6 +9075,32 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                     )}
                   </div>
                 </div>
+
+                {showShipmentModal && (
+                  <Modal onClose={() => setShowShipmentModal(false)} width={460}>
+                    <h3 style={{ fontFamily: "Georgia,serif", fontSize: 16, color: "#4a3527", margin: "0 0 4px" }}>Shipment details</h3>
+                    <p style={{ fontSize: 12, color: "#8a7a66", margin: "0 0 14px" }}>
+                      {consolidatedPONumber} ships as one container. These details are used for the daily live-ETA lookup on the Dashboard.
+                    </p>
+                    <Field label="Shipping line (SCAC code)">
+                      <input style={inputStyle} type="text" placeholder="e.g. MAEU — leave blank to auto-detect" value={shipDraft.shippingLine} onChange={(e) => setShipDraft(d => ({ ...d, shippingLine: e.target.value }))} />
+                    </Field>
+                    <Field label="Bill of lading">
+                      <input style={inputStyle} type="text" value={shipDraft.billOfLading} onChange={(e) => setShipDraft(d => ({ ...d, billOfLading: e.target.value }))} />
+                    </Field>
+                    <Field label="Container number">
+                      <input style={inputStyle} type="text" placeholder="e.g. MAEU1234567" value={shipDraft.containerNumber} onChange={(e) => setShipDraft(d => ({ ...d, containerNumber: e.target.value }))} />
+                    </Field>
+                    <p style={{ fontSize: 11, color: "#8a7a66", margin: "0 0 14px" }}>
+                      The container number is tracked if entered, otherwise the bill of lading.
+                      {editing?.liveEta ? ` Current live ETA: ${new Date(`${String(editing.liveEta).slice(0, 10)}T00:00:00`).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" })}.` : ""}
+                    </p>
+                    <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+                      <Btn variant="secondary" size="sm" onClick={() => setShowShipmentModal(false)}>Cancel</Btn>
+                      <Btn size="sm" onClick={saveGroupShipment} disabled={shipSaving}>{shipSaving ? "Saving…" : "Save"}</Btn>
+                    </div>
+                  </Modal>
+                )}
 
                 {/* Tab bar — works on mobile and desktop */}
                 <div style={{ display: "flex", gap: 4, marginBottom: 14, borderBottom: "2px solid #e3d8c6", flexWrap: "wrap" }}>
@@ -15967,6 +16088,9 @@ function DashboardTab({ db, setTab, openRecord, onCreateTask, onToggleTask }) {
   const [depositsTableCollapsed, setDepositsTableCollapsed] = React.useState(true);
   const [showPaidDeposits, setShowPaidDeposits] = React.useState(false);
   const [showMonthlyTotalCol, setShowMonthlyTotalCol] = React.useState(true);
+  // Live shipment tracking (DataLoop) — results from the Refresh button, layered over what was loaded from the DB
+  const [trackingOverrides, setTrackingOverrides] = React.useState({});
+  const [trackingBusy, setTrackingBusy] = React.useState({});
   const [stockTableCollapsed, setStockTableCollapsed] = React.useState(true);
   const [salesDashboardCollapsed, setSalesDashboardCollapsed] = React.useState(false);
   const [shipmentsDueCollapsed, setShipmentsDueCollapsed] = React.useState(true);
@@ -17648,6 +17772,79 @@ function DashboardTab({ db, setTab, openRecord, onCreateTask, onToggleTask }) {
             return { po, monthPayments };
           });
 
+          // ── Live ETA (DataLoop) ──
+          // Consolidated member POs ship in the lead PO's container, so fall back to the lead's tracking.
+          const trackingFor = (po) => {
+            const own = po.containerNumber || po.billOfLading ? po : null;
+            const lead = own || (db.pos || []).find(p => (p.consolidatedMemberIds || []).includes(po.id) && (p.containerNumber || p.billOfLading));
+            const src = lead || po;
+            const ov = trackingOverrides[src.id] || {};
+            return {
+              leadId: src.id,
+              hasRef: !!(src.containerNumber || src.billOfLading),
+              eta: ov.liveEta !== undefined ? ov.liveEta : src.liveEta,
+              source: ov.liveEtaSource !== undefined ? ov.liveEtaSource : src.liveEtaSource,
+              updatedAt: ov.trackingUpdatedAt || src.trackingUpdatedAt,
+              status: ov.trackingStatus !== undefined ? ov.trackingStatus : src.trackingStatus,
+              error: ov.trackingError !== undefined ? ov.trackingError : src.trackingError,
+            };
+          };
+          const fmtLive = (iso) => {
+            if (!iso) return "";
+            const d = new Date(`${String(iso).slice(0, 10)}T00:00:00`);
+            return isNaN(d) ? String(iso) : d.toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" });
+          };
+          const refreshTracking = async (e, tr) => {
+            if (e) e.stopPropagation();
+            setTrackingBusy(b => ({ ...b, [tr.leadId]: true }));
+            try {
+              const res = await fetch("/api/tracking-refresh", {
+                method: "POST",
+                headers: { "Content-Type": "application/json", ...(_supabaseAuthToken ? { Authorization: `Bearer ${_supabaseAuthToken}` } : {}) },
+                body: JSON.stringify({ poId: tr.leadId }),
+              });
+              const out = await res.json().catch(() => ({}));
+              if (!res.ok) throw new Error(out.error || `HTTP ${res.status}`);
+              const p = out.patch || {};
+              setTrackingOverrides(o => ({ ...o, [tr.leadId]: {
+                ...(p.live_eta ? { liveEta: p.live_eta, liveEtaSource: p.live_eta_source } : {}),
+                trackingUpdatedAt: p.tracking_updated_at, trackingStatus: p.tracking_status || out.status, trackingError: p.tracking_error || "",
+              } }));
+            } catch (err) {
+              setTrackingOverrides(o => ({ ...o, [tr.leadId]: { ...(o[tr.leadId] || {}), trackingStatus: "error", trackingError: String(err.message || err), trackingUpdatedAt: new Date().toISOString() } }));
+            } finally {
+              setTrackingBusy(b => ({ ...b, [tr.leadId]: false }));
+            }
+          };
+          const renderLiveEta = (po) => {
+            const tr = trackingFor(po);
+            if (!tr.hasRef) return <span style={{ color: "#ccc" }} title="Add a container number or bill of lading on the PO to track it">—</span>;
+            const late = tr.eta && po.eta && String(tr.eta).slice(0, 10) > String(po.eta).slice(0, 10);
+            const early = tr.eta && po.eta && String(tr.eta).slice(0, 10) < String(po.eta).slice(0, 10);
+            return (
+              <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <span style={{ fontWeight: 700, color: tr.eta ? (late ? "#b5352b" : early ? "#3d7a3d" : "#4a3527") : "#8a7a66" }}>
+                    {tr.eta ? fmtLive(tr.eta) : tr.status === "error" ? "Lookup failed" : "No ETA yet"}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={(e) => refreshTracking(e, tr)}
+                    disabled={!!trackingBusy[tr.leadId]}
+                    title="Look up the latest ETA now"
+                    style={{ fontSize: 11, padding: "1px 6px", border: "1px solid #d4a574", borderRadius: 4, background: "#fff", color: "#6b5240", cursor: "pointer" }}
+                  >
+                    {trackingBusy[tr.leadId] ? "…" : "↻"}
+                  </button>
+                </div>
+                <div style={{ fontSize: 10, color: tr.status === "error" ? "#b5352b" : "#8a7a66" }}>
+                  {tr.status === "error" && tr.error ? tr.error.slice(0, 60) : (tr.eta ? (tr.source === "predictive" ? "DataLoop estimate" : "Carrier") : "")}
+                  {tr.updatedAt && tr.status !== "error" ? `${tr.eta ? " · " : ""}checked ${fmtLive(tr.updatedAt)}` : ""}
+                </div>
+              </div>
+            );
+          };
+
           const isMobile = window.innerWidth < 768;
 
           if (isMobile) {
@@ -17661,6 +17858,9 @@ function DashboardTab({ db, setTab, openRecord, onCreateTask, onToggleTask }) {
                   >
                     <div style={{ fontWeight: 700, color: "#4a3527", marginBottom: 8 }}>
                       {item.po.party} · {item.po.model || "—"}
+                    </div>
+                    <div style={{ fontSize: 12, marginBottom: 8 }}>
+                      <span style={{ fontSize: 11, color: "#8a7a66", fontWeight: 600 }}>Live ETA </span>{renderLiveEta(item.po)}
                     </div>
                     <div style={{ fontSize: 12, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
                       {months.map((m, mi) => (
@@ -17690,6 +17890,7 @@ function DashboardTab({ db, setTab, openRecord, onCreateTask, onToggleTask }) {
                       <th style={{ textAlign: "left", padding: "8px 6px", fontWeight: 700, minWidth: 90 }}>PO #</th>
                       <th style={{ textAlign: "left", padding: "8px 6px", fontWeight: 700, minWidth: 100 }}>Supplier</th>
                       <th style={{ textAlign: "left", padding: "8px 6px", fontWeight: 700, minWidth: 120 }}>Reference</th>
+                      <th style={{ textAlign: "left", padding: "8px 6px", fontWeight: 700, minWidth: 150 }}>Live ETA</th>
                       {months.map((m, idx) => (
                         <th key={idx} style={{ textAlign: "right", padding: "8px 6px", fontWeight: 700, minWidth: 90 }}>
                           {m.label}
@@ -17716,6 +17917,10 @@ function DashboardTab({ db, setTab, openRecord, onCreateTask, onToggleTask }) {
                         </td>
                         <td style={{ padding: "8px 6px", color: "#6b5240" }}>
                           {item.po.model || "—"}
+                        </td>
+                        <td style={{ padding: "8px 6px" }}>
+                          {renderLiveEta(item.po)}
+                          {item.po.eta && <div style={{ fontSize: 10, color: "#8a7a66" }}>PO ETA {fmtLive(item.po.eta)}</div>}
                         </td>
                         {item.monthPayments.map((amount, mi) => (
                           <td key={mi} style={{ padding: "8px 6px", textAlign: "right", color: amount ? "#4a3527" : "#ccc", fontWeight: amount ? 600 : 400 }}>
