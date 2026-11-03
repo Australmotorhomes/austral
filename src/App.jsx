@@ -17731,10 +17731,36 @@ function DashboardTab({ db, setTab, openRecord, onCreateTask, onToggleTask }) {
         </div>
         {!shipmentsDueCollapsed && (() => {
           // Show only International POs, not yet received — indicates containers still arriving at port
-          const shipments = (db.pos || []).filter((po) =>
+          const activeIntl = (db.pos || []).filter((po) =>
             po.shippingType === "International" &&
             !["Cancelled", "Received", "Archived"].includes(po.status)
           );
+
+          // One row per container. POs sharing a container number are summarised on a single
+          // line; a consolidated member with no container of its own uses its lead PO's container.
+          // With no container number at all, group by consolidated PO instead.
+          const dbPOs = db.pos || [];
+          const cleanCt = (v) => String(v || "").replace(/\s+/g, "").toUpperCase();
+          const groupKeyFor = (po) => {
+            const lead = po.consolidatedGroupId ? dbPOs.find((p) => p.id === po.consolidatedGroupId) : null;
+            const ct = cleanCt(po.containerNumber) || cleanCt(lead && lead.containerNumber);
+            return ct ? `ct:${ct}` : `po:${po.consolidatedGroupId || po.id}`;
+          };
+          const groupMap = new Map();
+          activeIntl.forEach((po) => {
+            const k = groupKeyFor(po);
+            if (!groupMap.has(k)) groupMap.set(k, []);
+            groupMap.get(k).push(po);
+          });
+          const shipments = Array.from(groupMap.values()).map((group) => {
+            // Row represents the lead PO (the one holding consolidated members) where possible.
+            const lead =
+              group.find((p) => (p.consolidatedMemberIds || []).length && cleanCt(p.containerNumber)) ||
+              group.find((p) => (p.consolidatedMemberIds || []).length) ||
+              group.find((p) => cleanCt(p.containerNumber)) ||
+              group[0];
+            return { po: lead, group };
+          });
 
           if (shipments.length === 0) {
             return <p style={{ fontSize: 13, color: "#8a7a66", margin: 0 }}>No pending shipments.</p>;
@@ -17755,12 +17781,15 @@ function DashboardTab({ db, setTab, openRecord, onCreateTask, onToggleTask }) {
           };
 
           // Build payment data — both desktop and mobile sorted by ETA soonest first
+          const earliestDueGroup = (g) => g.group.map(earliestDue).sort()[0] || "9999";
           const shipmentsData = shipments
             .slice()
-            .sort((a, b) => earliestDue(a).localeCompare(earliestDue(b)))
-            .map(po => {
+            .sort((a, b) => earliestDueGroup(a).localeCompare(earliestDueGroup(b)))
+            .map(({ po, group }) => {
+            // Payments are summed across every PO in the container's group
+            const groupMilestones = group.flatMap((p) => p.paymentMilestones || []);
             const monthPayments = months.map(m => {
-              const monthPayment = (po.paymentMilestones || [])
+              const monthPayment = groupMilestones
                 .filter(pm => {
                   if (!pm.due) return false;
                   const pmDate = new Date(pm.due);
