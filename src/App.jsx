@@ -16320,26 +16320,31 @@ function DashboardTab({ db, setTab, openRecord, onCreateTask, onToggleTask }) {
   const nextMonthKey = `${nextMonthDateForPOs.getFullYear()}-${String(nextMonthDateForPOs.getMonth() + 1).padStart(2, "0")}`;
   const threeMonthsDateForPOs = new Date(nowForPOs.getFullYear(), nowForPOs.getMonth() + 3, 1);
   const threeMonthsKey = `${threeMonthsDateForPOs.getFullYear()}-${String(threeMonthsDateForPOs.getMonth() + 1).padStart(2, "0")}`;
-  const owingRowsForMonth = (monthKey) => {
+  // includeOverdue: unpaid milestones due in an earlier month are still owing,
+  // so they roll into "this month" instead of silently disappearing once the
+  // calendar month they were due in has passed.
+  const owingRowsForMonth = (monthKey, includeOverdue = false) => {
     const rows = [];
     db.pos.forEach((po) => {
       if (["Cancelled", "Received", "Archived"].includes(po.status)) return;
       (po.paymentMilestones || []).forEach((m, i) => {
         if (m.paid) return;
-        if ((m.due || "").slice(0, 7) !== monthKey) return;
+        const dueKey = (m.due || "").slice(0, 7);
+        if (!dueKey) return;
+        if (includeOverdue ? dueKey > monthKey : dueKey !== monthKey) return;
         rows.push({
           poId: po.id,
           key: `${po.id}-${i}`,
           supplier: po.party || "Unknown",
           product: productLabelOf(po),
-          monthDue: monthKeyLabel(monthKey),
+          monthDue: monthKeyLabel(dueKey),
           amount: parseFloat(m.amount) || 0,
         });
       });
     });
     return rows;
   };
-  const owingThisMonthRows = owingRowsForMonth(thisMonthKey);
+  const owingThisMonthRows = owingRowsForMonth(thisMonthKey, true);
   const owingNextMonthRows = owingRowsForMonth(nextMonthKey);
   const owingIn3MonthsRows = owingRowsForMonth(threeMonthsKey);
   const owingThisMonth = owingThisMonthRows.reduce((s, r) => s + r.amount, 0);
@@ -16470,7 +16475,8 @@ function DashboardTab({ db, setTab, openRecord, onCreateTask, onToggleTask }) {
       (po.paymentMilestones || []).forEach((m, i) => {
         if (m.paid) return;
         const due = (m.due || "").slice(0, 7);
-        if (!monthKeys.includes(due)) return;
+        // Overdue unpaid milestones (due before the window starts) still count.
+        if (!due || (!monthKeys.includes(due) && due > monthKeys[0])) return;
         rows.push({
           key: `${po.id}-${i}`,
           who: po.party || "Unknown",
