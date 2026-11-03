@@ -550,7 +550,7 @@ function toSupabaseFormat(data, table) {
       if (copy.shippingLine !== undefined) { copy.shipping_line = copy.shippingLine || null; delete copy.shippingLine; }
       if (copy.billOfLading !== undefined) { copy.bill_of_lading = copy.billOfLading || null; delete copy.billOfLading; }
       if (copy.containerNumber !== undefined) { copy.container_number = copy.containerNumber || null; delete copy.containerNumber; }
-      delete copy.liveEta; delete copy.liveEtaSource; delete copy.trackingUpdatedAt;
+      delete copy.liveEta; delete copy.liveEtaSource; delete copy.departureDate; delete copy.trackingUpdatedAt;
       delete copy.trackingStatus; delete copy.trackingError; delete copy.trackingRaw;
       // Strip camelCase timestamps — columns are created_at/updated_at (server defaults)
       delete copy.createdAt;
@@ -681,6 +681,7 @@ function toSupabaseFormat(data, table) {
       if (copy.container_number !== undefined) { copy.containerNumber = copy.container_number || ""; delete copy.container_number; }
       if (copy.live_eta !== undefined) { copy.liveEta = copy.live_eta || ""; delete copy.live_eta; }
       if (copy.live_eta_source !== undefined) { copy.liveEtaSource = copy.live_eta_source || ""; delete copy.live_eta_source; }
+      if (copy.departure_date !== undefined) { copy.departureDate = copy.departure_date || ""; delete copy.departure_date; }
       if (copy.tracking_updated_at !== undefined) { copy.trackingUpdatedAt = copy.tracking_updated_at || ""; delete copy.tracking_updated_at; }
       if (copy.tracking_status !== undefined) { copy.trackingStatus = copy.tracking_status || ""; delete copy.tracking_status; }
       if (copy.tracking_error !== undefined) { copy.trackingError = copy.tracking_error || ""; delete copy.tracking_error; }
@@ -17766,40 +17767,27 @@ function DashboardTab({ db, setTab, openRecord, onCreateTask, onToggleTask }) {
             return <p style={{ fontSize: 13, color: "#8a7a66", margin: 0 }}>No pending shipments.</p>;
           }
 
-          // Generate 6 months starting from current date
-          const today = new Date();
-          const months = [];
-          for (let i = 0; i < 6; i++) {
-            const d = new Date(today.getFullYear(), today.getMonth() + i, 1);
-            months.push({ date: d, label: d.toLocaleDateString('en-AU', { month: 'short', year: '2-digit' }) });
-          }
+          const dateOnly = (v) => (v ? String(v).slice(0, 10) : "");
 
-          // Sort by ETA soonest first, fallback to earliest milestone due date
-          const earliestDue = (po) => {
-            const dates = [po.eta, ...(po.paymentMilestones || []).map(m => m.due)].filter(Boolean).sort();
-            return dates[0] || "9999";
-          };
-
-          // Build payment data — both desktop and mobile sorted by ETA soonest first
-          const earliestDueGroup = (g) => g.group.map(earliestDue).sort()[0] || "9999";
+          // One summary per container: costs and ETA roll up every PO in it, including
+          // consolidated members (same approach as the International shipping panel).
           const shipmentsData = shipments
-            .slice()
-            .sort((a, b) => earliestDueGroup(a).localeCompare(earliestDueGroup(b)))
             .map(({ po, group }) => {
-            // Payments are summed across every PO in the container's group
-            const groupMilestones = group.flatMap((p) => p.paymentMilestones || []);
-            const monthPayments = months.map(m => {
-              const monthPayment = groupMilestones
-                .filter(pm => {
-                  if (!pm.due) return false;
-                  const pmDate = new Date(pm.due);
-                  return pmDate.getFullYear() === m.date.getFullYear() && pmDate.getMonth() === m.date.getMonth();
-                })
-                .reduce((sum, pm) => sum + (parseFloat(pm.amount) || 0), 0);
-              return monthPayment > 0 ? monthPayment : null;
-            });
-            return { po, monthPayments };
-          });
+              const seen = new Map();
+              group.forEach((p) => {
+                seen.set(p.id, p);
+                (p.consolidatedMemberIds || []).forEach((id) => {
+                  const m = dbPOs.find((x) => x.id === id);
+                  if (m && m.status !== "Cancelled") seen.set(m.id, m);
+                });
+              });
+              const allPOs = Array.from(seen.values());
+              const poEta = allPOs.map((p) => dateOnly(p.eta)).filter(Boolean).sort()[0] || "";
+              const cost = allPOs.reduce((sum, p) => sum + (parseFloat(p.total) || 0), 0);
+              const ffCost = allPOs.reduce((sum, p) => sum + (parseFloat(p.customsClearance) || 0), 0);
+              return { po, ordered: po.date || "", poEta, cost, ffCost };
+            })
+            .sort((x, y) => (x.poEta || "9999").localeCompare(y.poEta || "9999"));
 
           // ── Live ETA (DataLoop) ──
           // Consolidated member POs ship in the lead PO's container, so fall back to the lead's tracking.
@@ -17812,6 +17800,7 @@ function DashboardTab({ db, setTab, openRecord, onCreateTask, onToggleTask }) {
               leadId: src.id,
               hasRef: !!(src.containerNumber || src.billOfLading),
               eta: ov.liveEta !== undefined ? ov.liveEta : src.liveEta,
+              departure: ov.departureDate !== undefined ? ov.departureDate : src.departureDate,
               source: ov.liveEtaSource !== undefined ? ov.liveEtaSource : src.liveEtaSource,
               updatedAt: ov.trackingUpdatedAt || src.trackingUpdatedAt,
               status: ov.trackingStatus !== undefined ? ov.trackingStatus : src.trackingStatus,
@@ -17837,6 +17826,7 @@ function DashboardTab({ db, setTab, openRecord, onCreateTask, onToggleTask }) {
               const p = out.patch || {};
               setTrackingOverrides(o => ({ ...o, [tr.leadId]: {
                 ...(p.live_eta ? { liveEta: p.live_eta, liveEtaSource: p.live_eta_source } : {}),
+                ...(p.departure_date ? { departureDate: p.departure_date } : {}),
                 trackingUpdatedAt: p.tracking_updated_at, trackingStatus: p.tracking_status || out.status, trackingError: p.tracking_error || "",
               } }));
             } catch (err) {
@@ -17845,11 +17835,16 @@ function DashboardTab({ db, setTab, openRecord, onCreateTask, onToggleTask }) {
               setTrackingBusy(b => ({ ...b, [tr.leadId]: false }));
             }
           };
-          const renderLiveEta = (po) => {
+          const renderDeparture = (po) => {
+            const tr = trackingFor(po);
+            return tr.departure ? fmtLive(tr.departure) : <span style={{ color: "#ccc" }}>—</span>;
+          };
+          // PORT: the carrier's arrival estimate for Brisbane. Red = later than the PO ETA, green = earlier.
+          const renderLiveEta = (po, poEta) => {
             const tr = trackingFor(po);
             if (!tr.hasRef) return <span style={{ color: "#ccc" }} title="Add a container number or bill of lading on the PO to track it">—</span>;
-            const late = tr.eta && po.eta && String(tr.eta).slice(0, 10) > String(po.eta).slice(0, 10);
-            const early = tr.eta && po.eta && String(tr.eta).slice(0, 10) < String(po.eta).slice(0, 10);
+            const late = tr.eta && poEta && String(tr.eta).slice(0, 10) > String(poEta).slice(0, 10);
+            const early = tr.eta && poEta && String(tr.eta).slice(0, 10) < String(poEta).slice(0, 10);
             return (
               <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -17888,18 +17883,31 @@ function DashboardTab({ db, setTab, openRecord, onCreateTask, onToggleTask }) {
                     <div style={{ fontWeight: 700, color: "#4a3527", marginBottom: 8 }}>
                       {item.po.party} · {item.po.model || "—"}
                     </div>
-                    <div style={{ fontSize: 12, marginBottom: 8 }}>
-                      <span style={{ fontSize: 11, color: "#8a7a66", fontWeight: 600 }}>Live ETA </span>{renderLiveEta(item.po)}
-                    </div>
                     <div style={{ fontSize: 12, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                      {months.map((m, mi) => (
-                        <div key={mi}>
-                          <div style={{ fontSize: 11, color: "#8a7a66", fontWeight: 600 }}>{m.label}</div>
-                          <div style={{ color: item.monthPayments[mi] ? "#4a3527" : "#ccc" }}>
-                            {item.monthPayments[mi] ? `$${item.monthPayments[mi].toLocaleString()}` : "—"}
-                          </div>
-                        </div>
-                      ))}
+                      <div>
+                        <div style={{ fontSize: 11, color: "#8a7a66", fontWeight: 600 }}>Ordered</div>
+                        <div style={{ color: "#4a3527" }}>{item.ordered ? fmtLive(item.ordered) : "—"}</div>
+                      </div>
+                      <div>
+                        <div style={{ fontSize: 11, color: "#8a7a66", fontWeight: 600 }}>Dep date</div>
+                        <div style={{ color: "#4a3527" }}>{renderDeparture(item.po)}</div>
+                      </div>
+                      <div>
+                        <div style={{ fontSize: 11, color: "#8a7a66", fontWeight: 600 }}>Port</div>
+                        {renderLiveEta(item.po, item.poEta)}
+                      </div>
+                      <div>
+                        <div style={{ fontSize: 11, color: "#8a7a66", fontWeight: 600 }}>ETA</div>
+                        <div style={{ color: "#4a3527" }}>{item.poEta ? fmtLive(item.poEta) : "—"}</div>
+                      </div>
+                      <div>
+                        <div style={{ fontSize: 11, color: "#8a7a66", fontWeight: 600 }}>FF cost</div>
+                        <div style={{ color: item.ffCost ? "#4a3527" : "#ccc" }}>{item.ffCost ? fmtMoney(item.ffCost, "AUD") : "—"}</div>
+                      </div>
+                      <div>
+                        <div style={{ fontSize: 11, color: "#8a7a66", fontWeight: 600 }}>Cost</div>
+                        <div style={{ color: item.cost ? "#4a3527" : "#ccc", fontWeight: 600 }}>{item.cost ? fmtMoney(item.cost, "AUD") : "—"}</div>
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -17919,12 +17927,12 @@ function DashboardTab({ db, setTab, openRecord, onCreateTask, onToggleTask }) {
                       <th style={{ textAlign: "left", padding: "8px 6px", fontWeight: 700, minWidth: 90 }}>PO #</th>
                       <th style={{ textAlign: "left", padding: "8px 6px", fontWeight: 700, minWidth: 100 }}>Supplier</th>
                       <th style={{ textAlign: "left", padding: "8px 6px", fontWeight: 700, minWidth: 120 }}>Reference</th>
-                      <th style={{ textAlign: "left", padding: "8px 6px", fontWeight: 700, minWidth: 150 }}>Live ETA</th>
-                      {months.map((m, idx) => (
-                        <th key={idx} style={{ textAlign: "right", padding: "8px 6px", fontWeight: 700, minWidth: 90 }}>
-                          {m.label}
-                        </th>
-                      ))}
+                      <th style={{ textAlign: "left", padding: "8px 6px", fontWeight: 700, minWidth: 90 }}>Ordered</th>
+                      <th style={{ textAlign: "left", padding: "8px 6px", fontWeight: 700, minWidth: 90 }}>Dep date</th>
+                      <th style={{ textAlign: "left", padding: "8px 6px", fontWeight: 700, minWidth: 150 }}>Port</th>
+                      <th style={{ textAlign: "left", padding: "8px 6px", fontWeight: 700, minWidth: 90 }}>ETA</th>
+                      <th style={{ textAlign: "right", padding: "8px 6px", fontWeight: 700, minWidth: 90 }}>FF cost</th>
+                      <th style={{ textAlign: "right", padding: "8px 6px", fontWeight: 700, minWidth: 100 }}>Cost</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -17947,15 +17955,24 @@ function DashboardTab({ db, setTab, openRecord, onCreateTask, onToggleTask }) {
                         <td style={{ padding: "8px 6px", color: "#6b5240" }}>
                           {item.po.model || "—"}
                         </td>
-                        <td style={{ padding: "8px 6px" }}>
-                          {renderLiveEta(item.po)}
-                          {item.po.eta && <div style={{ fontSize: 10, color: "#8a7a66" }}>PO ETA {fmtLive(item.po.eta)}</div>}
+                        <td style={{ padding: "8px 6px", color: "#4a3527" }}>
+                          {item.ordered ? fmtLive(item.ordered) : <span style={{ color: "#ccc" }}>—</span>}
                         </td>
-                        {item.monthPayments.map((amount, mi) => (
-                          <td key={mi} style={{ padding: "8px 6px", textAlign: "right", color: amount ? "#4a3527" : "#ccc", fontWeight: amount ? 600 : 400 }}>
-                            {amount ? `$${amount.toLocaleString()}` : "—"}
-                          </td>
-                        ))}
+                        <td style={{ padding: "8px 6px", color: "#4a3527" }}>
+                          {renderDeparture(item.po)}
+                        </td>
+                        <td style={{ padding: "8px 6px" }}>
+                          {renderLiveEta(item.po, item.poEta)}
+                        </td>
+                        <td style={{ padding: "8px 6px", color: "#4a3527" }}>
+                          {item.poEta ? fmtLive(item.poEta) : <span style={{ color: "#ccc" }}>—</span>}
+                        </td>
+                        <td style={{ padding: "8px 6px", textAlign: "right", color: item.ffCost ? "#4a3527" : "#ccc" }}>
+                          {item.ffCost ? fmtMoney(item.ffCost, "AUD") : "—"}
+                        </td>
+                        <td style={{ padding: "8px 6px", textAlign: "right", color: item.cost ? "#4a3527" : "#ccc", fontWeight: 600 }}>
+                          {item.cost ? fmtMoney(item.cost, "AUD") : "—"}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
