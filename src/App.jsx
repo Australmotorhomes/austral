@@ -16310,10 +16310,10 @@ function DashboardTab({ db, setTab, openRecord, onCreateTask, onToggleTask }) {
   const openPos = openPORows.length;
 
   // Amount owing on POs, grouped by the calendar month each unpaid payment
-  // milestone (schedule line) is actually due — not the PO's ETA. Only POs
-  // still in Draft status count (or legacy "Sent" records not yet resaved
-  // under the new status list) — In Transit/Paid/Received/Cancelled are
-  // excluded, since those are either already settled or no longer pending.
+  // milestone (schedule line) is actually due — not the PO's ETA. Every PO
+  // that is still live counts (Draft, In Transit, Paid and legacy
+  // Sent/Accepted); Received/Cancelled/Archived are excluded. Whether
+  // anything is owing is decided by each milestone's unpaid flag.
   const nowForPOs = new Date();
   const thisMonthKey = `${nowForPOs.getFullYear()}-${String(nowForPOs.getMonth() + 1).padStart(2, "0")}`;
   const nextMonthDateForPOs = new Date(nowForPOs.getFullYear(), nowForPOs.getMonth() + 1, 1);
@@ -16323,7 +16323,7 @@ function DashboardTab({ db, setTab, openRecord, onCreateTask, onToggleTask }) {
   const owingRowsForMonth = (monthKey) => {
     const rows = [];
     db.pos.forEach((po) => {
-      if (!["Draft", "Sent"].includes(po.status)) return;
+      if (["Cancelled", "Received", "Archived"].includes(po.status)) return;
       (po.paymentMilestones || []).forEach((m, i) => {
         if (m.paid) return;
         if ((m.due || "").slice(0, 7) !== monthKey) return;
