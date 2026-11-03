@@ -16345,7 +16345,7 @@ function DashboardTab({ db, setTab, openRecord, onCreateTask, onToggleTask }) {
   const thisMonthKey = `${nowForPOs.getFullYear()}-${String(nowForPOs.getMonth() + 1).padStart(2, "0")}`;
   const nextMonthDateForPOs = new Date(nowForPOs.getFullYear(), nowForPOs.getMonth() + 1, 1);
   const nextMonthKey = `${nextMonthDateForPOs.getFullYear()}-${String(nextMonthDateForPOs.getMonth() + 1).padStart(2, "0")}`;
-  const threeMonthsDateForPOs = new Date(nowForPOs.getFullYear(), nowForPOs.getMonth() + 3, 1);
+  const threeMonthsDateForPOs = new Date(nowForPOs.getFullYear(), nowForPOs.getMonth() + 2, 1);
   const threeMonthsKey = `${threeMonthsDateForPOs.getFullYear()}-${String(threeMonthsDateForPOs.getMonth() + 1).padStart(2, "0")}`;
   // includeOverdue: unpaid milestones due in an earlier month are still owing,
   // so they roll into "this month" instead of silently disappearing once the
