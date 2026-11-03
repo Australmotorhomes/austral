@@ -8059,6 +8059,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
           }}
         >
           {isNew ? (isQuote ? "New customer quote" : "New purchase order") : (isQuote ? "Customer Quote" : "Purchase Order")}
+          {!isNew && editing?.number ? ` ${displayDocNumber(editing, db, isQuote)}` : ""}
         </h3>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           {!isMobile && (
@@ -15486,6 +15487,26 @@ function SalesByModelModals({ drillDown, setDrillDown, unmatchedInfo, setUnmatch
 // Small reference-label helpers shared by Stock Movement's IN/OUT/on-hand
 // entries — a unit's IN side points back at the PO that brought it in, its
 // OUT side points at the quote that sold it.
+// Display number for a PO (or quote) shown in the modal heading. A consolidated
+// group is shown as the primary number plus the members' trailing digits, e.g.
+// PO-5006 + PO-5007 -> "PO-5006-07"; PO-5006 + 5007 + 5008 -> "PO-5006-07-08".
+// Display only — the stored po.number values are left alone because other code
+// (line tags, reverse-consolidation, stock links) matches on them.
+function displayDocNumber(doc, db, isQuote) {
+  if (!doc || !doc.number) return "";
+  const prefix = isQuote ? "QU" : "PO";
+  const strip = (n) => String(n || "").replace(/^(PO|QU)-?/i, "");
+  const own = `${prefix}-${strip(doc.number)}`;
+  if (isQuote || !(doc.consolidatedMemberIds || []).length) return own;
+  const members = (db.pos || []).filter((p) => doc.consolidatedMemberIds.includes(p.id));
+  if (!members.length) return own;
+  const base = strip(doc.number);
+  const nums = members.map((m) => strip(m.number)).sort((a, b) => (parseInt(a, 10) || 0) - (parseInt(b, 10) || 0));
+  const stem = base.slice(0, -2);
+  // Short "-07" suffix only when every member shares the primary's leading digits
+  const sameStem = base.length > 2 && nums.every((n) => n.length === base.length && n.slice(0, -2) === stem);
+  return `${own}-${nums.map((n) => (sameStem ? n.slice(-2) : n)).join("-")}`;
+}
 function stockMovementPoLabel(poId, db) {
   const p = (db.pos || []).find((x) => x.id === poId);
   if (!p) return "Unknown PO";
