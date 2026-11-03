@@ -3491,7 +3491,7 @@ const globalCss = `
   @media (max-width:900px){.builder-grid{grid-template-columns:1fr;}}
   .doc-split-grid{display:grid;grid-template-columns:1fr 1fr;gap:22px;align-items:start;}
   @media (max-width:900px){.doc-split-grid{grid-template-columns:1fr;}}
-  .line-item-row{display:grid;grid-template-columns:1fr 50px 60px 70px 70px 80px 30px;gap:6px;align-items:start;margin-bottom:8px;}
+  .line-item-row{display:grid;grid-template-columns:minmax(80px,1fr) 52px 84px 100px 100px 92px 28px;gap:6px;align-items:start;margin-bottom:8px;}
   @media (max-width:680px){.line-item-row{grid-template-columns:1fr 1fr;}}
   .hidden-cost-row{display:grid;grid-template-columns:2fr 60px 90px 70px 1fr 24px;gap:6px;align-items:start;margin-bottom:6px;}
   @media (max-width:680px){.hidden-cost-row{grid-template-columns:1fr 1fr;}}
