@@ -5797,12 +5797,24 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
         const mergedTotal = allPOs.reduce((s, po) => s + (po.total || 0), 0);
         const memberIds = memberPOs.map(p => p.id);
 
+        // ONE payment schedule per consolidated group: the primary's schedule
+        // absorbs every member's milestones (tagged with originPoId so
+        // reverseConsolidation can hand them back), and the members' own
+        // schedules are cleared so nothing is scheduled/owed twice.
+        const mergedMilestones = [
+          ...(primaryPO.paymentMilestones || []),
+          ...memberPOs.flatMap(mpo =>
+            (mpo.paymentMilestones || []).map(m => ({ ...m, originPoId: m.originPoId || mpo.id }))
+          ),
+        ];
+
         // Update primaryPO: add merged lines + member ids
         const primaryUpdate = toSupabaseFormat({
           lines: mergedLines,
           total: mergedTotal,
           subtotal: mergedTotal,
           consolidatedMemberIds: memberIds,
+          paymentMilestones: mergedMilestones,
           updatedAt: nowISO(),
         }, "purchase_orders");
         await supabaseRESTWithSchemaFallback("PATCH", `purchase_orders?id=eq.${primaryPO.id}`, primaryUpdate);
@@ -5811,6 +5823,7 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
         for (const mpo of memberPOs) {
           const memberUpdate = toSupabaseFormat({
             consolidatedGroupId: primaryPO.id,
+            paymentMilestones: [],
             updatedAt: nowISO(),
           }, "purchase_orders");
           await supabaseRESTWithSchemaFallback("PATCH", `purchase_orders?id=eq.${mpo.id}`, memberUpdate);
@@ -5824,11 +5837,12 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
             primary.total = mergedTotal;
             primary.subtotal = mergedTotal;
             primary.consolidatedMemberIds = memberIds;
+            primary.paymentMilestones = mergedMilestones;
           }
           // Update members
           memberPOs.forEach(mpo => {
             const mp = next.pos.find(p => p.id === mpo.id);
-            if (mp) mp.consolidatedGroupId = primaryPO.id;
+            if (mp) { mp.consolidatedGroupId = primaryPO.id; mp.paymentMilestones = []; }
           });
         });
 
@@ -5860,20 +5874,30 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
 
         const primaryTotal = primaryOriginalLines.reduce((s, l) => s + (parseFloat(l.amount) || 0), 0);
 
+        // Split the single group schedule back out: milestones tagged with a
+        // member's id go back to that member; everything else stays on the primary.
+        const memberIdSet = new Set(memberPOs.map(m => m.id));
+        const allMilestones = groupPO.paymentMilestones || [];
+        const primaryMilestones = allMilestones.filter(m => !memberIdSet.has(m.originPoId));
+        const milestonesForMember = (id) =>
+          allMilestones.filter(m => m.originPoId === id).map(({ originPoId, ...rest }) => rest);
+
         // Update primary PO: restore original lines, clear consolidation
         const primaryUpdate = toSupabaseFormat({
           lines: primaryOriginalLines,
           total: primaryTotal,
           subtotal: primaryTotal,
           consolidatedMemberIds: [],
+          paymentMilestones: primaryMilestones,
           updatedAt: nowISO(),
         }, "purchase_orders");
         await supabaseRESTWithSchemaFallback("PATCH", `purchase_orders?id=eq.${groupPO.id}`, primaryUpdate);
 
-        // Update each member PO: remove consolidatedGroupId
+        // Update each member PO: remove consolidatedGroupId, restore its milestones
         for (const mpo of memberPOs) {
           const memberUpdate = toSupabaseFormat({
             consolidatedGroupId: null,
+            paymentMilestones: milestonesForMember(mpo.id),
             updatedAt: nowISO(),
           }, "purchase_orders");
           await supabaseRESTWithSchemaFallback("PATCH", `purchase_orders?id=eq.${mpo.id}`, memberUpdate);
@@ -5887,11 +5911,12 @@ function DocsTab({ kind, db, update, showToast, nextNumber, pendingOpen, clearPe
             primary.total = primaryTotal;
             primary.subtotal = primaryTotal;
             primary.consolidatedMemberIds = [];
+            primary.paymentMilestones = primaryMilestones;
           }
           // Update members
           memberPOs.forEach(mpo => {
             const mp = next.pos.find(p => p.id === mpo.id);
-            if (mp) mp.consolidatedGroupId = null;
+            if (mp) { mp.consolidatedGroupId = null; mp.paymentMilestones = milestonesForMember(mpo.id); }
           });
         });
 
@@ -7481,14 +7506,14 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
     try {
       const payload = toSupabaseFormat({
         party: mParty, contact: mContact, eta: mEta, status: mStatus,
-        paymentMilestones: mMilestones, notes: mNotes, updatedAt: nowISO(),
+        notes: mNotes, updatedAt: nowISO(),
       }, "purchase_orders");
       await supabaseRESTWithSchemaFallback("PATCH", `purchase_orders?id=eq.${activeMember.id}`, payload);
       update(next => {
         const po = (next.pos || []).find(p => p.id === activeMember.id);
         if (po) {
           po.party = mParty; po.contact = mContact; po.eta = mEta;
-          po.status = mStatus; po.paymentMilestones = mMilestones; po.notes = mNotes;
+          po.status = mStatus; po.notes = mNotes;
         }
       });
       setMDirty(false);
@@ -7954,7 +7979,9 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
         fxRateUsed: rate,
         status,
         attachments,
-        ...(paymentMilestones.length > 0 && { paymentMilestones }),
+        // Always send the schedule (even when empty) so deleting every milestone
+        // actually clears it in the DB instead of the old one reappearing on reopen.
+        paymentMilestones,
         ...(!isQuote && { shippingType }),  // Always include for POs (Domestic/International)
         ...(!isQuote && {
           shippingLine: shippingLine.trim(),
@@ -8151,30 +8178,9 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
               </Panel>
 
               <Panel>
-                <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: "0 0 14px", fontSize: 16 }}>Payment Schedule</h3>
-                <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 80px auto", gap: 8, padding: "4px 0 8px", borderBottom: "1px solid #d3c9b8" }}>
-                    {["DUE DATE","AMOUNT","SUPPLIER INV","PAID",""].map(h => <span key={h} style={{ fontSize: 11, fontWeight: 600, color: "#8a7a66" }}>{h}</span>)}
-                  </div>
-                  {mMilestones.map((m, idx) => (
-                    <div key={idx} style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr 80px auto", gap: 8, padding: "8px 0", borderBottom: "1px solid #f0e8d9", alignItems: "center" }}>
-                      <input type="date" value={m.due || ""} style={{ ...inputStyle, margin: 0 }} onChange={e => { const u=[...mMilestones]; u[idx]={...u[idx],due:e.target.value}; mark(setMMilestones)(u); }} />
-                      <input type="number" value={m.amount || ""} placeholder="0.00" style={{ ...inputStyle, margin: 0 }} onChange={e => { const u=[...mMilestones]; u[idx]={...u[idx],amount:e.target.value}; mark(setMMilestones)(u); }} />
-                      <input type="text" value={m.invoice || ""} placeholder="INV-" style={{ ...inputStyle, margin: 0, fontSize: 12 }} onChange={e => { const u=[...mMilestones]; u[idx]={...u[idx],invoice:e.target.value}; mark(setMMilestones)(u); }} />
-                      <label style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer", fontSize: 12 }}>
-                        <input type="checkbox" checked={m.paid || false} onChange={e => { const u=[...mMilestones]; u[idx]={...u[idx],paid:e.target.checked,paidDate:e.target.checked?(m.due||""):""}; mark(setMMilestones)(u); }} />
-                        {m.paid && <span style={{ color: "#5c7a4f", fontWeight: 600 }}>Paid</span>}
-                      </label>
-                      <button onClick={() => mark(setMMilestones)(mMilestones.filter((_,i)=>i!==idx))} style={{ background:"none",border:"none",color:"#a3442e",cursor:"pointer",fontSize:16,padding:"0 4px" }}>✕</button>
-                    </div>
-                  ))}
-                  <div style={{ marginTop: 10 }}>
-                    <Btn variant="secondary" size="sm" onClick={() => {
-                      const scheduled = mMilestones.reduce((s, m) => s + (parseFloat(m.amount) || 0), 0);
-                      const remaining = Math.round(((activeMember.total || 0) - scheduled) * 100) / 100;
-                      mark(setMMilestones)([...mMilestones, { due:"", amount: remaining > 0 ? remaining : "", invoice:"", paid:false }]);
-                    }}>+ Add milestone</Btn>
-                  </div>
+                <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: "0 0 8px", fontSize: 16 }}>Payment Schedule</h3>
+                <div style={{ fontSize: 12, color: "#8a7a66" }}>
+                  This PO is part of a consolidated group — there is one payment schedule for the whole group, on the primary PO tab.
                 </div>
               </Panel>
 
@@ -16327,6 +16333,7 @@ function DashboardTab({ db, setTab, openRecord, onCreateTask, onToggleTask }) {
     const rows = [];
     db.pos.forEach((po) => {
       if (["Cancelled", "Received", "Archived"].includes(po.status)) return;
+      if (po.consolidatedGroupId) return; // group's single schedule lives on the primary PO
       (po.paymentMilestones || []).forEach((m, i) => {
         if (m.paid) return;
         const dueKey = (m.due || "").slice(0, 7);
@@ -16472,6 +16479,7 @@ function DashboardTab({ db, setTab, openRecord, onCreateTask, onToggleTask }) {
     const rows = [];
     (db.pos || []).forEach((po) => {
       if (po.status === "Cancelled") return;
+      if (po.consolidatedGroupId) return; // group's single schedule lives on the primary PO
       (po.paymentMilestones || []).forEach((m, i) => {
         if (m.paid) return;
         const due = (m.due || "").slice(0, 7);
