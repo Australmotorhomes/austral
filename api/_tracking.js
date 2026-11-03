@@ -8,18 +8,17 @@ const SUPABASE_URL = process.env.SUPABASE_URL || "https://dpapwmittcowsrwwsajo.s
 const DONE_STATUSES = ["Cancelled", "Received", "Archived"];
 
 // ---------------------------------------------------------------------------
-// VERIFY AGAINST A REAL RESPONSE.
-// The only response field confirmed from the DataLoop docs screenshot is
-//   data.route.pod.predictive_eta   (DataLoop's own estimate; only present when
-//                                    the carrier gave no arrival date).
-// The carrier's own arrival date lives somewhere else in the response and its
-// path is NOT confirmed. Put the confirmed path(s) here once checked against a
-// real response (tracking_raw column / the "debug" refresh); they are tried in
-// order, before falling back to predictive_eta.
-// Example shape (NOT confirmed): ["data.route.pod.date"]
+// Response paths (confirmed against a real PIL ocean response):
+//   data.route.pod.date            carrier's arrival date at the port of discharge (Brisbane)
+//   data.route.pod.predictive_eta  DataLoop's own estimate, used only if the carrier gave no date
+// Departure date (port of loading). By analogy with "pod" this should be
+//   data.route.pol.date
+// but it has NOT been checked against a real response yet: look in the tracking_raw
+// column for the loading port's date and adjust the path below if it differs.
 // ---------------------------------------------------------------------------
 const CARRIER_ETA_PATHS = ["data.route.pod.date"];
 const PREDICTIVE_ETA_PATH = "data.route.pod.predictive_eta";
+const DEPARTURE_PATHS = ["data.route.pol.date"];
 
 function getPath(obj, path) {
   return path.split(".").reduce((o, k) => (o && typeof o === "object" ? o[k] : undefined), obj);
@@ -42,6 +41,14 @@ function extractEta(json) {
   const pred = toDateOnly(getPath(json, PREDICTIVE_ETA_PATH));
   if (pred) return { eta: pred, source: "predictive" };
   return { eta: null, source: null };
+}
+
+function extractDeparture(json) {
+  for (const p of DEPARTURE_PATHS) {
+    const d = toDateOnly(getPath(json, p));
+    if (d) return d;
+  }
+  return null;
 }
 
 // Container number is preferred (type CT + shipping line). Falls back to the bill of lading (type BL).
@@ -93,6 +100,8 @@ async function refreshOne(po) {
   try {
     const json = await callDataLoop(req);
     const { eta, source } = extractEta(json);
+    const departure = extractDeparture(json);
+    if (departure) patch.departure_date = departure; // keep the previous value if this response has none
     patch.tracking_raw = json;
     patch.tracking_error = null;
     if (eta) {
@@ -107,13 +116,21 @@ async function refreshOne(po) {
     patch.tracking_error = String(e.message || e).slice(0, 300);
     summary = { id: po.id, status: "error", error: patch.tracking_error };
   }
-  const r = await fetch(`${SUPABASE_URL}/rest/v1/purchase_orders?id=eq.${encodeURIComponent(po.id)}`, {
+  const save = (body) => fetch(`${SUPABASE_URL}/rest/v1/purchase_orders?id=eq.${encodeURIComponent(po.id)}`, {
     method: "PATCH",
     headers: sbHeaders({ Prefer: "return=minimal" }),
-    body: JSON.stringify(patch),
+    body: JSON.stringify(body),
   });
+  let r = await save(patch);
+  let savedDeparture = patch.departure_date;
+  if (!r.ok && patch.departure_date !== undefined) {
+    // The departure_date column may not exist yet: retry without it so the ETA still saves.
+    const { departure_date, ...rest } = patch;
+    savedDeparture = undefined;
+    r = await save(rest);
+  }
   if (!r.ok) summary.saveError = `Supabase ${r.status}: ${(await r.text()).slice(0, 200)}`;
-  return { ...summary, patch: { live_eta: patch.live_eta, live_eta_source: patch.live_eta_source, tracking_updated_at: patch.tracking_updated_at, tracking_status: patch.tracking_status, tracking_error: patch.tracking_error } };
+  return { ...summary, patch: { live_eta: patch.live_eta, live_eta_source: patch.live_eta_source, departure_date: savedDeparture, tracking_updated_at: patch.tracking_updated_at, tracking_status: patch.tracking_status, tracking_error: patch.tracking_error } };
 }
 
 async function fetchActivePOs(extraFilter = "") {
@@ -128,11 +145,9 @@ async function fetchActivePOs(extraFilter = "") {
 // Confirms the caller is a signed-in app user (stops strangers spending DataLoop credits).
 async function verifyUser(req) {
   const auth = req.headers.authorization || "";
-  if (!auth.startsWith("Bearer ")) { console.log("verifyUser: no Bearer header"); return false; }
+  if (!auth.startsWith("Bearer ")) return false;
   const anon = process.env.SUPABASE_ANON_KEY || process.env.REACT_APP_SUPABASE_ANON_KEY;
-  console.log("verifyUser: anon key present:", !!anon);
   const r = await fetch(`${SUPABASE_URL}/auth/v1/user`, { headers: { apikey: anon || "", Authorization: auth } });
-  if (!r.ok) console.log("verifyUser: Supabase said", r.status, (await r.text()).slice(0, 200));
   return r.ok;
 }
 

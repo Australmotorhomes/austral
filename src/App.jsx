@@ -17769,6 +17769,17 @@ function DashboardTab({ db, setTab, openRecord, onCreateTask, onToggleTask }) {
 
           const dateOnly = (v) => (v ? String(v).slice(0, 10) : "");
 
+          // FF cost = the freight forwarder's own PO(s) carrying the same Reference as the shipment.
+          // References match on the full text (ignoring case/punctuation) or on the leading job code
+          // (e.g. "AM20" in "AM20 (Golden & Callanan)"), so swapped customer names still match.
+          // A PO counts as a forwarder PO if its supplier or any line mentions freight/logistics etc.
+          const refKey = (v) => String(v || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+          const refCode = (v) => { const m = /^\s*([a-z]+\d+)/i.exec(String(v || "")); return m ? m[1].toLowerCase() : ""; };
+          const FF_PO_RE = /freight|forward|logistic|shipping|customs|clearance|cargo|\blcl\b|\bfcl\b|quarantine|biosecurity/i;
+          const isFfPO = (p) =>
+            FF_PO_RE.test(String(p.party || "")) ||
+            (p.lines || []).some((l) => FF_PO_RE.test(String(l.desc || l.description || "")));
+
           // One summary per container: costs and ETA roll up every PO in it, including
           // consolidated members (same approach as the International shipping panel).
           const shipmentsData = shipments
@@ -17782,10 +17793,18 @@ function DashboardTab({ db, setTab, openRecord, onCreateTask, onToggleTask }) {
                 });
               });
               const allPOs = Array.from(seen.values());
-              const poEta = allPOs.map((p) => dateOnly(p.eta)).filter(Boolean).sort()[0] || "";
+              const poEta = dateOnly(po.eta); // the ETA field on the row's (lead) PO
               const cost = allPOs.reduce((sum, p) => sum + (parseFloat(p.total) || 0), 0);
-              const ffCost = allPOs.reduce((sum, p) => sum + (parseFloat(p.customsClearance) || 0), 0);
-              return { po, ordered: po.date || "", poEta, cost, ffCost };
+              const inRow = new Set(allPOs.map((p) => p.id));
+              const rowKeys = new Set(allPOs.map((p) => refKey(p.model)).filter(Boolean));
+              const rowCodes = new Set(allPOs.map((p) => refCode(p.model)).filter(Boolean));
+              const ffPOs = dbPOs.filter((p) =>
+                !inRow.has(p.id) && p.status !== "Cancelled" && isFfPO(p) &&
+                (rowKeys.has(refKey(p.model)) || (refCode(p.model) && rowCodes.has(refCode(p.model))))
+              );
+              const ffCost = ffPOs.reduce((sum, p) => sum + (parseFloat(p.total) || 0), 0);
+              const ffLabel = ffPOs.map((p) => `PO-${String(p.number).replace(/^PO-?/i, "")} (${p.party || "—"})`).join(", ");
+              return { po, ordered: po.date || "", poEta, cost, ffCost, ffLabel };
             })
             .sort((x, y) => (x.poEta || "9999").localeCompare(y.poEta || "9999"));
 
@@ -17902,7 +17921,7 @@ function DashboardTab({ db, setTab, openRecord, onCreateTask, onToggleTask }) {
                       </div>
                       <div>
                         <div style={{ fontSize: 11, color: "#8a7a66", fontWeight: 600 }}>FF cost</div>
-                        <div style={{ color: item.ffCost ? "#4a3527" : "#ccc" }}>{item.ffCost ? fmtMoney(item.ffCost, "AUD") : "—"}</div>
+                        <div title={item.ffLabel || ""} style={{ color: item.ffCost ? "#4a3527" : "#ccc" }}>{item.ffCost ? fmtMoney(item.ffCost, "AUD") : "—"}</div>
                       </div>
                       <div>
                         <div style={{ fontSize: 11, color: "#8a7a66", fontWeight: 600 }}>Cost</div>
@@ -17967,7 +17986,7 @@ function DashboardTab({ db, setTab, openRecord, onCreateTask, onToggleTask }) {
                         <td style={{ padding: "8px 6px", color: "#4a3527" }}>
                           {item.poEta ? fmtLive(item.poEta) : <span style={{ color: "#ccc" }}>—</span>}
                         </td>
-                        <td style={{ padding: "8px 6px", textAlign: "right", color: item.ffCost ? "#4a3527" : "#ccc" }}>
+                        <td title={item.ffLabel || ""} style={{ padding: "8px 6px", textAlign: "right", color: item.ffCost ? "#4a3527" : "#ccc" }}>
                           {item.ffCost ? fmtMoney(item.ffCost, "AUD") : "—"}
                         </td>
                         <td style={{ padding: "8px 6px", textAlign: "right", color: item.cost ? "#4a3527" : "#ccc", fontWeight: 600 }}>
