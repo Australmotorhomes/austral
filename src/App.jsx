@@ -16398,7 +16398,10 @@ function DashboardTab({ db, setTab, openRecord, onCreateTask, onToggleTask }) {
     .map(({ po, allPOs }) => {
       const stripPONum = (n) => String(n).replace(/^PO-?/i, "");
       const poLabel = `PO-${stripPONum(po.number)}${allPOs.length > 1 ? `/${allPOs.slice(1).map((m) => stripPONum(m.number)).join("/")}` : ""}`;
-      const eta = allPOs.map((p) => p.eta).filter(Boolean).sort()[0] || null;
+      // A consolidated group uses the consolidated (primary) PO's own ETA, not the
+      // individual member POs' ETAs. Falls back to the earliest ETA in the group
+      // only if the consolidated PO has no ETA set.
+      const eta = po.eta || allPOs.map((p) => p.eta).filter(Boolean).sort()[0] || null;
       const value = allPOs.reduce((s, p) => s + (parseFloat(p.total) || 0), 0);
       return { id: po.id, supplier: po.party || "Unknown", poLabel, eta, value };
     })
@@ -16421,7 +16424,10 @@ function DashboardTab({ db, setTab, openRecord, onCreateTask, onToggleTask }) {
     .map(({ po, allPOs }) => {
       const stripPONum = (n) => String(n).replace(/^PO-?/i, "");
       const poLabel = `PO-${stripPONum(po.number)}${allPOs.length > 1 ? `/${allPOs.slice(1).map((m) => stripPONum(m.number)).join("/")}` : ""}`;
-      const eta = allPOs.map((p) => p.eta).filter(Boolean).sort()[0] || null;
+      // A consolidated group uses the consolidated (primary) PO's own ETA, not the
+      // individual member POs' ETAs. Falls back to the earliest ETA in the group
+      // only if the consolidated PO has no ETA set.
+      const eta = po.eta || allPOs.map((p) => p.eta).filter(Boolean).sort()[0] || null;
       const value = allPOs.reduce((s, p) => s + (parseFloat(p.total) || 0), 0);
       return { id: po.id, supplier: po.party || "Unknown", poLabel, eta, value };
     })
