@@ -11111,20 +11111,47 @@ function SupplierKanbanBoard({ list, onOpen, onMove, onDelete, db }) {
 
   const DEFAULT_COLUMN_WIDTH = 260;
   const MIN_COLUMN_WIDTH = 190;
-  const MAX_COLUMN_WIDTH = 1000;
+  // Max is the board's own width (minus the resize handle + gap), so a column
+  // can be dragged to full width on any screen size.
+  const [boardEl, setBoardEl] = useState(null); // callback ref: board only renders when there are cards
+  const [boardWidth, setBoardWidth] = useState(0);
+  const boardWidthRef = useRef(0);
+  const HANDLE_ALLOWANCE = 20;
+  function getMaxColumnWidth() {
+    const w = boardWidthRef.current;
+    return w ? Math.max(MIN_COLUMN_WIDTH, w - HANDLE_ALLOWANCE) : 4000;
+  }
   const [columnWidths, setColumnWidths] = useState(() => getAppSetting(db, "supplier_kanban_column_widths", {}));
   const columnWidthsRef = useRef(columnWidths);
   const resizingRef = useRef(null);
 
   function getColumnWidth(key) {
-    return columnWidths[key] || DEFAULT_COLUMN_WIDTH;
+    const w = columnWidths[key] || DEFAULT_COLUMN_WIDTH;
+    return boardWidth ? Math.min(w, Math.max(MIN_COLUMN_WIDTH, boardWidth - HANDLE_ALLOWANCE)) : w;
   }
+
+  useEffect(() => {
+    const el = boardEl;
+    if (!el) return;
+    const measure = () => {
+      boardWidthRef.current = el.clientWidth;
+      setBoardWidth(el.clientWidth);
+    };
+    measure();
+    if (typeof ResizeObserver !== "undefined") {
+      const ro = new ResizeObserver(measure);
+      ro.observe(el);
+      return () => ro.disconnect();
+    }
+    window.addEventListener("resize", measure);
+    return () => window.removeEventListener("resize", measure);
+  }, [boardEl]);
 
   useEffect(() => {
     function handleMouseMove(e) {
       if (!resizingRef.current) return;
       const { key, startX, startWidth } = resizingRef.current;
-      const next = Math.max(MIN_COLUMN_WIDTH, Math.min(MAX_COLUMN_WIDTH, startWidth + (e.clientX - startX)));
+      const next = Math.max(MIN_COLUMN_WIDTH, Math.min(getMaxColumnWidth(), startWidth + (e.clientX - startX)));
       setColumnWidths((w) => {
         const updated = { ...w, [key]: next };
         columnWidthsRef.current = updated;
@@ -11173,7 +11200,7 @@ function SupplierKanbanBoard({ list, onOpen, onMove, onDelete, db }) {
   }
 
   return (
-    <div style={{ display: "flex", gap: 10, overflowX: "auto", paddingBottom: 8, width: "100%" }}>
+    <div ref={setBoardEl} style={{ display: "flex", gap: 10, overflowX: "auto", paddingBottom: 8, width: "100%" }}>
       {visibleStages.map((stage) => {
         const cards = byStage[stage.key] || [];
         const stageColor = SUPPLIER_STAGE_COLORS[stage.key] || { bg: "#f0e8d9", color: "#6b5240" };
