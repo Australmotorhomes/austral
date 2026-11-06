@@ -50,19 +50,31 @@ function getSupabaseHeaders(extra = {}) {
 // widths, etc.) so each one doesn't need to reimplement the same fetch call.
 // Fire-and-forget: failures are logged but don't block the UI, since the
 // local state change has already applied regardless of whether it persists.
+// In-session cache of every setting saved so far. db.appSettings is only
+// loaded once at startup, so without this a component that remounts (e.g.
+// switching List <-> Kanban, or leaving and returning to a page) would read the
+// stale startup value and lose whatever was just saved (column widths, etc.).
+const _appSettingsCache = {};
+
 async function saveAppSetting(key, value) {
+  _appSettingsCache[key] = value; // apply locally first, regardless of network result
   try {
-    await fetch(`${SUPABASE_URL}/rest/v1/app_settings`, {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/app_settings`, {
       method: "POST",
       headers: getSupabaseHeaders({ Prefer: "resolution=merge-duplicates,return=minimal" }),
       body: JSON.stringify({ key, value, updated_at: new Date().toISOString() }),
     });
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      console.error(`Failed to save app setting "${key}" (${res.status}):`, detail);
+    }
   } catch (err) {
     console.error(`Failed to save app setting "${key}":`, err);
   }
 }
 
 function getAppSetting(db, key, fallback) {
+  if (Object.prototype.hasOwnProperty.call(_appSettingsCache, key)) return _appSettingsCache[key];
   const found = (db?.appSettings || []).find((s) => s.key === key);
   return found ? found.value : fallback;
 }
@@ -16177,7 +16189,7 @@ function DashboardTab({ db, setTab, openRecord, onCreateTask, onToggleTask }) {
     incomeDeposits: "Income / Deposits",
     shipmentsDue: "Shipments Due",
   };
-  const savedSectionOrder = (db.appSettings || []).find((s) => s.key === "dashboard_section_order")?.value;
+  const savedSectionOrder = getAppSetting(db, "dashboard_section_order", undefined);
   const [sectionOrder, setSectionOrder] = React.useState(
     Array.isArray(savedSectionOrder) && savedSectionOrder.length
       // Guard against a saved order that's missing a section (e.g. after an
