@@ -1,0 +1,5 @@
+{
+  "rewrites": [
+    { "source": "/q/:token", "destination": "/api/quote-page?token=:token" }
+  ]
+}

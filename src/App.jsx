@@ -11,6 +11,65 @@ import html2pdf from "html2pdf.js";
 const SUPABASE_URL = process.env.REACT_APP_SUPABASE_URL || "https://dpapwmittcowsrwwsajo.supabase.co";
 const SUPABASE_ANON_KEY = process.env.REACT_APP_SUPABASE_ANON_KEY || "sb_publishable_0m-oMR8pDlxdij36m4Fj9w_yAVcVIVn";
 
+// ---- Customer quote links (Stage 2) ------------------------------------------
+// The Terms of Trade PDF lives in the app's /public/terms/ folder. The filename is
+// versioned: when the Terms change, ADD a new file (e.g. ..._2027-02.pdf) and change
+// this constant — never overwrite the old file, because every quote snapshot and
+// customer acceptance points at the exact version the customer was shown.
+const TERMS_OF_TRADE_PATH = "/terms/QOL_Terms_of_Trade_2026-11.pdf";
+const termsOfTradeUrl = () => `${window.location.origin}${TERMS_OF_TRADE_PATH}`;
+
+// Brand details used on the customer email. (Austral details match the quote letterhead.
+// Platinum Pontoons contact details are not in the app yet — add them here when known.)
+const QUOTE_BRANDS = {
+  austral: {
+    key: "austral",
+    name: "Austral Slide on Campers & Motorhomes",
+    lines: ["2/4 Progress Rd, Maroochydore", "1300 484 844", "sales@australmotorhomes.com.au", "www.australmotorhomes.com.au"],
+  },
+  platinum: {
+    key: "platinum",
+    name: "Platinum Pontoons",
+    lines: ["2/4 Progress Rd, Maroochydore QLD 4558", "Ph 1300 48 48 44", "www.platinumpontoons.com.au"],
+  },
+};
+
+// Styles for the frozen quote copy the customer sees. Scoped under .qs-doc so they
+// can never leak into the public page around it. Mirrors the PDF stylesheet.
+const QUOTE_SNAPSHOT_CSS = `
+.qs-doc{font-family:Georgia,serif;color:#2b2018;line-height:1.45}
+.qs-doc *{margin:0;padding:0;box-sizing:border-box}
+.qs-doc img{max-width:100%}
+.qs-doc a{color:#b5552b}
+.qs-doc .muted{color:#8a7a66}
+.qs-doc .doc-header{display:grid;grid-template-columns:1fr auto;align-items:start;column-gap:20px;border-bottom:3px solid #b5552b;padding-bottom:12px;margin-bottom:16px}
+.qs-doc .doc-header>div:first-child{min-width:0}
+.qs-doc .doc-header>div:last-child{text-align:right;display:flex;flex-direction:column;align-items:flex-end}
+.qs-doc .doc-meta{display:flex;gap:18px;flex-wrap:wrap;font-size:12.5px;color:#8a7a66;margin-bottom:10px}
+.qs-doc h2{font-size:24px;font-weight:700;margin-bottom:4px}
+.qs-doc table{width:100%;border-collapse:collapse;margin:14px 0}
+.qs-doc th{text-align:left;border-bottom:2px solid #b5552b;padding:7px 12px 7px 0;font-size:12px;font-weight:700}
+.qs-doc th.num{text-align:right;padding-right:0}
+.qs-doc td{padding:6px 12px 6px 0;border-bottom:1px solid #e3d8c6;font-size:14px}
+.qs-doc td.num{text-align:right;padding-right:0}
+.qs-doc ul{line-height:1.3}
+.qs-doc li{margin-bottom:1px}
+.qs-doc .totals-row{display:flex;justify-content:space-between;padding:5px 0;font-size:14px}
+.qs-doc .grand{font-weight:800;font-size:18px;border-top:2px solid #b5552b;border-bottom:1px solid #b5552b;padding:10px 0;margin-top:8px}
+@media (max-width:600px){.qs-doc .doc-header{grid-template-columns:1fr}.qs-doc .doc-header>div:last-child{align-items:flex-start;text-align:left}}
+`;
+
+// Payment-instalment sentence shown on the quote. orderType: "special" | "stock" | "".
+function quoteInstalmentsText(orderType) {
+  if (orderType === "stock") {
+    return "Payment is due in two instalments: 50% on acceptance of this Quote and 50% prior to collection or delivery.";
+  }
+  if (orderType === "special") {
+    return "Payment is due in three instalments: 33% on acceptance of this Quote (before manufacturing commences), 33% on substantial completion of manufacturing, and 34% prior to collection or delivery.";
+  }
+  return "[Choose the payment instalments for this quote on the quote form.]";
+}
+
 // Holds the current logged-in user's Supabase Auth JWT (access_token from the OTP
 // login flow) so that every REST/Storage request below is made AS that authenticated
 // user rather than as the bare anon key. This is required for any RLS policy that
@@ -544,6 +603,10 @@ function toSupabaseFormat(data, table) {
         copy.hidden_costs = copy.hiddenCosts;
         delete copy.hiddenCosts;
       }
+      if (copy.orderType !== undefined) {
+        copy.order_type = copy.orderType || null;
+        delete copy.orderType;
+      }
       if (copy.consolidatedGroupId !== undefined) {
         copy.consolidated_group_id = copy.consolidatedGroupId || null;
         delete copy.consolidatedGroupId;
@@ -686,6 +749,7 @@ function toSupabaseFormat(data, table) {
       if (copy.quote_id !== undefined) { copy.quoteId = copy.quote_id; delete copy.quote_id; }
       if (copy.quote_number !== undefined) { copy.quoteNumber = copy.quote_number; delete copy.quote_number; }
       if (copy.hidden_costs !== undefined) { copy.hiddenCosts = copy.hidden_costs; delete copy.hidden_costs; }
+      if (copy.order_type !== undefined) { copy.orderType = copy.order_type || ""; delete copy.order_type; }
       if (copy.supplier_note !== undefined) { copy.supplierNote = copy.supplier_note; delete copy.supplier_note; }
       if (copy.pre_archive_status !== undefined) { copy.preArchiveStatus = copy.pre_archive_status; delete copy.pre_archive_status; }
       if (copy.shipping_line !== undefined) { copy.shippingLine = copy.shipping_line || ""; delete copy.shipping_line; }
@@ -7120,6 +7184,11 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
   const [ref, setRef] = useState(
     editing?.ref ? editing.ref : ""
   );
+  // Quote only: "special" (made to order: 33/33/34) or "stock" (50/50). Deliberately
+  // never guessed — a custom-build unit only exists after its PO arrives, and an
+  // ordinary stock sale may be left unlinked, so the stock link can't decide this.
+  const [orderType, setOrderType] = useState(editing?.orderType || "");
+  const [showSendQuote, setShowSendQuote] = useState(false);
   // Hidden cost items — internal-only costs (freight, labour, etc.) that are
   // baked into the quoted price but never itemized to the customer. Kept as
   // their own array (not mixed into `lines`, which the customer-facing quote
@@ -8002,7 +8071,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
         }),
         ...(!isQuote && customer && { customer }),
         eta,  // Always include ETA for both quotes and POs (persist to Supabase)
-        ...(isQuote && { ref: ref.trim(), hiddenCosts }),
+        ...(isQuote && { ref: ref.trim(), hiddenCosts, ...(orderType ? { orderType } : {}) }),
       },
       editing
     );
@@ -8029,6 +8098,30 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
   }
 
   const printRef = useRef(null);
+
+  // Builds the frozen, customer-safe copy of the quote that is stored when a link is
+  // sent. Starts from the same preview panel the PDF uses and removes exactly what the
+  // PDF removes (internal cost / gross-profit notes), plus a few extra safety nets.
+  // Web-only changes: the printed signature lines are dropped (the customer accepts
+  // with the tick box on the page instead). The PDF keeps its signature lines.
+  function buildQuoteSnapshotHtml() {
+    if (!printRef.current) return "";
+    const clone = printRef.current.cloneNode(true);
+    clone.querySelectorAll(".no-print, [data-no-print]").forEach((el) => el.remove());
+    clone.querySelectorAll("div").forEach((el) => {
+      const t = el.textContent.trim();
+      // Same rule the PDF uses, plus belt-and-braces for anything cost/profit related.
+      if (t.startsWith("(Gross profit") || t.startsWith("Total Cost") || t.startsWith("Gross Profit")) el.remove();
+    });
+    clone.querySelectorAll("[data-web-hide]").forEach((el) => el.remove());
+    const acceptance = clone.querySelector('[data-acceptance="para"]');
+    if (acceptance) {
+      acceptance.innerHTML =
+        "<strong>Acceptance</strong><br />To accept this Quote, tick the box and type your full name in the “Accept this quote” section below this page.";
+    }
+    return `<style>${QUOTE_SNAPSHOT_CSS}</style><div class="qs-doc">${clone.innerHTML}</div>`;
+  }
+
   const MODAL_WIDTH_MIN = 700;
   const MODAL_WIDTH_MAX = 1700;
   const MODAL_WIDTH_DEFAULT = 1000;
@@ -8459,6 +8552,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
               </Field>
             )}
             {isQuote ? (
+              <>
               <div className="grid2">
                 <Field label="ETA (Estimated Delivery)">
                   <input
@@ -8481,6 +8575,25 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                   />
                 </Field>
               </div>
+              <Field label="Payment instalments (shown on the quote)">
+                <select
+                  style={inputStyle}
+                  value={orderType}
+                  onChange={(e) => setOrderType(e.target.value)}
+                >
+                  <option value="">— Choose —</option>
+                  <option value="special">Made to order — 33% / 33% / 34%</option>
+                  <option value="stock">In stock — 50% / 50%</option>
+                </select>
+                <p style={{ fontSize: 11, color: orderType ? "#8a7a66" : "#a3442e", margin: "4px 0 0" }}>
+                  {orderType
+                    ? "Click Save changes to keep this choice."
+                    : linkedUnitForQuote
+                      ? "A stock unit is linked to this quote, so “In stock” is probably right. Required before you download the PDF or send the quote."
+                      : "Required before you download the PDF or send the quote."}
+                </p>
+              </Field>
+              </>
             ) : (
               <Field label="ETA (Estimated Time of Arrival)">
                 <input 
@@ -8986,11 +9099,11 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                 const isAustralPo = /austral/i.test(po.model || "") || poLines(po).some(li => /austral/i.test(li.desc || li.description || ""));
                 const brandHeaderHtml = isAustralPo
                   ? `<img src="${AUSTRAL_LOGO}" alt="Austral Motorhomes" style="height:60px;width:auto;object-fit:contain;margin-bottom:4px;">
-                     <div style="font-family:Georgia,serif;font-weight:700;font-size:15px;color:#2b2018;margin-top:2px;">Austral Motorhomes</div>
-                     <div style="font-size:11px;color:#8a7a66;line-height:1.5;">Kunda Park, QLD<br>sales@australmotorhomes.com.au<br>www.australmotorhomes.com.au<br>1300 484 844</div>`
+                     <div style="font-family:Georgia,serif;font-weight:700;font-size:15px;color:#2b2018;margin-top:2px;">Austral Slide on Campers &amp; Motorhomes</div>
+                     <div style="font-size:11px;color:#8a7a66;line-height:1.5;">2/4 Progress Rd, Maroochydore<br>sales@australmotorhomes.com.au<br>www.australmotorhomes.com.au<br>1300 484 844</div>`
                   : `<img src="${AUSTRAL_LOGO}" alt="Austral Motorhomes" style="height:40px;width:auto;object-fit:contain;margin-bottom:4px;">
                      <img src="${PLATINUM_LOGO}" alt="Platinum Pontoons" style="height:40px;width:auto;object-fit:contain;margin-bottom:4px;">
-                     <div style="font-size:11px;color:#8a7a66;">Kunda Park, QLD</div>`;
+                     <div style="font-size:11px;color:#8a7a66;">2/4 Progress Rd, Maroochydore</div>`;
 
                 return `
                   <div style="${idx > 0 ? "page-break-before:always;" : ""}padding-top:${idx > 0 ? "30px" : "0"}">
@@ -10231,9 +10344,9 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                       {showAustralLetterhead ? (
                         <>
                           <img src={AUSTRAL_LOGO} alt="Austral Motorhomes" style={{ height: 60, width: "auto", objectFit: "contain" }} />
-                          <div style={{ fontFamily: "Georgia,serif", fontWeight: 700, fontSize: 15, color: "#2b2018", marginTop: 2 }}>Austral Motorhomes</div>
+                          <div style={{ fontFamily: "Georgia,serif", fontWeight: 700, fontSize: 15, color: "#2b2018", marginTop: 2 }}>Austral Slide on Campers &amp; Motorhomes</div>
                           <div className="muted" style={{ fontSize: 11, lineHeight: 1.5 }}>
-                            Kunda Park, QLD<br />
+                            2/4 Progress Rd, Maroochydore<br />
                             sales@australmotorhomes.com.au<br />
                             www.australmotorhomes.com.au<br />
                             1300 484 844
@@ -10245,7 +10358,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                             <img src={AUSTRAL_LOGO} alt="Austral Motorhomes" style={{ height: 36, width: "auto", objectFit: "contain" }} />
                             <img src={PLATINUM_LOGO} alt="Platinum Pontoons" style={{ height: 36, width: "auto", objectFit: "contain" }} />
                           </div>
-                          <span className="muted" style={{ fontSize: 11 }}>Kunda Park, QLD</span>
+                          <span className="muted" style={{ fontSize: 11 }}>2/4 Progress Rd, Maroochydore</span>
                         </>
                       )}
                     </div>
@@ -10438,21 +10551,21 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
               <div className="pdf-line-item-group" style={{ marginTop: 22, paddingTop: 16, borderTop: "1px solid #e3d8c6", fontSize: 12, color: "#2b2018", lineHeight: 1.6 }}>
                 <p style={{ margin: "0 0 10px" }}>
                   <strong>Quote validity</strong><br />
-                  This Quote is valid for 7 days from the date of issue. Prices, specifications and lead times may change after this period.
+                  This Quote is valid for 14 days from the date of issue. Prices, specifications and lead times may change after this period.
                 </p>
                 <p style={{ margin: "0 0 10px" }}>
                   <strong>Payment terms</strong><br />
-                  Payment is due in three instalments: 33% on acceptance of this Quote (before manufacturing commences), 33% on substantial completion of manufacturing, and 34% prior to collection or delivery. The initial 33% deposit is non-refundable once paid, except where cancelled within 48 hours of payment (refunded less a $500 administrative fee). Full terms are set out in our <a href="https://australmotorhomes.com.au/wp-content/uploads/2026/08/Austral_Motorhomes_Terms_of_Trade.pdf" data-pdf-link="terms" style={{ color: "#b5552b", textDecoration: "underline" }}>Terms of Trade and Cancellation Policy</a>, which form part of this Order.
+                  {quoteInstalmentsText(orderType)} The deposit (the first instalment) is refunded in full if you cancel within 48 hours of us receiving it. If you cancel more than 48 hours but within 72 hours after we receive the deposit, it is refunded less a $500 (including GST) administrative fee. After 72 hours the deposit is non-refundable. You are liable for the full price of the goods and must pay each instalment when it falls due; if an instalment is not paid when due, we may retain the deposit and all other money paid, and the balance of the price remains payable. Full terms are set out in our <a href={termsOfTradeUrl()} data-pdf-link="terms" style={{ color: "#b5552b", textDecoration: "underline" }}>Terms of Trade</a>, which form part of this Order.
                 </p>
                 <p style={{ margin: "0 0 10px" }}>
                   <strong>Delivery</strong><br />
                   Delivery and completion dates are estimates only and may change. We will let you know as soon as practicable if your estimated date changes.
                 </p>
-                <p style={{ margin: "0 0 18px" }}>
+                <p style={{ margin: "0 0 18px" }} data-acceptance="para">
                   <strong>Acceptance</strong><br />
-                  By signing below, you accept this Quote and confirm you have read and agree to our Terms of Trade, including the Cancellation Policy.
+                  By signing below, you accept this Quote and confirm you have read and agree to our Terms of Trade, including the payment instalments and the cancellation and refund terms.
                 </p>
-                <div style={{ display: "flex", gap: 40, marginTop: 100 }}>
+                <div data-web-hide="signature" style={{ display: "flex", gap: 40, marginTop: 100 }}>
                   <div style={{ flex: 1, borderTop: "1px solid #4a3527", paddingTop: 4, fontSize: 11, color: "#6b5240" }}>Signature</div>
                   <div style={{ flex: 1, borderTop: "1px solid #4a3527", paddingTop: 4, fontSize: 11, color: "#6b5240" }}>Date</div>
                 </div>
@@ -10489,9 +10602,13 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
         <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
           {!isNew && (
             <>
-              <Btn 
-                variant="ghost" 
+              <Btn
+                variant="ghost"
                 onClick={() => {
+                  if (isQuote && !orderType) {
+                    alert("Please choose the payment instalments (Made to order or In stock) on the quote before printing.");
+                    return;
+                  }
                   try {
                     window.print();
                   } catch (e) {
@@ -10504,6 +10621,10 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
               <Btn 
                 variant="ghost" 
                 onClick={() => {
+                  if (isQuote && !orderType) {
+                    alert("Please choose the payment instalments (Made to order or In stock) on the quote before downloading the PDF.");
+                    return;
+                  }
                   try {
                     // Consolidated POs: use the custom per-page PDF builder
                     if (!isQuote && !isNew && editing?.consolidatedMemberIds?.length > 0) {
@@ -10533,8 +10654,8 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                         const sn = pdfSupplierNote(po);
                         const isAustralPo2 = /austral/i.test(po.model || "") || poLns.some(li => /austral/i.test(li.desc || li.description || ""));
                         const brandHeaderHtml2 = isAustralPo2
-                          ? `<img src="${AUSTRAL_LOGO}" alt="Austral Motorhomes" style="height:60px;width:auto;object-fit:contain;display:block;margin-left:auto;"><div style="font-family:Georgia,serif;font-weight:700;font-size:15px;color:#2b2018;margin-top:2px;">Austral Motorhomes</div><div style="font-size:11px;color:#8a7a66;line-height:1.5;">Kunda Park, QLD<br>sales@australmotorhomes.com.au<br>www.australmotorhomes.com.au<br>1300 484 844</div>`
-                          : `<img src="${AUSTRAL_LOGO}" alt="Austral Motorhomes" style="height:38px;width:auto;object-fit:contain;display:block;margin-left:auto;"><img src="${PLATINUM_LOGO}" alt="Platinum Pontoons" style="height:38px;width:auto;object-fit:contain;display:block;margin-left:auto;"><div style="font-size:11px;color:#8a7a66;">Kunda Park, QLD</div>`;
+                          ? `<img src="${AUSTRAL_LOGO}" alt="Austral Motorhomes" style="height:60px;width:auto;object-fit:contain;display:block;margin-left:auto;"><div style="font-family:Georgia,serif;font-weight:700;font-size:15px;color:#2b2018;margin-top:2px;">Austral Slide on Campers &amp; Motorhomes</div><div style="font-size:11px;color:#8a7a66;line-height:1.5;">2/4 Progress Rd, Maroochydore<br>sales@australmotorhomes.com.au<br>www.australmotorhomes.com.au<br>1300 484 844</div>`
+                          : `<img src="${AUSTRAL_LOGO}" alt="Austral Motorhomes" style="height:38px;width:auto;object-fit:contain;display:block;margin-left:auto;"><img src="${PLATINUM_LOGO}" alt="Platinum Pontoons" style="height:38px;width:auto;object-fit:contain;display:block;margin-left:auto;"><div style="font-size:11px;color:#8a7a66;">2/4 Progress Rd, Maroochydore</div>`;
                         return `<div style="${idx > 0 ? "page-break-before:always;padding-top:30px;" : ""}">
                           <div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #b5552b;padding-bottom:20px;margin-bottom:20px;">
                             <div><div style="font-size:26px;font-weight:700;color:#2b2018;margin-bottom:6px;">Purchase Order</div>
@@ -10695,6 +10816,11 @@ ${clone?.innerHTML || ""}
               >
                 Download PDF
               </Btn>
+              {isQuote && (
+                <Btn variant="ghost" onClick={() => setShowSendQuote(true)}>
+                  Send to customer
+                </Btn>
+              )}
               {isQuote && editing.status !== "Accepted" && (
                 <Btn variant="primary" onClick={() => handleStatusChange("Accepted")}>
                   Accept Quote
@@ -10728,6 +10854,24 @@ ${clone?.innerHTML || ""}
           </Btn>
         </div>
       </div>
+
+      {showSendQuote && !isNew && isQuote && (
+        <SendQuoteModal
+          quote={editing}
+          quoteNumber={displayDocNumber(editing, db, isQuote)}
+          db={db}
+          party={party}
+          orderType={orderType}
+          onOrderTypeChange={setOrderType}
+          total={total}
+          defaultBrand="austral"
+          buildSnapshot={buildQuoteSnapshotHtml}
+          canMarkSent={status === "Draft"}
+          onMarkSent={() => handleStatusChange("Sent")}
+          showToast={showToast}
+          onClose={() => setShowSendQuote(false)}
+        />
+      )}
 
       {showPaymentModal && !isNew && (
         <PaymentMilestonesModal
@@ -10925,6 +11069,284 @@ function POGenerationModal({ quote, items, suppliers, onCancel, onGenerate }) {
           Create {selectedSuppliers.length} PO{selectedSuppliers.length !== 1 ? "s" : ""}
         </Btn>
       </div>
+    </Modal>
+  );
+}
+
+// ---------------------------------------------------------------------
+// Send a quote to a customer as a link (Stage 2)
+// ---------------------------------------------------------------------
+const escHtml = (s) =>
+  String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+// Outlook-safe email: table layout, inline styles only, text header (no images).
+function buildQuoteEmailHtml({ brand, recipientName, quoteNumber, total, url, expiresAt }) {
+  const first = String(recipientName || "").trim().split(/\s+/)[0] || "there";
+  const validUntil = new Date(expiresAt).toLocaleDateString("en-AU", { day: "numeric", month: "long", year: "numeric" });
+  const font = "Georgia,'Times New Roman',serif";
+  const sans = "Calibri,Arial,sans-serif";
+  const footer = brand.lines.map(escHtml).join(" &nbsp;|&nbsp; ");
+  return (
+    `<table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="width:600px;max-width:100%;font-family:${font};color:#2b2018;">` +
+    `<tr><td style="padding:0 0 12px 0;border-bottom:3px solid #b5552b;font-size:22px;font-weight:bold;color:#4a3527;font-family:${font};">${escHtml(brand.name)}</td></tr>` +
+    `<tr><td style="padding:18px 0 8px 0;font-size:15px;line-height:22px;font-family:${sans};">Hi ${escHtml(first)},</td></tr>` +
+    `<tr><td style="padding:0 0 14px 0;font-size:15px;line-height:22px;font-family:${sans};">Thank you for your enquiry. Your quote <strong>${escHtml(quoteNumber)}</strong> (total ${escHtml(fmtMoney(total, "AUD"))} including GST) is ready to view online. It includes our Terms of Trade and payment schedule.</td></tr>` +
+    `<tr><td style="padding:4px 0 16px 0;">` +
+    `<table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>` +
+    `<td bgcolor="#b5552b" style="background-color:#b5552b;border-radius:6px;padding:12px 24px;">` +
+    `<a href="${escHtml(url)}" style="color:#ffffff;text-decoration:none;font-family:${sans};font-size:16px;font-weight:bold;display:inline-block;">View your quote</a>` +
+    `</td></tr></table></td></tr>` +
+    `<tr><td style="padding:0 0 14px 0;font-size:13px;line-height:19px;color:#6b5240;font-family:${sans};">This link is valid until ${escHtml(validUntil)}. If the button does not work, copy this address into your browser:<br><a href="${escHtml(url)}" style="color:#b5552b;word-break:break-all;">${escHtml(url)}</a></td></tr>` +
+    `<tr><td style="padding:0 0 18px 0;font-size:15px;line-height:22px;font-family:${sans};">You can accept the quote online from that page, or reply to this email if you have any questions.</td></tr>` +
+    `<tr><td style="padding:0 0 4px 0;font-size:15px;line-height:22px;font-family:${sans};">Kind regards,<br>Duncan Manderson<br><strong>${escHtml(brand.name)}</strong></td></tr>` +
+    `<tr><td style="padding:14px 0 0 0;border-top:1px solid #d3c9b8;font-size:12px;color:#8a7a66;font-family:${sans};">${footer}</td></tr>` +
+    `</table>`
+  );
+}
+
+async function copyHtmlToClipboard(html, plain) {
+  try {
+    if (navigator.clipboard && window.ClipboardItem) {
+      await navigator.clipboard.write([
+        new window.ClipboardItem({
+          "text/html": new Blob([html], { type: "text/html" }),
+          "text/plain": new Blob([plain], { type: "text/plain" }),
+        }),
+      ]);
+      return true;
+    }
+  } catch (e) {
+    // fall through to the selection-based fallback
+  }
+  try {
+    const holder = document.createElement("div");
+    holder.contentEditable = "true";
+    holder.style.cssText = "position:fixed;left:-9999px;top:0;";
+    holder.innerHTML = html;
+    document.body.appendChild(holder);
+    const range = document.createRange();
+    range.selectNodeContents(holder);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+    const ok = document.execCommand("copy");
+    sel.removeAllRanges();
+    document.body.removeChild(holder);
+    return ok;
+  } catch (e) {
+    return false;
+  }
+}
+
+function SendQuoteModal({ quote, quoteNumber, db, party, orderType, onOrderTypeChange, total, defaultBrand, buildSnapshot, canMarkSent, onMarkSent, showToast, onClose }) {
+  // Always prefilled from the linked Customer, else Prospect, else a name match — always editable.
+  const initial = (() => {
+    const n = String(party || "").trim().toLowerCase();
+    const cust =
+      (db.customers || []).find((c) => c.id && quote.customerId && c.id === quote.customerId) ||
+      (db.customers || []).find((c) => (c.name || "").trim().toLowerCase() === n);
+    const pros = (db.crm || []).find((p) => (p.name || "").trim().toLowerCase() === n);
+    const rec = cust || pros;
+    return { name: (rec && rec.name) || party || "", email: (rec && rec.email) || "" };
+  })();
+
+  const [brandKey, setBrandKey] = useState(defaultBrand || "austral");
+  const [name, setName] = useState(initial.name);
+  const [email, setEmail] = useState(initial.email);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [result, setResult] = useState(null); // { url, version, expiresAt }
+  const [history, setHistory] = useState(null);
+
+  const brand = QUOTE_BRANDS[brandKey] || QUOTE_BRANDS.austral;
+
+  async function loadHistory() {
+    try {
+      const rows = await supabaseREST(
+        "GET",
+        "quote_shares",
+        null,
+        `quote_id=eq.${encodeURIComponent(quote.id)}&select=id,token,version,status,recipient_name,recipient_email,sent_at,expires_at,view_count,last_viewed_at,accepted_at&order=version.desc`
+      );
+      setHistory(Array.isArray(rows) ? rows : []);
+    } catch (e) {
+      setHistory([]);
+    }
+  }
+  useEffect(() => {
+    loadHistory();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const emailOk = !email.trim() || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim());
+
+  async function createLink() {
+    setError("");
+    if (!orderType) {
+      setError("Choose the payment instalments first.");
+      return;
+    }
+    if (!name.trim()) {
+      setError("Enter the recipient's name.");
+      return;
+    }
+    if (!emailOk) {
+      setError("The email address looks invalid.");
+      return;
+    }
+    const snapshotHtml = buildSnapshot();
+    if (!snapshotHtml) {
+      setError("Could not read the quote preview. Close and reopen the quote, then try again.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const res = await fetch("/api/quote-share-create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(_supabaseAuthToken ? { Authorization: `Bearer ${_supabaseAuthToken}` } : {}) },
+        body: JSON.stringify({
+          quoteId: quote.id,
+          quoteNumber,
+          recipientName: name.trim(),
+          recipientEmail: email.trim(),
+          brand: brandKey,
+          total,
+          snapshotHtml,
+        }),
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok || !j.url) throw new Error(j.error || `HTTP ${res.status}`);
+      setResult({ url: j.url, version: j.version, expiresAt: j.expiresAt });
+      loadHistory();
+      if (canMarkSent && onMarkSent) onMarkSent();
+    } catch (e) {
+      setError(`Could not create the link: ${e.message}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function copyEmail() {
+    const html = buildQuoteEmailHtml({ brand, recipientName: name, quoteNumber, total, url: result.url, expiresAt: result.expiresAt });
+    const plain = `Hi ${name.trim().split(/\s+/)[0] || "there"},\n\nYour quote ${quoteNumber} is ready to view online:\n${result.url}\n\nThis link is valid until ${new Date(result.expiresAt).toLocaleDateString("en-AU")}.\n\nKind regards,\nDuncan Manderson\n${brand.name}`;
+    const ok = await copyHtmlToClipboard(html, plain);
+    showToast(ok ? "Email copied — paste it into a new Outlook message" : "Could not copy automatically — use the preview below and copy it by hand");
+  }
+
+  async function copyLink() {
+    try {
+      await navigator.clipboard.writeText(result.url);
+      showToast("Link copied");
+    } catch (e) {
+      showToast("Could not copy — select the link and copy it by hand");
+    }
+  }
+
+  const statusLabel = (r) => {
+    if (r.accepted_at) return "Accepted";
+    if (r.status === "superseded") return "Replaced by newer version";
+    if (r.status === "revoked") return "Revoked";
+    return new Date(r.expires_at) < new Date() ? "Expired" : "Active";
+  };
+
+  return (
+    <Modal onClose={onClose} width={640}>
+      <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: "0 0 6px", fontSize: 19 }}>
+        Send quote {quoteNumber} to customer
+      </h3>
+      <p style={{ fontSize: 12.5, color: "#8a7a66", margin: "0 0 14px" }}>
+        This freezes a copy of the quote as it appears on screen right now and creates a private link that expires in 14 days. If you edit the quote later, send it again to give the customer the new version.
+      </p>
+
+      {!result ? (
+        <>
+          <div className="grid2">
+            <Field label="Recipient name">
+              <input style={inputStyle} value={name} onChange={(e) => setName(e.target.value)} />
+            </Field>
+            <Field label="Recipient email">
+              <input style={inputStyle} type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="name@example.com" />
+            </Field>
+          </div>
+          <div className="grid2">
+            <Field label="Sending as">
+              <select style={inputStyle} value={brandKey} onChange={(e) => setBrandKey(e.target.value)}>
+                {Object.values(QUOTE_BRANDS).map((b) => (
+                  <option key={b.key} value={b.key}>{b.name}</option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Payment instalments">
+              <select style={inputStyle} value={orderType} onChange={(e) => onOrderTypeChange(e.target.value)}>
+                <option value="">— Choose —</option>
+                <option value="special">Made to order — 33% / 33% / 34%</option>
+                <option value="stock">In stock — 50% / 50%</option>
+              </select>
+            </Field>
+          </div>
+          {orderType && !quote.orderType && (
+            <p style={{ fontSize: 11.5, color: "#8a7a66", margin: "-6px 0 10px" }}>
+              Remember to click Save changes on the quote so this choice is kept.
+            </p>
+          )}
+          {error && <div style={{ color: "#a3442e", fontSize: 13, marginBottom: 10 }}>{error}</div>}
+          <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+            <Btn variant="ghost" onClick={onClose}>Cancel</Btn>
+            <Btn variant="primary" onClick={busy ? undefined : createLink} disabled={busy}>
+              {busy ? "Creating…" : "Create link"}
+            </Btn>
+          </div>
+        </>
+      ) : (
+        <>
+          <div style={{ background: "#eaf4e4", border: "1px solid #b9d6a8", borderRadius: 8, padding: 12, fontSize: 13, marginBottom: 12 }}>
+            <strong>Link created (version {result.version}).</strong> Valid until {new Date(result.expiresAt).toLocaleDateString("en-AU", { day: "numeric", month: "long", year: "numeric" })}.
+            {canMarkSent === false ? "" : " The quote status has been set to Sent."}
+          </div>
+          <Field label="Customer link">
+            <input style={inputStyle} readOnly value={result.url} onFocus={(e) => e.target.select()} />
+          </Field>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
+            <Btn variant="primary" onClick={copyEmail}>Copy email for Outlook</Btn>
+            <Btn variant="ghost" onClick={copyLink}>Copy link only</Btn>
+            <Btn variant="ghost" onClick={() => window.open(`${result.url}${result.url.includes("?") ? "&" : "?"}preview=1`, "_blank", "noopener")}>
+              Preview as customer
+            </Btn>
+          </div>
+          <div style={{ fontSize: 12, color: "#8a7a66", marginBottom: 6 }}>
+            Email preview{email.trim() ? ` — to ${email.trim()}` : ""}. In Outlook: New email → paste (Ctrl+V). Preview opens do not count as customer views.
+          </div>
+          <div
+            style={{ border: "1px solid #e3d8c6", borderRadius: 8, padding: 14, background: "#fff", overflowX: "auto", maxHeight: 280, overflowY: "auto" }}
+            dangerouslySetInnerHTML={{
+              __html: buildQuoteEmailHtml({ brand, recipientName: name, quoteNumber, total, url: result.url, expiresAt: result.expiresAt }),
+            }}
+          />
+        </>
+      )}
+
+      {history && history.length > 0 && (
+        <div style={{ marginTop: 18 }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: "#6b5240", marginBottom: 6 }}>Previously sent versions</div>
+          <div style={{ border: "1px solid #e3d8c6", borderRadius: 8, overflow: "hidden", fontSize: 12.5 }}>
+            {history.map((r) => (
+              <div key={r.id} style={{ display: "flex", justifyContent: "space-between", gap: 8, padding: "8px 10px", borderBottom: "1px solid #f0e8d8", flexWrap: "wrap" }}>
+                <span>
+                  <strong>v{r.version}</strong> · {r.recipient_name || "—"} · {fmtDateTime(r.sent_at)}
+                </span>
+                <span style={{ color: "#6b5240" }}>
+                  {statusLabel(r)} · {r.view_count || 0} view{r.view_count === 1 ? "" : "s"}
+                  {r.last_viewed_at ? ` · last ${fmtDateTime(r.last_viewed_at)}` : ""}
+                  {" · "}
+                  <a href={`${window.location.origin}/q/${r.token}?preview=1`} target="_blank" rel="noopener noreferrer" style={{ color: "#b5552b" }}>
+                    View
+                  </a>
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
     </Modal>
   );
 }
