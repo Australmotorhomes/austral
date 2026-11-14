@@ -11085,7 +11085,6 @@ function buildQuoteEmailHtml({ brand, recipientName, quoteNumber, total, url, ex
   const validUntil = new Date(expiresAt).toLocaleDateString("en-AU", { day: "numeric", month: "long", year: "numeric" });
   const font = "Georgia,'Times New Roman',serif";
   const sans = "Calibri,Arial,sans-serif";
-  const footer = brand.lines.map(escHtml).join(" &nbsp;|&nbsp; ");
   return (
     `<table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="width:600px;max-width:100%;font-family:${font};color:#2b2018;">` +
     `<tr><td style="padding:0 0 12px 0;border-bottom:3px solid #b5552b;font-size:22px;font-weight:bold;color:#4a3527;font-family:${font};">${escHtml(brand.name)}</td></tr>` +
@@ -11098,8 +11097,6 @@ function buildQuoteEmailHtml({ brand, recipientName, quoteNumber, total, url, ex
     `</td></tr></table></td></tr>` +
     `<tr><td style="padding:0 0 14px 0;font-size:13px;line-height:19px;color:#6b5240;font-family:${sans};">This link is valid until ${escHtml(validUntil)}. If the button does not work, copy this address into your browser:<br><a href="${escHtml(url)}" style="color:#b5552b;word-break:break-all;">${escHtml(url)}</a></td></tr>` +
     `<tr><td style="padding:0 0 18px 0;font-size:15px;line-height:22px;font-family:${sans};">You can accept the quote online from that page, or reply to this email if you have any questions.</td></tr>` +
-    `<tr><td style="padding:0 0 4px 0;font-size:15px;line-height:22px;font-family:${sans};">Kind regards,<br>Duncan Manderson<br><strong>${escHtml(brand.name)}</strong></td></tr>` +
-    `<tr><td style="padding:14px 0 0 0;border-top:1px solid #d3c9b8;font-size:12px;color:#8a7a66;font-family:${sans};">${footer}</td></tr>` +
     `</table>`
   );
 }
@@ -11228,7 +11225,7 @@ function SendQuoteModal({ quote, quoteNumber, db, party, orderType, onOrderTypeC
 
   async function copyEmail() {
     const html = buildQuoteEmailHtml({ brand, recipientName: name, quoteNumber, total, url: result.url, expiresAt: result.expiresAt });
-    const plain = `Hi ${name.trim().split(/\s+/)[0] || "there"},\n\nYour quote ${quoteNumber} is ready to view online:\n${result.url}\n\nThis link is valid until ${new Date(result.expiresAt).toLocaleDateString("en-AU")}.\n\nKind regards,\nDuncan Manderson\n${brand.name}`;
+    const plain = `Hi ${name.trim().split(/\s+/)[0] || "there"},\n\nYour quote ${quoteNumber} is ready to view online:\n${result.url}\n\nThis link is valid until ${new Date(result.expiresAt).toLocaleDateString("en-AU")}.`;
     const ok = await copyHtmlToClipboard(html, plain);
     showToast(ok ? "Email copied — paste it into a new Outlook message" : "Could not copy automatically — use the preview below and copy it by hand");
   }
