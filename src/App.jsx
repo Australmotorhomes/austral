@@ -8200,6 +8200,11 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
               </button>
             </div>
           )}
+          {isMobile && isQuote && !isNew && (
+            <Btn variant="ghost" size="sm" onClick={() => setShowSendQuote(true)}>
+              Send to customer
+            </Btn>
+          )}
           {!isNew && (
             <Field label="" >
               <select
@@ -10817,7 +10822,11 @@ ${clone?.innerHTML || ""}
                 Download PDF
               </Btn>
               {isQuote && (
-                <Btn variant="ghost" onClick={() => setShowSendQuote(true)}>
+                <Btn
+                  variant={isMobile ? "primary" : "ghost"}
+                  onClick={() => setShowSendQuote(true)}
+                  style={isMobile ? { width: "100%" } : undefined}
+                >
                   Send to customer
                 </Btn>
               )}
@@ -11311,7 +11320,7 @@ function SendQuoteModal({ quote, quoteNumber, db, party, orderType, onOrderTypeC
             </Btn>
           </div>
           <div style={{ fontSize: 12, color: "#8a7a66", marginBottom: 6 }}>
-            Email preview{email.trim() ? ` — to ${email.trim()}` : ""}. In Outlook: New email → paste (Ctrl+V). Preview opens do not count as customer views.
+            Email preview{email.trim() ? ` — to ${email.trim()}` : ""}. In Outlook: start a new email and paste (Ctrl+V on a computer, or tap and hold → Paste on a phone or tablet). Preview opens do not count as customer views.
           </div>
           <div
             style={{ border: "1px solid #e3d8c6", borderRadius: 8, padding: 14, background: "#fff", overflowX: "auto", maxHeight: 280, overflowY: "auto" }}
