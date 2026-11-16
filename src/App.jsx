@@ -9106,9 +9106,9 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                   ? `<img src="${AUSTRAL_LOGO}" alt="Austral Motorhomes" style="height:60px;width:auto;object-fit:contain;margin-bottom:4px;">
                      <div style="font-family:Georgia,serif;font-weight:700;font-size:15px;color:#2b2018;margin-top:2px;">Austral Slide on Campers &amp; Motorhomes</div>
                      <div style="font-size:11px;color:#8a7a66;line-height:1.5;">2/4 Progress Rd, Maroochydore<br>sales@australmotorhomes.com.au<br>www.australmotorhomes.com.au<br>1300 484 844</div>`
-                  : `<img src="${AUSTRAL_LOGO}" alt="Austral Motorhomes" style="height:40px;width:auto;object-fit:contain;margin-bottom:4px;">
-                     <img src="${PLATINUM_LOGO}" alt="Platinum Pontoons" style="height:40px;width:auto;object-fit:contain;margin-bottom:4px;">
-                     <div style="font-size:11px;color:#8a7a66;">2/4 Progress Rd, Maroochydore</div>`;
+                  : `<img src="${PLATINUM_LOGO}" alt="Platinum Pontoons" style="height:50px;width:auto;object-fit:contain;margin-bottom:4px;">
+                     <div style="font-family:Georgia,serif;font-weight:700;font-size:15px;color:#2b2018;margin-top:2px;">Platinum Pontoons</div>
+                     <div style="font-size:11px;color:#8a7a66;line-height:1.5;">2/4 Progress Rd, Maroochydore<br>1300 48 48 44<br>www.platinumpontoons.com.au</div>`;
 
                 return `
                   <div style="${idx > 0 ? "page-break-before:always;" : ""}padding-top:${idx > 0 ? "30px" : "0"}">
@@ -10359,11 +10359,13 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                         </>
                       ) : (
                         <>
-                          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                            <img src={AUSTRAL_LOGO} alt="Austral Motorhomes" style={{ height: 36, width: "auto", objectFit: "contain" }} />
-                            <img src={PLATINUM_LOGO} alt="Platinum Pontoons" style={{ height: 36, width: "auto", objectFit: "contain" }} />
+                          <img src={PLATINUM_LOGO} alt="Platinum Pontoons" style={{ height: 50, width: "auto", objectFit: "contain" }} />
+                          <div style={{ fontFamily: "Georgia,serif", fontWeight: 700, fontSize: 15, color: "#2b2018", marginTop: 2 }}>Platinum Pontoons</div>
+                          <div className="muted" style={{ fontSize: 11, lineHeight: 1.5 }}>
+                            2/4 Progress Rd, Maroochydore<br />
+                            1300 48 48 44<br />
+                            www.platinumpontoons.com.au
                           </div>
-                          <span className="muted" style={{ fontSize: 11 }}>2/4 Progress Rd, Maroochydore</span>
                         </>
                       )}
                     </div>
@@ -10660,7 +10662,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                         const isAustralPo2 = /austral/i.test(po.model || "") || poLns.some(li => /austral/i.test(li.desc || li.description || ""));
                         const brandHeaderHtml2 = isAustralPo2
                           ? `<img src="${AUSTRAL_LOGO}" alt="Austral Motorhomes" style="height:60px;width:auto;object-fit:contain;display:block;margin-left:auto;"><div style="font-family:Georgia,serif;font-weight:700;font-size:15px;color:#2b2018;margin-top:2px;">Austral Slide on Campers &amp; Motorhomes</div><div style="font-size:11px;color:#8a7a66;line-height:1.5;">2/4 Progress Rd, Maroochydore<br>sales@australmotorhomes.com.au<br>www.australmotorhomes.com.au<br>1300 484 844</div>`
-                          : `<img src="${AUSTRAL_LOGO}" alt="Austral Motorhomes" style="height:38px;width:auto;object-fit:contain;display:block;margin-left:auto;"><img src="${PLATINUM_LOGO}" alt="Platinum Pontoons" style="height:38px;width:auto;object-fit:contain;display:block;margin-left:auto;"><div style="font-size:11px;color:#8a7a66;">2/4 Progress Rd, Maroochydore</div>`;
+                          : `<img src="${PLATINUM_LOGO}" alt="Platinum Pontoons" style="height:50px;width:auto;object-fit:contain;display:block;margin-left:auto;"><div style="font-family:Georgia,serif;font-weight:700;font-size:15px;color:#2b2018;margin-top:2px;">Platinum Pontoons</div><div style="font-size:11px;color:#8a7a66;line-height:1.5;">2/4 Progress Rd, Maroochydore<br>1300 48 48 44<br>www.platinumpontoons.com.au</div>`;
                         return `<div style="${idx > 0 ? "page-break-before:always;padding-top:30px;" : ""}">
                           <div style="display:flex;justify-content:space-between;align-items:flex-start;border-bottom:3px solid #b5552b;padding-bottom:20px;margin-bottom:20px;">
                             <div><div style="font-size:26px;font-weight:700;color:#2b2018;margin-bottom:6px;">Purchase Order</div>
