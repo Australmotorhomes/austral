@@ -15753,6 +15753,75 @@ function PoStatusDrillDownModal({ drillDown, onClose, openRecord }) {
 // added prospects (who/product/value); each Quotes stage shows the related
 // quotes (who/product/ETA/value). Clicking a quote row opens that specific
 // quote; clicking a prospect row opens that specific prospect.
+// Customer WIP summary: one row per customer with accepted-quote money still to be received.
+function CustomerWipModal({ data, onClose, openRecord }) {
+  if (!data) return null;
+  const th = { padding: "6px 8px", fontSize: 11, color: "#6b5240" };
+  const paidTotal = data.rows.reduce((sum, r) => sum + r.paid, 0);
+  const valueTotal = data.rows.reduce((sum, r) => sum + r.orderValue, 0);
+  return (
+    <Modal onClose={onClose} width={760}>
+      <h3 style={{ fontFamily: "Georgia,serif", color: "#4a3527", margin: "0 0 4px", fontSize: 19 }}>
+        Customer WIP — {fmtMoney(data.total, "AUD")}
+      </h3>
+      <p className="muted" style={{ fontSize: 12, margin: "0 0 4px" }}>
+        Accepted quotes less payments already received (milestones ticked as paid). Amounts include GST.
+      </p>
+      {data.rows.length === 0 ? (
+        <p className="muted" style={{ fontSize: 13, marginTop: 16 }}>Nothing outstanding on accepted quotes.</p>
+      ) : (
+        <div style={{ overflowX: "auto", marginTop: 12 }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+            <thead>
+              <tr style={{ borderBottom: "2px solid #b5552b" }}>
+                <th style={{ ...th, textAlign: "left" }}>Customer</th>
+                <th style={{ ...th, textAlign: "left" }}>Quote(s)</th>
+                <th style={{ ...th, textAlign: "right" }}>Order value</th>
+                <th style={{ ...th, textAlign: "right" }}>Paid</th>
+                <th style={{ ...th, textAlign: "right" }}>Remaining</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.rows.map((r) => (
+                <tr key={r.who} style={{ borderBottom: "1px solid #f0e8d9" }}>
+                  <td style={{ padding: "6px 8px", fontWeight: 600, color: "#4a3527" }}>{r.who}</td>
+                  <td style={{ padding: "6px 8px", color: "#6b5240" }}>
+                    {r.quotes.map((q, i) => (
+                      <span key={q.id}>
+                        {i > 0 && ", "}
+                        <a
+                          onClick={() => openRecord && openRecord("quote", q.id)}
+                          style={{ color: "#b5552b", cursor: openRecord ? "pointer" : "default", textDecoration: "underline" }}
+                        >
+                          {q.number}
+                        </a>
+                      </span>
+                    ))}
+                  </td>
+                  <td style={{ padding: "6px 8px", textAlign: "right", color: "#6b5240" }}>{fmtMoney(r.orderValue, "AUD")}</td>
+                  <td style={{ padding: "6px 8px", textAlign: "right", color: "#6b5240" }}>{fmtMoney(r.paid, "AUD")}</td>
+                  <td style={{ padding: "6px 8px", textAlign: "right", color: "#4a3527", fontWeight: 700 }}>{fmtMoney(r.remaining, "AUD")}</td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr style={{ borderTop: "2px solid #e3d8c6" }}>
+                <td style={{ padding: "8px", fontWeight: 700, color: "#4a3527" }} colSpan={2}>Total</td>
+                <td style={{ padding: "8px", textAlign: "right", fontWeight: 600, color: "#4a3527" }}>{fmtMoney(valueTotal, "AUD")}</td>
+                <td style={{ padding: "8px", textAlign: "right", fontWeight: 600, color: "#4a3527" }}>{fmtMoney(paidTotal, "AUD")}</td>
+                <td style={{ padding: "8px", textAlign: "right", fontWeight: 700, color: "#4a3527" }}>{fmtMoney(data.total, "AUD")}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      )}
+      <div style={{ marginTop: 18, display: "flex", justifyContent: "flex-end" }}>
+        <Btn variant="ghost" onClick={onClose}>Close</Btn>
+      </div>
+    </Modal>
+  );
+}
+
 function FunnelDrillDownModal({ drillDown, onClose, openRecord }) {
   if (!drillDown) return null;
   const isQuotes = drillDown.kind === "quotes";
@@ -16603,6 +16672,7 @@ function DashboardTab({ db, setTab, openRecord, onCreateTask, onToggleTask }) {
   const [poStatusDrillDown, setPoStatusDrillDown] = React.useState(null); // { title, rows }
   const [helpModal, setHelpModal] = React.useState(null); // { title, body } — shared across all HelpIcon buttons on this page
   const [funnelDrillDown, setFunnelDrillDown] = React.useState(null); // { title, kind: "prospects" | "quotes", rows }
+  const [wipModal, setWipModal] = React.useState(null); // { rows, total } for the Customer WIP summary
   const [mobilePage, setMobilePage] = React.useState(0);
   const touchStartX = React.useRef(0);
 
@@ -16747,6 +16817,34 @@ function DashboardTab({ db, setTab, openRecord, onCreateTask, onToggleTask }) {
   const quotesSentRows = quoteRowsForStatus("sent");
   const quotesAcceptedRows = quoteRowsForStatus("accepted");
   const quotesDeliveredRows = quoteRowsForStatus("delivered");
+
+  // Customer WIP — money still to come in on customer orders. For every Accepted
+  // quote: quote total less the payment milestones already ticked as paid. A
+  // customer with several accepted quotes is shown once, with the amounts added
+  // together. Fully-paid quotes (nothing remaining) are left out.
+  const customerWipRows = (() => {
+    const byCustomer = {};
+    db.quotes
+      .filter((q) => normStatus(q.status) === "accepted")
+      .forEach((q) => {
+        const total = parseFloat(q.total) || 0;
+        const paid = (Array.isArray(q.paymentMilestones) ? q.paymentMilestones : [])
+          .filter((m) => m && m.paid)
+          .reduce((sum, m) => sum + (parseFloat(m.amount) || 0), 0);
+        const remaining = Math.round((total - paid) * 100) / 100;
+        if (remaining <= 0) return;
+        const name = (q.party || "Unknown").trim() || "Unknown";
+        const key = name.toLowerCase();
+        if (!byCustomer[key]) byCustomer[key] = { who: name, quotes: [], orderValue: 0, paid: 0, remaining: 0 };
+        const row = byCustomer[key];
+        row.quotes.push({ id: q.id, number: displayDocNumber(q, db, true), remaining });
+        row.orderValue += total;
+        row.paid += paid;
+        row.remaining += remaining;
+      });
+    return Object.values(byCustomer).sort((x, y) => y.remaining - x.remaining);
+  })();
+  const customerWipTotal = customerWipRows.reduce((sum, r) => sum + r.remaining, 0);
 
   // ---- Additional funnel-health metrics ----
   // "All prospects" here means every row in crm_prospects, including ones now
@@ -17474,6 +17572,14 @@ function DashboardTab({ db, setTab, openRecord, onCreateTask, onToggleTask }) {
             <div style={{ borderTop: "1px solid #e3d8c6", margin: "4px 0" }} />
 
             <div
+              onClick={() => setWipModal({ rows: customerWipRows, total: customerWipTotal })}
+              style={{ display: "flex", justifyContent: "space-between", fontSize: 13, cursor: "pointer" }}
+              title="Accepted quotes less payments already received. Click for the list by customer."
+            >
+              <span>Customer WIP</span>
+              <strong>{fmtMoney(customerWipTotal, "AUD")}</strong>
+            </div>
+            <div
               onClick={() => setRevCostDrillDown({ title: "Revenue expected — next 3 months", rows: revenueRows3, type: "quote" })}
               style={{ display: "flex", justifyContent: "space-between", fontSize: 13, cursor: "pointer" }}
             >
@@ -17720,6 +17826,7 @@ function DashboardTab({ db, setTab, openRecord, onCreateTask, onToggleTask }) {
         onClose={() => setFunnelDrillDown(null)}
         openRecord={openRecord}
       />
+      <CustomerWipModal data={wipModal} onClose={() => setWipModal(null)} openRecord={openRecord} />
         </>
         )}
       </section>
