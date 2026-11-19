@@ -71,7 +71,7 @@ module.exports = async function handler(req, res) {
       token,
       version,
       expiresAt,
-      url: `${Q.publicBaseUrl(req)}/q/${token}`,
+      url: `${Q.publicBaseUrlFor(req, brand)}/q/${token}`,
     });
   } catch (err) {
     console.error("quote-share-create failed:", err.message, err.detail || "");

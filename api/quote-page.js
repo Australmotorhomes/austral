@@ -6,9 +6,10 @@
 const crypto = require("crypto");
 const Q = require("./_lib/quoteShare");
 
-const STYLE = `
+const STYLE = (B) => `
+:root{--accent:${B.accent};--ink:${B.ink}}
 *{box-sizing:border-box}
-body{margin:0;background:#f3eee4;color:#2b2018;font-family:Georgia,'Times New Roman',serif;line-height:1.5}
+body{margin:0;background:#f4f5f7;color:#2b2018;font-family:Georgia,'Times New Roman',serif;line-height:1.5}
 .wrap{max-width:860px;margin:0 auto;padding:16px}
 .banner{border-radius:8px;padding:12px 14px;margin:0 0 14px;font-size:14px;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
 .banner.warn{background:#fff6e0;border:1px solid #e6cf94;color:#6b4e0a}
@@ -21,19 +22,26 @@ body{margin:0;background:#f3eee4;color:#2b2018;font-family:Georgia,'Times New Ro
 .accept label.chk{display:flex;gap:10px;align-items:flex-start;margin:12px 0;cursor:pointer}
 .accept input[type=checkbox]{width:20px;height:20px;margin-top:2px;flex:none}
 .accept input[type=text]{width:100%;padding:10px;border:1px solid #bfb3a0;border-radius:6px;font-size:16px}
-.accept button{background:#b5552b;color:#fff;border:0;border-radius:8px;padding:12px 22px;font-size:16px;cursor:pointer;margin-top:12px}
+.accept button{background:var(--accent);color:#fff;border:0;border-radius:8px;padding:12px 22px;font-size:16px;cursor:pointer;margin-top:12px}
 .accept button:disabled{opacity:.5;cursor:not-allowed}
+.topbar{background:#fff;border-bottom:4px solid var(--accent)}
+.topbar .in{max-width:860px;margin:0 auto;padding:12px 16px;display:flex;align-items:center;gap:14px;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+.topbar img{height:44px;width:auto}
+.topbar .nm{font-weight:700;color:var(--ink);font-size:16px}
+.foot{max-width:860px;margin:0 auto;padding:6px 16px 28px;text-align:center;font:13px/1.6 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;color:#6b7280}
+.foot a{color:var(--accent)}
 .err{color:#a3442e;margin-top:10px;font-size:14px}
 .small{font-size:12px;color:#8a7a66;margin-top:8px}
 .center{max-width:560px;margin:12vh auto;padding:0 20px;text-align:center}
 @media (max-width:600px){.paper{padding:14px}}
 `;
 
-function shell(nonce, title, inner, script) {
+function shell(nonce, title, inner, script, B) {
+  B = B || Q.brandFor();
   return `<!doctype html><html lang="en-AU"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex,nofollow">
-<title>${Q.esc(title)}</title><style>${STYLE}</style></head><body>${inner}
+<title>${Q.esc(title)}</title><style>${STYLE(B)}</style></head><body>${inner}
 ${script ? `<script nonce="${nonce}">${script}</script>` : ""}</body></html>`;
 }
 
@@ -162,12 +170,19 @@ module.exports = async function handler(req, res) {
   setHeaders(res, nonce);
   res.statusCode = 200;
   const title = share.quote_number ? `Quote ${share.quote_number}` : "Your quote";
+  const B = Q.brandFor(share.brand);
+  const termsUrl = "/terms/QOL_Terms_of_Trade_2026-11.pdf";
+  const topbar = `<div class="topbar"><div class="in"><img src="${Q.esc(B.logo)}" alt="${Q.esc(B.name)}"><span class="nm">${Q.esc(B.name)}</span></div></div>`;
+  const foot = `<div class="foot">${B.lines.map(Q.esc).join(" · ")}<br><a href="https://${Q.esc(B.site)}">${Q.esc(B.site)}</a> · <a href="${termsUrl}">Terms of Trade (PDF)</a></div>`;
+  // Frozen snapshots saved before this change hard-code the old rust accent; recolour for Platinum.
+  const snap = B.key === "platinum" ? share.snapshot_html.replace(/#b5552b/gi, B.accent) : share.snapshot_html;
   res.end(
     shell(
       nonce,
       title,
-      `<div class="wrap">${banner}<div class="paper">${share.snapshot_html}</div>${acceptPanel}</div>`,
-      script
+      `${topbar}<div class="wrap">${banner}<div class="paper">${snap}</div>${acceptPanel}</div>${foot}`,
+      script,
+      B
     )
   );
 };

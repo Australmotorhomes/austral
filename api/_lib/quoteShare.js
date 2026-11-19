@@ -144,6 +144,42 @@ function publicBaseUrl(req) {
   return host ? `https://${host}` : "";
 }
 
+// Per-brand look and contact details for the customer-facing quote page.
+// Colours are sampled from the logos already used in the app (Austral rust, Platinum blue).
+// Platinum Pontoons has no email address on file in the app yet, so none is shown.
+const BRANDS = {
+  austral: {
+    key: "austral",
+    name: "Austral Slide on Campers & Motorhomes",
+    logo: "/brand/austral-logo.png",
+    accent: "#bb4717",
+    ink: "#221f1f",
+    lines: ["2/4 Progress Rd, Maroochydore", "1300 484 844", "sales@australmotorhomes.com.au"],
+    site: "www.australmotorhomes.com.au",
+    baseEnv: "PUBLIC_BASE_URL_AUSTRAL",
+  },
+  platinum: {
+    key: "platinum",
+    name: "Platinum Pontoons",
+    logo: "/brand/platinum-logo.png",
+    accent: "#0f54ff",
+    ink: "#000407",
+    lines: ["2/4 Progress Rd, Maroochydore QLD 4558", "1300 48 48 44"],
+    site: "www.platinumpontoons.com.au",
+    baseEnv: "PUBLIC_BASE_URL_PLATINUM",
+  },
+};
+function brandFor(key) { return BRANDS[key] || BRANDS.austral; }
+
+// Customer link base URL. If a per-brand base is configured (e.g. https://quotes.australmotorhomes.com.au)
+// links use it; otherwise falls back to the host the staff member is on.
+function publicBaseUrlFor(req, brandKey) {
+  const b = BRANDS[brandKey];
+  const v = b && process.env[b.baseEnv];
+  if (v) return v.replace(/\/$/, "");
+  return publicBaseUrl(req);
+}
+
 function newToken() {
   return crypto.randomBytes(24).toString("base64url"); // 192 bits, 32 URL-safe chars
 }
@@ -151,5 +187,5 @@ function newToken() {
 module.exports = {
   SUPABASE_URL, LINK_LIFETIME_DAYS, MAX_SNAPSHOT_BYTES, ACCEPT_TERMS_TEXT,
   sb, verifyUser, readJson, send, clientIp, isBot, hashIp, esc,
-  sanitizeSnapshot, publicBaseUrl, newToken,
+  sanitizeSnapshot, publicBaseUrl, publicBaseUrlFor, BRANDS, brandFor, newToken,
 };

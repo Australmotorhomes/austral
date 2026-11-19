@@ -24,11 +24,13 @@ const termsOfTradeUrl = () => `${window.location.origin}${TERMS_OF_TRADE_PATH}`;
 const QUOTE_BRANDS = {
   austral: {
     key: "austral",
+    accent: "#bb4717",
     name: "Austral Slide on Campers & Motorhomes",
     lines: ["2/4 Progress Rd, Maroochydore", "1300 484 844", "sales@australmotorhomes.com.au", "www.australmotorhomes.com.au"],
   },
   platinum: {
     key: "platinum",
+    accent: "#0f54ff",
     name: "Platinum Pontoons",
     lines: ["2/4 Progress Rd, Maroochydore QLD 4558", "Ph 1300 48 48 44", "www.platinumpontoons.com.au"],
   },
@@ -40,22 +42,22 @@ const QUOTE_SNAPSHOT_CSS = `
 .qs-doc{font-family:Georgia,serif;color:#2b2018;line-height:1.45}
 .qs-doc *{margin:0;padding:0;box-sizing:border-box}
 .qs-doc img{max-width:100%}
-.qs-doc a{color:#b5552b}
+.qs-doc a{color:var(--accent,#b5552b)}
 .qs-doc .muted{color:#8a7a66}
-.qs-doc .doc-header{display:grid;grid-template-columns:1fr auto;align-items:start;column-gap:20px;border-bottom:3px solid #b5552b;padding-bottom:12px;margin-bottom:16px}
+.qs-doc .doc-header{display:grid;grid-template-columns:1fr auto;align-items:start;column-gap:20px;border-bottom:3px solid var(--accent,#b5552b);padding-bottom:12px;margin-bottom:16px}
 .qs-doc .doc-header>div:first-child{min-width:0}
 .qs-doc .doc-header>div:last-child{text-align:right;display:flex;flex-direction:column;align-items:flex-end}
 .qs-doc .doc-meta{display:flex;gap:18px;flex-wrap:wrap;font-size:12.5px;color:#8a7a66;margin-bottom:10px}
 .qs-doc h2{font-size:24px;font-weight:700;margin-bottom:4px}
 .qs-doc table{width:100%;border-collapse:collapse;margin:14px 0}
-.qs-doc th{text-align:left;border-bottom:2px solid #b5552b;padding:7px 12px 7px 0;font-size:12px;font-weight:700}
+.qs-doc th{text-align:left;border-bottom:2px solid var(--accent,#b5552b);padding:7px 12px 7px 0;font-size:12px;font-weight:700}
 .qs-doc th.num{text-align:right;padding-right:0}
 .qs-doc td{padding:6px 12px 6px 0;border-bottom:1px solid #e3d8c6;font-size:14px}
 .qs-doc td.num{text-align:right;padding-right:0}
 .qs-doc ul{line-height:1.3}
 .qs-doc li{margin-bottom:1px}
 .qs-doc .totals-row{display:flex;justify-content:space-between;padding:5px 0;font-size:14px}
-.qs-doc .grand{font-weight:800;font-size:18px;border-top:2px solid #b5552b;border-bottom:1px solid #b5552b;padding:10px 0;margin-top:8px}
+.qs-doc .grand{font-weight:800;font-size:18px;border-top:2px solid var(--accent,#b5552b);border-bottom:1px solid var(--accent,#b5552b);padding:10px 0;margin-top:8px}
 @media (max-width:600px){.qs-doc .doc-header{grid-template-columns:1fr}.qs-doc .doc-header>div:last-child{align-items:flex-start;text-align:left}}
 `;
 
@@ -11119,15 +11121,15 @@ function buildQuoteEmailHtml({ brand, recipientName, quoteNumber, total, url, ex
   const sans = "Calibri,Arial,sans-serif";
   return (
     `<table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="width:600px;max-width:100%;font-family:${font};color:#2b2018;">` +
-    `<tr><td style="padding:0 0 12px 0;border-bottom:3px solid #b5552b;font-size:22px;font-weight:bold;color:#4a3527;font-family:${font};">${escHtml(brand.name)}</td></tr>` +
+    `<tr><td style="padding:0 0 12px 0;border-bottom:3px solid ${brand.accent};font-size:22px;font-weight:bold;color:#4a3527;font-family:${font};">${escHtml(brand.name)}</td></tr>` +
     `<tr><td style="padding:18px 0 8px 0;font-size:15px;line-height:22px;font-family:${sans};">Hi ${escHtml(first)},</td></tr>` +
     `<tr><td style="padding:0 0 14px 0;font-size:15px;line-height:22px;font-family:${sans};">Thank you for your enquiry. Your quote <strong>${escHtml(quoteNumber)}</strong> (total ${escHtml(fmtMoney(total, "AUD"))} including GST) is ready to view online. It includes our Terms of Trade and payment schedule.</td></tr>` +
     `<tr><td style="padding:4px 0 16px 0;">` +
     `<table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>` +
-    `<td bgcolor="#b5552b" style="background-color:#b5552b;border-radius:6px;padding:12px 24px;">` +
+    `<td bgcolor="${brand.accent}" style="background-color:${brand.accent};border-radius:6px;padding:12px 24px;">` +
     `<a href="${escHtml(url)}" style="color:#ffffff;text-decoration:none;font-family:${sans};font-size:16px;font-weight:bold;display:inline-block;">View your quote</a>` +
     `</td></tr></table></td></tr>` +
-    `<tr><td style="padding:0 0 14px 0;font-size:13px;line-height:19px;color:#6b5240;font-family:${sans};">This link is valid until ${escHtml(validUntil)}. If the button does not work, copy this address into your browser:<br><a href="${escHtml(url)}" style="color:#b5552b;word-break:break-all;">${escHtml(url)}</a></td></tr>` +
+    `<tr><td style="padding:0 0 14px 0;font-size:13px;line-height:19px;color:#6b5240;font-family:${sans};">This link is valid until ${escHtml(validUntil)}. If the button does not work, copy this address into your browser:<br><a href="${escHtml(url)}" style="color:${brand.accent};word-break:break-all;">${escHtml(url)}</a></td></tr>` +
     `<tr><td style="padding:0 0 18px 0;font-size:15px;line-height:22px;font-family:${sans};">You can accept the quote online from that page, or reply to this email if you have any questions.</td></tr>` +
     `</table>`
   );
