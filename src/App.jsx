@@ -3569,6 +3569,13 @@ const globalCss = `
   @media (max-width:900px){.doc-split-grid{grid-template-columns:1fr;}}
   .line-item-row{display:grid;grid-template-columns:minmax(80px,1fr) 52px 84px 100px 100px 92px 28px;gap:6px;align-items:start;margin-bottom:8px;}
   @media (max-width:680px){.line-item-row{grid-template-columns:1fr 1fr;}}
+  .line-item-delete,.line-item-sep{display:none;}
+  @media (max-width:680px){
+    .line-item-row .line-item-x{display:none;}
+    .line-item-delete{display:block;width:100%;margin:6px 0 0;padding:11px 12px;border:1px solid #d9a99a;background:#fdf3ef;color:#a3442e;border-radius:8px;font-size:13.5px;font-weight:700;cursor:pointer;font-family:inherit;}
+    .line-item-delete:active{background:#f6dfd7;}
+    .line-item-sep{display:block;border-top:2px solid #e3d8c6;margin:22px 0 16px;}
+  }
   .hidden-cost-row{display:grid;grid-template-columns:2fr 60px 90px 70px 1fr 24px;gap:6px;align-items:start;margin-bottom:6px;}
   @media (max-width:680px){.hidden-cost-row{grid-template-columns:1fr 1fr;}}
   .totals-row{display:flex;justify-content:space-between;font-size:13.5px;padding:4px 0;}
@@ -9645,6 +9652,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                               )}
                             </div>
                             <button
+                              className="line-item-x"
                               onClick={() => removeMLine(idx)}
                               title="Remove"
                               style={{ background: "none", border: "none", color: "#a3442e", cursor: "pointer", fontSize: 16, padding: 4 }}
@@ -9685,6 +9693,10 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                             </div>
                           )}
                           {renderLineStockUnits(claimedUnits)}
+                          <button type="button" className="line-item-delete" onClick={() => removeMLine(idx)}>
+                            Delete item
+                          </button>
+                          <div className="line-item-sep" />
                         </React.Fragment>
                       );
                     })
@@ -9810,6 +9822,7 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                         )}
                       </div>
                       <button
+                        className="line-item-x"
                         onClick={() => removeLine(idx)}
                         title="Remove"
                         style={{ background: "none", border: "none", color: "#a3442e", cursor: "pointer", fontSize: 16, padding: 4 }}
@@ -9869,6 +9882,14 @@ function DocModal({ kind, editing, db, items, models, categories, fx, statusOpti
                       </p>
                     )}
                     {!isQuote && renderLineStockUnits(claimedUnits)}
+                    {/* Mobile only (see .line-item-delete in the CSS): the inline ✕
+                        gets stranded mid-item when the row wraps, so on phones the
+                        delete lives at the bottom of the item with extra space
+                        beneath it to show which item it belongs to. */}
+                    <button type="button" className="line-item-delete" onClick={() => removeLine(idx)}>
+                      Delete item
+                    </button>
+                    <div className="line-item-sep" />
                     </React.Fragment>
                   );
                 })
