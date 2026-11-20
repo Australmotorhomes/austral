@@ -157,6 +157,7 @@ const BRANDS = {
     lines: ["2/4 Progress Rd, Maroochydore", "1300 484 844", "sales@australmotorhomes.com.au"],
     site: "www.australmotorhomes.com.au",
     baseEnv: "PUBLIC_BASE_URL_AUSTRAL",
+    embedHosts: ["australmotorhomes.com.au", "www.australmotorhomes.com.au", "quotes.australmotorhomes.com.au"],
   },
   platinum: {
     key: "platinum",
@@ -167,6 +168,7 @@ const BRANDS = {
     lines: ["2/4 Progress Rd, Maroochydore QLD 4558", "1300 48 48 44"],
     site: "www.platinumpontoons.com.au",
     baseEnv: "PUBLIC_BASE_URL_PLATINUM",
+    embedHosts: ["platinumpontoons.com.au", "www.platinumpontoons.com.au", "quotes.platinumpontoons.com.au"],
   },
 };
 function brandFor(key) { return BRANDS[key] || BRANDS.austral; }

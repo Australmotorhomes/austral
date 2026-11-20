@@ -45,7 +45,9 @@ function shell(nonce, title, inner, script, B) {
 ${script ? `<script nonce="${nonce}">${script}</script>` : ""}</body></html>`;
 }
 
-function setHeaders(res, nonce) {
+function setHeaders(res, nonce, B) {
+  // Only the brand's own websites may embed a quote page (e.g. in an iframe); everything else is blocked.
+  const ancestors = B ? ["'self'"].concat(B.embedHosts.map((h) => "https://" + h)).join(" ") : "'none'";
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.setHeader("Cache-Control", "no-store");
   res.setHeader("X-Robots-Tag", "noindex, nofollow");
@@ -55,7 +57,7 @@ function setHeaders(res, nonce) {
   res.setHeader(
     "Content-Security-Policy",
     `default-src 'none'; img-src data: https:; style-src 'unsafe-inline'; script-src 'nonce-${nonce}'; ` +
-      `connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`
+      `connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors ${ancestors}`
   );
 }
 
@@ -167,12 +169,12 @@ module.exports = async function handler(req, res) {
   });
 })();`;
 
-  setHeaders(res, nonce);
+  const B = Q.brandFor(share.brand);
+  setHeaders(res, nonce, B);
   res.statusCode = 200;
   const title = share.quote_number ? `Quote ${share.quote_number}` : "Your quote";
-  const B = Q.brandFor(share.brand);
   const termsUrl = "/terms/QOL_Terms_of_Trade_2026-11.pdf";
-  const topbar = `<div class="topbar"><div class="in"><img src="${Q.esc(B.logo)}" alt="${Q.esc(B.name)}"><span class="nm">${Q.esc(B.name)}</span></div></div>`;
+  const topbar = `<div class="topbar"><div class="in"><img src="${Q.esc(B.logo)}" alt="${Q.esc(B.name)}"></div></div>`;
   const foot = `<div class="foot">${B.lines.map(Q.esc).join(" · ")}<br><a href="https://${Q.esc(B.site)}">${Q.esc(B.site)}</a> · <a href="${termsUrl}">Terms of Trade (PDF)</a></div>`;
   // Frozen snapshots saved before this change hard-code the old rust accent; recolour for Platinum.
   const snap = B.key === "platinum" ? share.snapshot_html.replace(/#b5552b/gi, B.accent) : share.snapshot_html;
